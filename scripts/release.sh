@@ -160,7 +160,10 @@ variant() {
   mv "$work/$name-$header.elf" "$out/$name-$version.elf"
 }
 
-variant ur "info"
+# `UR_FEATURES` builds both with another face or theme (see Cargo.toml),
+# say `UR_FEATURES=living-tokyo`.
+features=${UR_FEATURES-}
+variant ur "info" --features "$features"
 # The field log adds the heart rate sensor's samples and the accelerometer's
 # readings, and leaves out the dependencies whose every log line (at `info`
 # and up) is the message of a `defmt::panic!`, `unwrap!` or `assert!`. In a
@@ -179,7 +182,7 @@ panics_only=embassy_executor=off,embassy_sync=off,embassy_time=off,embassy_nrf=o
 # counting offline (see `trace_samples` in src/activity.rs). It about
 # doubles the log on a busy day, so it's not for releases: give it a
 # `--pre` of its own (`--pre accel`) to tell its packages apart.
-variant ur-logging "info,ur::heart=trace,ur::activity=${UR_ACTIVITY_LOG:-debug},$panics_only" --features field-log
+variant ur-logging "info,ur::heart=trace,ur::activity=${UR_ACTIVITY_LOG:-debug},$panics_only" --features "field-log${features:+,$features}"
 
 (cd "$out" && sha256sum -- ur-*"$version"* >sha256.sum)
 echo "== built $UR_VERSION into $out" >&2

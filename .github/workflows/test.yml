@@ -56,6 +56,12 @@ jobs:
       - name: cargo test
         working-directory: host-tests/${{ matrix.crate }}
         run: cargo ${{ matrix.toolchain == 'beta' && '+beta' || '' }} test --locked --release
+      # The Tokyo Night themes replace the usual ones, so they're checked
+      # in a build of their own.
+      - name: cargo test --features theme-tokyo-night
+        if: matrix.crate == 'theme'
+        working-directory: host-tests/theme
+        run: cargo ${{ matrix.toolchain == 'beta' && '+beta' || '' }} test --locked --release --features theme-tokyo-night
   # The Gadgetbridge mock's own tests (its JSON, escaping and upsert
   # against Gadgetbridge's behaviour). It's shared by `host-tests/gb` and
   # `sim`, so it lives at the top, not in `host-tests/` with the matrix.

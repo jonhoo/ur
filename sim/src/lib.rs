@@ -67,6 +67,8 @@ mod day;
 #[path = "../../src/decimal.rs"]
 #[allow(dead_code)]
 mod decimal;
+#[path = "../../src/face/mod.rs"]
+mod face;
 #[path = "../../src/font.rs"]
 #[allow(dead_code)]
 mod font;

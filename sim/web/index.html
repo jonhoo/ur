@@ -486,7 +486,7 @@ typed.addEventListener("keydown", (event) => {
     event.preventDefault();
   }
 });
-themes.addEventListener("change", () => guard(() => ur.command(`theme ${themes.value}`)));
+themes.addEventListener("change", () => guard(() => ur.command(`theme "${themes.value}"`)));
 document.getElementById("script").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;

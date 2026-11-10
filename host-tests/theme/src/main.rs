@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn grid_buttons_have_visible_edges() {
-        for (group, pairs) in [(&theme::DARK, KEY_DARK), (&theme::LIGHT, KEY_LIGHT)] {
+        for (group, pairs) in [(&theme::DARK[..], KEY_DARK), (&theme::LIGHT[..], KEY_LIGHT)] {
             for theme in group.iter() {
                 for (what, a, b) in pairs {
                     let distance = delta_e(theme, a, b);

@@ -25,6 +25,12 @@ default = ["window"]
 # The interactive window; without it (e.g. in CI), scripts still run and
 # write screenshots.
 window = ["dep:minifb"]
+# The firmware's watch faces and themes (see its Cargo.toml), for drawing
+# them here (`living-tokyo.txt`). The tests, and their approved
+# screenshots, are of the defaults: run `cargo test` without these.
+face-living-tokyo = []
+theme-tokyo-night = []
+living-tokyo = ["face-living-tokyo", "theme-tokyo-night"]
 
 [lints.rust]
 # The firmware's own features, which the modules included from it check

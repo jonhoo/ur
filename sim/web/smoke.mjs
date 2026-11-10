@@ -130,8 +130,8 @@ async function watch({ start, files }) {
   const themes = printed[THEMES].at(-1).split("\n");
   if (themes.length < 2) fail(`themes: ${JSON.stringify(themes)}`);
   printed[ERROR].length = 0;
-  ur.command(`theme ${themes[1]}`);
-  if (printed[ERROR].length) fail(`theme ${themes[1]}`, printed[ERROR]);
+  ur.command(`theme "${themes[1]}"`);
+  if (printed[ERROR].length) fail(`theme "${themes[1]}"`, printed[ERROR]);
 
   // A frame is the whole watch, and the panel's lit: some of its pixels
   // are neither the desk, the case, nor the glass (all greys).

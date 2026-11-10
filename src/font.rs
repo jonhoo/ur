@@ -796,7 +796,7 @@ pub const HEART_SHINE: [u8; 6] = [
 ];
 
 /// 5×7 Bluetooth rune, for "no phone" on the clock face, struck through
-/// (see `ui::render_clock`).
+/// (see `face::classic`).
 pub const BLUETOOTH_W: u32 = 5;
 pub const BLUETOOTH: [u8; 7] = [
     0b00100, 0b00110, 0b10101, 0b01110, 0b10101, 0b00110, 0b00100,
@@ -834,16 +834,6 @@ pub const BELL_W: u32 = 5;
 pub const BELL: [u8; 7] = [
     0b00100, 0b01110, 0b01110, 0b01110, 0b11111, 0b00000, 0b00100,
 ];
-
-/// 5×7 hourglass, for timers (so a countdown isn't read as a time of day).
-pub const HOURGLASS_W: u32 = 5;
-pub const HOURGLASS: [u8; 7] = [
-    0b11111, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b11111,
-];
-
-/// 4×5 lightning bolt, for charging.
-pub const BOLT_W: u32 = 4;
-pub const BOLT: [u8; 5] = [0b0011, 0b0110, 0b1111, 0b0110, 0b1100];
 
 // ==============================================================================
 // Turn arrows: the next turn while the phone navigates (see `crate::route`)

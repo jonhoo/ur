@@ -89,3 +89,15 @@ touch-probe = []
 # `wedge_task` in `src/i2c.rs`. Only for dev kits: it implies `debug-input`
 # so that scripts/release.sh refuses it.
 wedge-i2c = ["debug-input"]
+# Watch faces and themes: one of each is built in, and these swap them. The
+# defaults are the usual clock face, and the Arcade, Terminal, Handheld and
+# Parchment themes.
+#
+# Living Tokyo, a city at night, as the clock face; see
+# `src/face/living_tokyo.rs`.
+face-living-tokyo = []
+# The Tokyo Night palettes in place of the usual themes: Night and Storm
+# after sunset, Day by day. See `src/theme.rs`.
+theme-tokyo-night = []
+# Both: Living Tokyo in the Tokyo Night themes it was drawn in.
+living-tokyo = ["face-living-tokyo", "theme-tokyo-night"]

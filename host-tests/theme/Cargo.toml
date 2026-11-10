@@ -9,6 +9,11 @@ publish = false
 # firmware workspace: run `cargo test` from this directory.
 [workspace]
 
+# The firmware's `theme-tokyo-night`, whose themes replace the usual ones:
+# `cargo test --features theme-tokyo-night` checks them instead.
+[features]
+theme-tokyo-night = []
+
 [dependencies]
 # `Color` derives `defmt::Format` for the watch's logs.
 defmt = "1.2.0"

@@ -72,6 +72,7 @@ mod decimal;
 mod dfu;
 mod dfu_slot;
 mod display;
+mod face;
 mod field_log;
 mod firmware;
 #[cfg(feature = "flash-stress")]

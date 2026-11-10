@@ -64,6 +64,32 @@ that target the default, and `build.rs` passes the linker scripts (`link.x` from
 release profile is what runs on watches; unoptimised builds are too large
 and slow.
 
+### Faces and themes
+
+The clock face, and the themes, are chosen when building, by Cargo
+features; without any, it's the usual face, and the Arcade, Terminal,
+Handheld and Parchment themes:
+
+- `face-living-tokyo`: Living Tokyo, a city at night (see
+  `src/face/living_tokyo.rs`), in place of the usual face.
+- `theme-tokyo-night`: the Tokyo Night palettes, Night and Storm after
+  sunset and Day by day, in place of the usual themes.
+- `living-tokyo`: both, the face in the themes it was drawn in.
+
+Each works without the other: the face takes any theme's colours, and
+the themes colour every screen, whichever face. Faces are modules in
+`src/face/`, behind one trait; `src/face/mod.rs` says how to add one.
+
+```sh
+cargo build --release --features living-tokyo
+UR_FEATURES=living-tokyo scripts/release.sh
+```
+
+The simulator takes the same features (`sim/living-tokyo.txt` draws the
+face), but its tests, and their approved screenshots, are of the
+defaults. `host-tests/theme` checks the Tokyo Night themes with
+`--features theme-tokyo-night`.
+
 To build what a release ships, both variants, packaged for the
 bootloader, into `dist/`:
 

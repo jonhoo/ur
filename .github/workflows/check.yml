@@ -50,7 +50,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [pinned, beta]
-        variant: [ur, ur-logging, compare, flash-stress, touch-probe]
+        variant: [ur, ur-logging, compare, flash-stress, touch-probe, living-tokyo]
         include:
           - variant: ur
             features: ""
@@ -65,6 +65,10 @@ jobs:
           # Not released: a dev kit's touch register logging.
           - variant: touch-probe
             features: touch-probe
+          # Not the default: the Living Tokyo face, in the Tokyo Night
+          # themes.
+          - variant: living-tokyo
+            features: living-tokyo
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
       - name: Install the pinned toolchain

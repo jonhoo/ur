@@ -209,6 +209,7 @@ use crate::buttons::{self, Press};
 use crate::canvas::{Canvas, Color, Sweep, marquee_cycle};
 use crate::clock::DateTime;
 use crate::day::Day;
+use crate::face::{self, ClockFace};
 use crate::font;
 use crate::gb::{CallAction, MusicCommand, Outgoing};
 use crate::motor::{self, Pattern};
@@ -277,10 +278,14 @@ pub struct Status<'a> {
     pub heart_rate: Option<u8>,
     /// The temperature in tenths of a °C (see [`crate::temperature`]),
     /// once it's been read: whole degrees (a multiple of ten) unless it's
-    /// from a room sensor.
+    /// from a room sensor. Only the usual clock face shows it; Living
+    /// Tokyo doesn't, but it's still exported for the dev kit's compare
+    /// (see `crate::compare`), so it's kept.
+    #[cfg_attr(feature = "face-living-tokyo", allow(dead_code))]
     pub temperature: Option<i16>,
     /// Whether that's a nearby room sensor's (an Aranet4's or a BTHome
     /// thermometer's), rather than the watch's own (or an estimate from it).
+    #[cfg_attr(feature = "face-living-tokyo", allow(dead_code))]
     pub temperature_from_sensor: bool,
     /// The nearest room sensor's latest reading, for the Air screen.
     pub air: Option<Sighting>,
@@ -2232,13 +2237,13 @@ impl App {
                     _ => None,
                 };
                 // The slot is there only while an icon is: a fixed width
-                // (see `render_clock`) so the temperature doesn't shift as
+                // (see `face::classic`) so the temperature doesn't shift as
                 // one icon replaces another (a gesture's, then the note),
                 // but no empty gap once the media is paused or stopped
                 // and the gesture's icon has gone. The temperature moves
                 // over once then, which reads as the icon going away.
                 let media = icon.is_some().then_some(icon);
-                render_clock(canvas, status, next_alarm, media, self.dim())
+                self.render_face(canvas, status, next_alarm, media)
             }
             // From the day's history, only while it shows: walking it
             // costs a little time, while keeping it up to date would cost
@@ -2265,15 +2270,15 @@ impl App {
                     n.who.write_to(&mut who);
                     render_card(canvas, &app, &who, &arrived);
                 }
-                None => render_clock(canvas, status, next_alarm, None, self.dim()),
+                None => self.render_face(canvas, status, next_alarm, None),
             },
             Screen::Music => match &self.music {
                 Some(music) => render_music(canvas, music, now),
-                None => render_clock(canvas, status, next_alarm, None, self.dim()),
+                None => self.render_face(canvas, status, next_alarm, None),
             },
             Screen::Air => match &status.air {
                 Some(sighting) => render_air(canvas, sighting, now),
-                None => render_clock(canvas, status, next_alarm, None, self.dim()),
+                None => self.render_face(canvas, status, next_alarm, None),
             },
             Screen::Buttons => {
                 let sent = self.sent.filter(|&(_, until, _)| now < until);
@@ -2298,8 +2303,9 @@ impl App {
             // Notifications nobody has seen: an accent-coloured handle on
             // the edge they're behind. The clock face has no other hints:
             // its edges are full, and it's where the wearer learns the
-            // layout from.
-            Place::Clock if self.notifications.unseen => {
+            // layout from. Unless the face says it its own way (see
+            // `ClockFace::UNSEEN_HANDLE`).
+            Place::Clock if self.notifications.unseen && face::Active::UNSEEN_HANDLE => {
                 edge_bar(canvas, Side::Above, Color::ACCENT);
             }
             Place::Line { side, index }
@@ -2313,6 +2319,27 @@ impl App {
             self.banner_text(banner.shows, &mut app, &mut who);
             render_banner(canvas, &app, &who);
         }
+    }
+}
+
+impl App {
+    /// The clock face, whichever is built in (see [`crate::face`]).
+    fn render_face(
+        &self,
+        canvas: &mut Canvas,
+        status: &Status,
+        next_alarm: Option<(alarm::Kind, i64)>,
+        media: Option<Option<(u32, &[u8], i32)>>,
+    ) {
+        let cx = face::Context {
+            status,
+            next_alarm,
+            media,
+            unseen: self.notifications.unseen,
+            daytime: self.daytime,
+            dim: self.dim(),
+        };
+        face::Active::render(canvas, &cx);
     }
 }
 
@@ -2388,7 +2415,7 @@ fn render_hint(canvas: &mut Canvas, side: Side, index: usize, count: usize) {
 /// those kept its own panic location and message, ~30 bytes of flash
 /// apiece. A panic here still records which write it was, in the
 /// breadcrumb's backtrace (see `field_log`).
-trait Fits {
+pub(crate) trait Fits {
     fn fits(self);
 }
 
@@ -2403,320 +2430,8 @@ fn fits(ok: bool) {
     assert!(ok, "text fits its buffer");
 }
 
-// ==============================================================================
-// Clock face
-// ==============================================================================
-//
-// Canvas layout (80×80), y ranges inclusive:
-//
-//    3..7    status bar: media, or no phone and time-sync state, then the
-//            temperature (left); battery % and icon (right)
-//   13..34   HH:MM in 5×7 digits at 3× (15×21 each), with a drop shadow
-//   38..44   date, YYYY-MM-DD, under the hours (left); seconds, small and
-//            in the accent colour, under the minutes (right)
-//   56..62   heart rate (left); the next alarm or timer (right)
-//   68..74   a foot, then ten blocks for the day's steps (x 10..58),
-//            and their scale, ×1K or ×10K (from x = 61)
-//
-// Everything below the status bar lines up with the time's outer edges
-// (x = 4 and 75). The top half is the time; the bottom half is the
-// readings, packed into two rows, with the steps drawn as a share of the
-// day's goal rather than a number: the exact count is on Today, one
-// swipe right.
-
-const BACKGROUND: Color = Color::BACKGROUND;
-
-/// The day's steps that fill the clock face's ten blocks at 1,000 a
-/// block; from there, the blocks count 10,000 each (see `render_clock`).
-///
-/// Fixed, because there's nowhere to learn the wearer's own: Gadgetbridge
-/// keeps a step goal (its "fitness_goal" setting, 8,000 by default) for its
-/// charts, but never sends it to a Bangle.js. Its driver has no message
-/// for the user's settings (the call that would send them,
-/// `sendSettings`, is commented out in `BangleJSDeviceSupport`), and its
-/// `act` message only switches live heart rate and steps on and off.
-/// 10,000 is the round number most people know.
-///
-/// TODO: a goal set on the watch: a tap-to-cycle row on Info, like THEME
-/// and LIGHT (say 6k, 8k, 10k, 12k), kept with the settings in flash. The
-/// meter's scales ("×1K", "×10K") would then follow the goal.
-const STEP_GOAL: u32 = 10_000;
-
-/// `media` is an icon for the status bar's left end, while a phone is
-/// connected: its width, rows, and top. `dim`: in the dim look.
-fn render_clock(
-    canvas: &mut Canvas,
-    status: &Status,
-    next_alarm: Option<(alarm::Kind, i64)>,
-    // `None` without media; otherwise the icon to show in the media slot,
-    // if any: (width, rows, y).
-    media: Option<Option<(u32, &[u8], i32)>>,
-    dim: bool,
-) {
-    canvas.clear(BACKGROUND);
-    let battery_left = render_battery(canvas, status.battery, status.uptime_secs);
-
-    // Status bar, left: the media icon while a phone is connected (media
-    // comes from the phone); without one, a faded Bluetooth rune struck
-    // through in red, and "NO TIME" if we don't know the time (in which
-    // case the clock shows time since boot). A connected phone is the
-    // usual state, so it gets no icon: what's worth a look is its absence.
-    //
-    // "Connected" is the phone's link (`ble::CONNECTED`): a client that
-    // never authenticated (see `Status::unpaired`), or a bonded phone
-    // that's out of range, both get the struck-out rune, as neither
-    // delivers anything.
-    let temperature_x = if status.connected {
-        // One width for every media icon (the widest, the note's), each
-        // centred in it, so nothing after it moves as the icon changes.
-        const MEDIA_SLOT: u32 = font::NOTE_W;
-        match media {
-            Some(icon) => {
-                if let Some((width, rows, y)) = icon {
-                    let left = 3 + (MEDIA_SLOT.saturating_sub(width) / 2) as i32;
-                    canvas.sprite(left, y, width, rows, 1, Color::ACCENT);
-                }
-                Some(3 + MEDIA_SLOT as i32 + 3)
-            }
-            None => Some(3),
-        }
-    } else {
-        // The rune in the faintest ink, so it reads as "not there", and a
-        // slash over it, a pixel past it at both ends, in the low
-        // battery's colour: red, but for Terminal's near-white, its one
-        // alarm colour. The slash is a diagonal beside the rune's own
-        // diagonals; it only stands apart from them by its colour, so the
-        // rune must be a different one. In the dim look, the faint ink is
-        // red, like the slash, so the rune is grey there instead
-        // (`Color::GREY`, a half-tone the dim look can show).
-        // A 3×3 × after the rune said the same in the rune's own colour,
-        // and a slash through a rune in full ink merged with it.
-        let faded = if dim { Color::GREY } else { Color::TEXT_FAINT };
-        canvas.sprite(4, 2, font::BLUETOOTH_W, &font::BLUETOOTH, 1, faded);
-        for i in 0..7 {
-            canvas.pixel(3 + i, 2 + i, Color::BAD);
-        }
-        let x = 3 + 7;
-        if status.local_time.is_none() {
-            // 2 px rather than the usual 3, so "NO TIME" (27 px) ends at
-            // x = 38, clear of the battery's widest (charging at 100%: the
-            // bolt starts at x = 43).
-            let end = canvas.text(x + 2, 3, "NO TIME", Color::TEXT_FAINT);
-            // Clear of the battery, as worked out above.
-            debug_assert!(end <= battery_left, "NO TIME runs into the battery");
-            None
-        } else {
-            Some(x + 3)
-        }
-    };
-
-    // Then the temperature, packed against the left: a room sensor's (a
-    // nearby Aranet4 or BTHome thermometer; see `crate::temperature`) to
-    // the tenth, "21.4°", and the watch's own, or the estimate from it, to
-    // the degree, "21°". The precision is the mark: a measurement has
-    // tenths worth showing, and an estimate good to a few degrees
-    // doesn't. (Tried before: a short line under a measured reading's
-    // degree sign, in the labels' colour, and a little house before it,
-    // which read as one more status icon.) The decimal point is a single
-    // pixel with a column either side, rather than the font's ".", whose
-    // glyph is three columns wide: "21.4" then reads as one number, and
-    // it's 2 px narrower.
-    //
-    // The widest a room sensor can send (a BTHome thermometer's i16
-    // hundredths, so at most "-327.7°", 25 px) ends at x = 37 after the
-    // struck-out rune, and x = 36 after the widest media icon (the note,
-    // 6 px); anything a room holds, down to a freezer's "-18.4°" (21 px),
-    // ends at x = 33. The watch's own is within -55 °C (the die sensor's
-    // -40 °C, less the estimate's largest correction) and 90 °C, so 15 px
-    // ("-55°"). All clear of the battery's widest (charging at 100%: the
-    // bolt starts at x = 43), so a reading never drops its tenths for
-    // room. "NO TIME" and a temperature can't both fit beside that, so
-    // until the phone sets the clock (just after a cold boot), "NO TIME"
-    // wins.
-    // TODO: °F, for those who'd want it.
-    if let (Some(tenths), Some(x)) = (status.temperature, temperature_x) {
-        // The whole degrees, then (from a room sensor) the point and the
-        // tenth, then the degree sign: drawn in pieces, so the point can
-        // be narrower than a glyph. `end` is each piece's x past its
-        // spacing column. (The watch's own is a multiple of ten tenths:
-        // see `temperature::shown`.)
-        let magnitude = i32::from(tenths).abs();
-        let sign = if tenths < 0 { "-" } else { "" };
-        // At most "-3276", an i16's tenths in whole degrees.
-        let mut text = heapless::String::<5>::new();
-        write!(text, "{sign}{}", magnitude / 10).fits();
-        let mut end = canvas.text(x, 3, &text, Color::TEXT);
-        if status.temperature_from_sensor {
-            // On the baseline, then a column's gap.
-            canvas.pixel(end, 7, Color::TEXT);
-            let digit = char::from(b'0' + (magnitude % 10) as u8);
-            end = canvas.text(end + 2, 3, digit.encode_utf8(&mut [0; 4]), Color::TEXT);
-        }
-        let end = canvas.text(end, 3, "°", Color::TEXT);
-        // Clear of the battery, as worked out above, whatever a sensor
-        // sends. And the watch's own reading is in whole degrees, which
-        // is why it's drawn without its tenth.
-        debug_assert!(end <= battery_left, "the temperature runs into the battery");
-        debug_assert!(status.temperature_from_sensor || tenths % 10 == 0);
-    }
-
-    let (hours, minutes, seconds) = match &status.local_time {
-        Some(t) => (u64::from(t.hour), u64::from(t.minute), u64::from(t.second)),
-        None => {
-            let secs = status.uptime_secs;
-            ((secs / 3600) % 24, (secs / 60) % 60, secs % 60)
-        }
-    };
-
-    // HH:MM. Each digit cell is 15 px wide with 2 px gaps; the colon gets a
-    // 3 px column. That's 71 px, leaving 4 px either side (+1 for shadow).
-    const TIME_Y: i32 = 13;
-    const TIME_SCALE: i32 = 3;
-    let digits = [hours / 10, hours % 10, minutes / 10, minutes % 10];
-    for (&digit, x) in digits.iter().zip([4, 21, 43, 60]) {
-        draw_digit(canvas, x, TIME_Y, digit, TIME_SCALE, Color::TEXT);
-    }
-    // The colon blinks: a heartbeat that shows the watch is alive even when
-    // the minutes aren't changing. Its dots line up with glyph rows 2 and 4.
-    if seconds % 2 == 0 {
-        for row in [2, 4] {
-            let y = TIME_Y + row * TIME_SCALE;
-            canvas.fill_rect(39, y + 1, 3, 3, Color::SHADOW);
-            canvas.fill_rect(38, y, 3, 3, Color::ACCENT);
-        }
-    }
-
-    // Under the time, a footnote line, lined up with its outer edges: the
-    // date under the hours, and the seconds under the minutes. The seconds
-    // are rarely what a look at the watch is for (the colon's blink already
-    // says it's alive), so they're small, the time's own 5×7 glyphs at 1×
-    // (without the shadow, which at 1× would only thicken them), and in the
-    // accent colour, so they're still easy to find.
-    const NOTE_Y: i32 = 39;
-    let mut date = heapless::String::<10>::new();
-    match &status.local_time {
-        Some(t) => write!(date, "{:04}-{:02}-{:02}", t.year, t.month, t.day).fits(),
-        None => date.push_str("----------").fits(),
-    }
-    canvas.text(4, NOTE_Y, &date, Color::TEXT_DIM);
-    for (digit, x) in [seconds / 10, seconds % 10].into_iter().zip([64, 70]) {
-        let glyph = digit_glyph(digit);
-        canvas.sprite(x, NOTE_Y - 1, font::DIGIT_W, glyph, 1, Color::ACCENT);
-    }
-
-    // The readings, in one row: the heart rate from the left edge, and the
-    // next alarm within a day up to the right one, each an icon, 2 px, and
-    // its value, the icon a row above the value's capitals.
-    const READING_Y: i32 = 57;
-    let mut bpm = heapless::String::<3>::new();
-    match status.heart_rate {
-        Some(rate) => write!(bpm, "{rate}").fits(),
-        None => bpm.push_str("--").fits(),
-    }
-    canvas.sprite(
-        4,
-        READING_Y - 1,
-        font::HEART_W,
-        &font::HEART,
-        1,
-        Color::HEART,
-    );
-    canvas.sprite(
-        4,
-        READING_Y - 1,
-        font::HEART_W,
-        &font::HEART_SHINE,
-        1,
-        Color::HEART_SHINE,
-    );
-    let bpm_end = canvas.text(4 + font::HEART_W as i32 + 2, READING_Y, &bpm, Color::TEXT);
-
-    if let (Some((kind, at)), Some(now)) = (next_alarm, status.local_second)
-        && at - now <= 24 * 60 * 60
-    {
-        // A timer counts down; anything else shows when it rings (a smart
-        // alarm at its latest). A timer's "42 MIN" is written "42M" here:
-        // the full form, after the widest heart rate ("188"), would leave
-        // the two groups 3 px apart, reading as one.
-        let left = (at - now).max(0);
-        let time = match kind {
-            alarm::Kind::Timer(_) if (10 * 60..60 * 60).contains(&left) => {
-                let mut time = heapless::String::new();
-                write!(time, "{}M", (left + 59) / 60).fits();
-                time
-            }
-            alarm::Kind::Timer(_) => countdown(left),
-            _ => {
-                let mut time = heapless::String::new();
-                time.push_str(&hhmm(at.div_euclid(60).rem_euclid(24 * 60)))
-                    .fits();
-                time
-            }
-        };
-        let x = 76 - font::small_text_width(&time);
-        canvas.text(x, READING_Y, &time, Color::TEXT);
-        let (icon, width) = match kind {
-            alarm::Kind::Timer(_) => (&font::HOURGLASS, font::HOURGLASS_W),
-            _ => (&font::BELL, font::BELL_W),
-        };
-        let icon_x = x - width as i32 - 2;
-        // The two readings share the row: the widest of each (a heart
-        // rate of three digits; a time or a countdown of five characters)
-        // leave a gap between them.
-        debug_assert!(icon_x > bpm_end, "the next alarm runs into the heart rate");
-        canvas.sprite(icon_x, READING_Y - 1, width, icon, 1, Color::ACCENT);
-    }
-
-    // The day's steps, as ten blocks, like an old game's health bar: "six
-    // of ten" can be counted at a glance, where a number has to be read.
-    // Up to [`STEP_GOAL`], each block is 1,000 steps; from the goal on,
-    // the bar starts again at 10,000 a block, so a long day keeps
-    // filling it, and the change of scale is what says the goal was
-    // reached. The scale stands to the bar's right, "×1K" or "×10K".
-    // Each block is a whole multiple (999 steps fill none; 19,999 one
-    // block of 10,000), and from 100,000 the bar stays full. Before the
-    // time is known there's no day to count, so it's an empty track, at
-    // 1,000 a block.
-    //
-    // Foot, 2 px, the bar, 2 px, and the widest scale ("×10K", 15 px)
-    // take exactly the row's 72 px (x = 4..75), with the blocks 4 px wide
-    // and 1 px apart: 5 px wide, they'd leave the scale no room. The
-    // scale starts where the bar ends, so it reads as the bar's, and the
-    // bar never moves as it changes.
-    const STEPS_Y: i32 = 69;
-    const BLOCKS: u32 = 10;
-    const BLOCK_W: i32 = 4;
-    const BAR_X: i32 = 4 + font::FOOT_W as i32 + 2;
-    const SCALE_X: i32 = BAR_X + BLOCKS as i32 * (BLOCK_W + 1) - 1 + 2;
-    const _: () = assert!(STEP_GOAL == 10_000, "the scales say 1K and 10K");
-    canvas.sprite(
-        4,
-        STEPS_Y - 1,
-        font::FOOT_W,
-        &font::FOOT,
-        1,
-        Color::TEXT_DIM,
-    );
-    let steps = status.steps.unwrap_or(0);
-    // Past the goal the scale takes the accent, the filled blocks'
-    // colour, since the change of scale is what says the goal was reached.
-    let (per_block, scale, scale_color) = if steps < STEP_GOAL {
-        (STEP_GOAL / BLOCKS, "×1K", Color::TEXT_DIM)
-    } else {
-        (STEP_GOAL, "×10K", Color::ACCENT)
-    };
-    let full = (steps / per_block).min(BLOCKS);
-    for i in 0..BLOCKS {
-        let color = if i < full {
-            Color::ACCENT
-        } else {
-            Color::TRACK
-        };
-        let x = BAR_X + i as i32 * (BLOCK_W + 1);
-        canvas.fill_rect(x, STEPS_Y, BLOCK_W, 5, color);
-    }
-    canvas.text(SCALE_X, STEPS_Y, scale, scale_color);
-}
+/// What every screen clears to.
+pub(crate) const BACKGROUND: Color = Color::BACKGROUND;
 
 /// The glance: the hours above the minutes, as big as fits with room
 /// around them, and nothing else.
@@ -2837,7 +2552,7 @@ fn render_route_glance(canvas: &mut Canvas, status: &Status, step: &route::Step)
 
 /// Time left, as short as it reads well: "M:SS" under 10 minutes (where
 /// seconds matter), "42 MIN" under an hour, "2H05" beyond.
-fn countdown(seconds: i64) -> heapless::String<8> {
+pub(crate) fn countdown(seconds: i64) -> heapless::String<8> {
     let mut text = heapless::String::new();
     // Hours stop at 99, as the editor's two digits do (see `render_editor`).
     let seconds = seconds.clamp(0, 100 * 3600 - 1);
@@ -2853,7 +2568,7 @@ fn countdown(seconds: i64) -> heapless::String<8> {
 }
 
 /// `minutes` (after midnight, or a duration) as HH:MM.
-fn hhmm(minutes: i64) -> heapless::String<6> {
+pub(crate) fn hhmm(minutes: i64) -> heapless::String<6> {
     // Two digits of hours, and never negative: a time of day, or a
     // night's sleep. Every caller lays the text out as five characters
     // wide; more would still fit the buffer (to "999:59"), and so pass
@@ -3323,7 +3038,14 @@ fn render_find(canvas: &mut Canvas, elapsed: Duration) {
 }
 
 /// One big 5×7 digit at `scale`, with a 1 px drop shadow down and right.
-fn draw_digit(canvas: &mut Canvas, x: i32, y: i32, digit: u64, scale: i32, color: Color) {
+pub(crate) fn draw_digit(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    digit: u64,
+    scale: i32,
+    color: Color,
+) {
     let glyph = digit_glyph(digit);
     canvas.sprite(x + 1, y + 1, font::DIGIT_W, glyph, scale, Color::SHADOW);
     canvas.sprite(x, y, font::DIGIT_W, glyph, scale, color);
@@ -3332,56 +3054,12 @@ fn draw_digit(canvas: &mut Canvas, x: i32, y: i32, digit: u64, scale: i32, color
 /// The 5×7 glyph for `digit`. A value too big for its cell (a bug
 /// upstream) draws as 9 rather than indexing out of range: a wrong digit
 /// on the screen beats a panic and a reset.
-fn digit_glyph(digit: u64) -> &'static [u8; 7] {
+pub(crate) fn digit_glyph(digit: u64) -> &'static [u8; 7] {
     // Where debug assertions are on (the simulator and its fuzzer), that
     // bug is caught here instead: a 9 that isn't one reads as a fine
     // screen. (As was the timer editor's hours, past 99: F1.)
     debug_assert!(digit <= 9, "not a digit: {digit}");
     &font::DIGITS[digit.min(9) as usize]
-}
-
-/// The battery: an icon filled to the charge, and the percentage. While
-/// charging, a bolt goes before the percentage and the fill creeps up a
-/// pixel a second from the charge to full (an old handheld's charging
-/// animation), since the "good" colour alone barely differs from text in
-/// some themes.
-///
-/// Returns its left edge, for the clock face to check that what it draws
-/// from the left stops short of it.
-fn render_battery(canvas: &mut Canvas, battery: &Battery, uptime_secs: u64) -> i32 {
-    let percent = battery.percent();
-    let color = if battery.charging {
-        Color::GOOD
-    } else if percent < 20 {
-        Color::BAD
-    } else {
-        Color::TEXT
-    };
-
-    // 10×5 body with a 1×3 nub; 8×3 interior, filled in proportion.
-    const X: i32 = 66;
-    const Y: i32 = 3;
-    canvas.fill_rect(X, Y, 10, 5, color);
-    canvas.fill_rect(X + 10, Y + 1, 1, 3, color);
-    canvas.fill_rect(X + 1, Y + 1, 8, 3, BACKGROUND);
-    // Round up, so any charge at all shows at least one pixel.
-    let mut fill = (percent * 8).div_ceil(100) as i32;
-    if battery.charging {
-        let steps = 8 - fill + 1;
-        fill += (uptime_secs % steps.max(1) as u64) as i32;
-    }
-    canvas.fill_rect(X + 1, Y + 1, fill.min(8), 3, color);
-
-    let mut text = heapless::String::<8>::new();
-    write!(text, "{percent}%").fits();
-    let text_x = X - 2 - font::small_text_width(&text);
-    canvas.text(text_x, Y, &text, color);
-    if battery.charging {
-        let x = text_x - 2 - font::BOLT_W as i32;
-        canvas.sprite(x, Y, font::BOLT_W, &font::BOLT, 1, Color::HEART);
-        return x;
-    }
-    text_x
 }
 
 // ==============================================================================

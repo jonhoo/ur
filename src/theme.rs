@@ -146,6 +146,7 @@ pub static ARCADE: Theme = theme("ARCADE", [
 /// stages are intensities too: deep the hottest (almost white), REM full
 /// green, light dim.
 #[rustfmt::skip]
+#[cfg_attr(feature = "theme-tokyo-night", allow(dead_code))]
 pub static TERMINAL: Theme = theme("TERMINAL", [
     0x020c04, 0x0b3d18, 0x4dff7a, 0x2aa84a, 0x146b2c, 0x0a2a12, 0xb8ffc8,
     0x2aa84a, 0x020c04, 0x4dff7a, 0xe0ffe8, 0xb8ffc8, 0xf0fff0, 0xe0ffe8,
@@ -156,6 +157,7 @@ pub static TERMINAL: Theme = theme("TERMINAL", [
 /// plus one dash of red, like its power light: for the heart, low battery,
 /// an update's progress, and REM sleep. Nothing else.
 #[rustfmt::skip]
+#[cfg_attr(feature = "theme-tokyo-night", allow(dead_code))]
 pub static HANDHELD: Theme = theme("HANDHELD", [
     0xc3cf8c, 0x8a9f3a, 0x1e2a14, 0x3c5428, 0x8a9f3a, 0x8a9f3a, 0x3c5428,
     0x1e2a14, 0x8a9f3a, 0xb8342a, 0xe8836c, 0x3c5428, 0xb8342a, 0x1e2a14,
@@ -164,6 +166,7 @@ pub static HANDHELD: Theme = theme("HANDHELD", [
 
 /// Brown ink on cream, muted red: an old printed game manual.
 #[rustfmt::skip]
+#[cfg_attr(feature = "theme-tokyo-night", allow(dead_code))]
 pub static PARCHMENT: Theme = theme("PARCHMENT", [
     0xe8dcb8, 0xc0a878, 0x3a2414, 0x6a4a2a, 0xa08860, 0xd0c098, 0xa02820,
     0xa02820, 0xe8dcb8, 0xa02820, 0xe07060, 0x4a6a2a, 0xa02820, 0x3a2414,
@@ -213,7 +216,49 @@ pub static GLANCE: Theme = Theme {
     ])
 };
 
+// The Tokyo Night palettes (folke's tokyonight.nvim), with the
+// `theme-tokyo-night` feature, in place of the four above. Each role takes
+// the palette's colour for the same job: the accent its blue, labels
+// fg_dark, and hints the muted dark5 rather than comment, which is too
+// faint for text on the night backgrounds. The heart's highlight (one
+// pixel on the heart) is the yellow, and deep and REM sleep are the cyan
+// and the magenta, so that Living Tokyo's lit windows (see
+// `face::living_tokyo`) are the palette's yellow, cyan and magenta.
+
+/// Tokyo Night's night: blue-white on near-black indigo.
+#[rustfmt::skip]
+#[cfg(feature = "theme-tokyo-night")]
+pub static TOKYO_NIGHT: Theme = theme("TOKYO NIGHT", [
+    0x1a1b26, 0x16161e, 0xc0caf5, 0xa9b1d6, 0x737aa2, 0x292e42, 0x7aa2f7,
+    0x7aa2f7, 0x1a1b26, 0xf7768e, 0xe0af68, 0x9ece6a, 0xf7768e, 0x7dcfff,
+    0xbb9af7, 0xa9b1d6,
+]);
+
+/// Tokyo Night's storm: the same, on a lighter, bluer slate.
+#[rustfmt::skip]
+#[cfg(feature = "theme-tokyo-night")]
+pub static TOKYO_STORM: Theme = theme("TOKYO STORM", [
+    0x24283b, 0x1f2335, 0xc0caf5, 0xa9b1d6, 0x737aa2, 0x3b4261, 0x7aa2f7,
+    0x7aa2f7, 0x24283b, 0xf7768e, 0xe0af68, 0x9ece6a, 0xf7768e, 0x7dcfff,
+    0xbb9af7, 0xa9b1d6,
+]);
+
+/// Tokyo Night's day: indigo ink on pale grey-blue.
+#[rustfmt::skip]
+#[cfg(feature = "theme-tokyo-night")]
+pub static TOKYO_DAY: Theme = theme("TOKYO DAY", [
+    0xe1e2e7, 0xc4c8da, 0x3760bf, 0x6172b0, 0x848cb5, 0xa1a6c5, 0x2e7de9,
+    0x2e7de9, 0xe1e2e7, 0xf52a65, 0xb15c00, 0x587539, 0xf52a65, 0x3760bf,
+    0x9854f1, 0x6172b0,
+]);
+
+#[cfg(not(feature = "theme-tokyo-night"))]
 pub static DARK: [&Theme; 2] = [&ARCADE, &TERMINAL];
+#[cfg(feature = "theme-tokyo-night")]
+pub static DARK: [&Theme; 2] = [&TOKYO_NIGHT, &TOKYO_STORM];
 
 /// Themes for daylight. Long press cycles within this list by day.
+#[cfg(not(feature = "theme-tokyo-night"))]
 pub static LIGHT: [&Theme; 2] = [&HANDHELD, &PARCHMENT];
+#[cfg(feature = "theme-tokyo-night")]
+pub static LIGHT: [&Theme; 1] = [&TOKYO_DAY];
