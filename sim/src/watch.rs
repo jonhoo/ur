@@ -35,11 +35,12 @@ use crate::geo;
 use crate::gesture::Tracking;
 use crate::heart_reading;
 use crate::motor::{self, Pattern};
+use crate::palette::Palette;
 use crate::storage;
 use crate::system_off::Reason;
-use crate::theme::Theme;
+use crate::themes::{self, Scheme, Theme};
 use crate::touch;
-use crate::ui::{self, App, Unpaired};
+use crate::ui::{App, Unpaired};
 use crate::ui_loop::{self, Board, Settings, Stored, UiLoop, Wake};
 use crate::{InputEvent, ble, dfu};
 
@@ -133,7 +134,7 @@ impl Watch {
         Self {
             app,
             ui,
-            canvas: Box::new(Canvas::new()),
+            canvas: Box::new(Canvas::new(themes::get(false, 0).palette())),
             display: Display,
             battery_mv: DEFAULT_BATTERY_MV,
             charging: false,
@@ -305,11 +306,15 @@ impl Watch {
         }
         self.log(format!("input: {}", describe(&event)));
         let themes = self.app.themes;
+        let force = self.app.force;
         let brightness = self.app.brightness;
         let buttons = self.app.buttons;
         self.handle(Wake::Input(event));
         if self.app.themes != themes {
-            self.log(format!("theme: {}", self.app.theme().name));
+            self.log(format!("theme: {}", self.app.palette().name));
+        }
+        if self.app.force != force {
+            self.log(format!("force: {}", self.app.force.name()));
         }
         if self.app.brightness != brightness {
             self.log(format!("brightness: {}", self.app.brightness.name()));
@@ -547,7 +552,7 @@ impl Watch {
     pub fn screenshot(
         &mut self,
         path: &std::path::Path,
-        palette: Option<&'static Theme>,
+        palette: Option<&'static Palette>,
     ) -> Result<(), String> {
         let Some(palette) = palette else {
             return crate::shot::save(path);
@@ -562,26 +567,28 @@ impl Watch {
         // The dev kit's script draws these from the canvas, rather than
         // the watch pushing them: they take none of the watch's time.
         crate::display::untimed(|| {
-            canvas.set_theme(palette);
+            canvas.set_palette(palette);
             run(canvas.flush(display), on_frame);
             let saved = crate::shot::save(path);
-            canvas.set_theme(app.theme());
+            canvas.set_palette(app.palette());
             run(canvas.flush(display), on_frame);
             saved
         })
     }
 
-    /// Sets the theme the UI picks: the group the theme is in (light or
-    /// dark) from now on, whatever the sun says, and that theme within it.
+    /// Sets the colour scheme the UI picks: the side of the day it's for
+    /// from now on, whatever the sun says, and that scheme within it.
     pub fn choose_theme(&mut self, name: &str) -> Result<(), String> {
         let theme = find_theme(name)?;
-        let find = |group: &[&'static Theme]| group.iter().position(|t| core::ptr::eq(*t, theme));
-        if let Some(i) = find(&crate::theme::LIGHT) {
+        let find = |day: bool| themes::schemes(day).iter().position(|t| same(t, theme));
+        // By the side it's a scheme of: in a build with schemes of only
+        // one side, the other side shows them too (see `themes::schemes`).
+        if let Some(i) = find(true).filter(|_| themes::has(true)) {
             self.daytime = Some(true);
-            self.change_settings(|app| app.themes.light = i as u8);
-        } else if let Some(i) = find(&crate::theme::DARK) {
+            self.change_settings(|app| app.themes.day = i as u8);
+        } else if let Some(i) = find(false) {
             self.daytime = Some(false);
-            self.change_settings(|app| app.themes.dark = i as u8);
+            self.change_settings(|app| app.themes.night = i as u8);
         }
         Ok(())
     }
@@ -735,7 +742,6 @@ impl Board for Hardware<'_> {
     /// off anyway.)
     async fn switch_off(&mut self, reason: Reason, canvas: &mut Canvas, _panel_awake: bool) {
         log(format!("switching off: {reason:?}"));
-        ui::render_off(canvas, reason);
         canvas.flush(self.display).await;
         PANEL.with_borrow_mut(|panel| panel.idle = false);
         self.set_backlight(brightness::Level::MID);
@@ -801,16 +807,22 @@ pub fn log(message: impl AsRef<str>) {
     ));
 }
 
-/// A theme by name, in any case.
-pub fn find_theme(name: &str) -> Result<&'static Theme, String> {
-    let themes = || crate::theme::DARK.iter().chain(&crate::theme::LIGHT);
-    themes()
-        .find(|t| t.name.eq_ignore_ascii_case(name))
-        .copied()
+/// A colour scheme by name, in any case, from every built-in theme's
+/// (see `crate::themes`): the night ones', then the day ones'.
+pub fn find_theme(name: &str) -> Result<&'static Scheme, String> {
+    let schemes = || themes::schemes(false).iter().chain(themes::schemes(true));
+    schemes()
+        .find(|t| t.palette().name.eq_ignore_ascii_case(name))
         .ok_or_else(|| {
-            let names: Vec<_> = themes().map(|t| t.name).collect();
+            let names: Vec<_> = schemes().map(|t| t.palette().name).collect();
             format!("no theme {name}; there's {}", names.join(", "))
         })
+}
+
+/// Whether two schemes are the same one: by their palettes' addresses, as
+/// the canvas tells palettes apart.
+pub fn same(a: &Scheme, b: &Scheme) -> bool {
+    core::ptr::eq(a.palette(), b.palette())
 }
 
 /// Moves the clock to `at` (never backwards).

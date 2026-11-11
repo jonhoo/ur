@@ -24,11 +24,12 @@ use std::path::PathBuf;
 
 use embassy_time::{Duration, Instant};
 
+use crate::InputEvent;
 use crate::case::{self, Case};
 use crate::display::PANEL;
 use crate::script::{self, Next, Output};
+use crate::themes::{self, Theme as _};
 use crate::watch::Watch;
-use crate::{InputEvent, theme};
 
 /// Window pixels a canvas pixel, as the window's default: a 320-pixel
 /// screen. The page scales it to fit.
@@ -76,7 +77,7 @@ pub enum Text {
     Error = 1,
     /// The status line (as the window's title).
     Status = 2,
-    /// The themes' names, one a line.
+    /// The colour schemes, one a line: its theme's name, a tab, its own.
     Themes = 3,
 }
 
@@ -578,13 +579,16 @@ pub extern "C" fn ur_status() {
     print(Text::Status, &line);
 }
 
-/// Prints the themes' names, for the page's picker (`theme NAME`).
+/// Prints the colour schemes, for the page's picker (`theme NAME`): a
+/// line each, its theme's name, a tab, and its own.
 #[unsafe(no_mangle)]
 pub extern "C" fn ur_themes() {
-    let names: Vec<&str> = theme::DARK
-        .iter()
-        .chain(&theme::LIGHT)
-        .map(|theme| theme.name)
+    // Each built-in theme's own, so a one-sided build lists each once.
+    let lines: Vec<String> = (themes::THEMES.iter())
+        .flat_map(|theme| {
+            let schemes = theme.night.iter().chain(theme.day);
+            schemes.map(|scheme| format!("{}\t{}", theme.display_name(), scheme.palette().name))
+        })
         .collect();
-    print(Text::Themes, &names.join("\n"));
+    print(Text::Themes, &lines.join("\n"));
 }

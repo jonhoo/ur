@@ -1,12 +1,31 @@
-//! Host tests for the firmware's `theme` module: that the colours a screen
-//! uses to tell things apart stay apart in every theme. Several roles share
-//! a colour in some themes by design (a theme has few colours), which is
+//! Host tests for Retro's colour schemes (`src/palette.rs`, and
+//! `src/themes/retro/schemes/mod.rs`): that the colours its screens use to
+//! tell things apart stay apart in every scheme, and that its dim look has
+//! only the colours the panel's idle mode can show. Several roles share a
+//! colour in some schemes by design (a scheme has few colours), which is
 //! how Last night once drew deep and REM sleep in the same red. `cargo
 //! test`.
+//!
+//! Only Retro's: the checks are of what Retro draws with each role, which
+//! another theme needn't share (nor have several schemes, nor a palette
+//! of roles at all, beyond the 16 the canvas holds). A theme with checks
+//! of its own would have a crate of them beside this one.
 
-#[path = "../../../src/theme.rs"]
+#[path = "../../../src/palette.rs"]
 #[allow(dead_code)]
-mod theme;
+mod palette;
+
+// Retro's schemes: `schemes/mod.rs`, with any modules of more schemes
+// beside it, which come with it, as they're pure data too.
+#[path = "../../../src/themes/retro/schemes/mod.rs"]
+#[allow(dead_code)]
+mod retro;
+
+/// Every scheme of Retro's, both sides.
+#[cfg(test)]
+fn schemes() -> impl Iterator<Item = &'static retro::Retro> {
+    retro::NIGHT.into_iter().chain(retro::DAY)
+}
 
 // `Color` derives `defmt::Format`, whose binary log needs the firmware's
 // ELF to decode; nothing logs here, but the derive wants a logger to link.
@@ -29,7 +48,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use crate::theme::{self, Color, Theme};
+    use crate::palette::{Color, Palette};
+    use crate::{retro, schemes};
 
     // ==============================================================================
     // Telling colours apart
@@ -39,10 +59,10 @@ mod tests {
     // RGB) is roughly even to the eye, so one threshold works for dark greens
     // and pale creams alike. About 2 is just noticeable side by side; 10 is
     // plainly different; 50 is red against green. The colours are measured as
-    // the panel gets them, RGB565, not as written in theme.rs.
+    // the panel gets them, RGB565, not as written in palette.rs.
 
     /// A role's colour in a theme, in CIELAB (L*, a*, b*), from its RGB565.
-    fn lab(theme: &Theme, color: Color) -> [f64; 3] {
+    fn lab(theme: &Palette, color: Color) -> [f64; 3] {
         let rgb565 = u16::from_be_bytes(theme.bytes(color));
         // Back to 8 bits a channel, as screenshot.py does.
         let (r, g, b) = (rgb565 >> 11, (rgb565 >> 5) & 0x3F, rgb565 & 0x1F);
@@ -70,7 +90,7 @@ mod tests {
         [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
     }
 
-    fn delta_e(theme: &Theme, a: Color, b: Color) -> f64 {
+    fn delta_e(theme: &Palette, a: Color, b: Color) -> f64 {
         let (a, b) = (lab(theme, a), lab(theme, b));
         a.iter()
             .zip(b)
@@ -79,11 +99,16 @@ mod tests {
             .sqrt()
     }
 
-    /// The themes a screen can be in when it's not dim. The dim look
-    /// (`theme::GLANCE`) has only idle mode's colours, so distances mean
-    /// little there: it has its own test below.
-    fn themes() -> impl Iterator<Item = &'static Theme> {
-        theme::DARK.iter().chain(&theme::LIGHT).copied()
+    /// The palettes a screen can be in when it's not dim: every scheme's.
+    /// The dim look has only idle mode's colours, so distances mean little
+    /// there: it has its own tests below.
+    fn palettes() -> impl Iterator<Item = &'static Palette> {
+        schemes().map(|scheme| &scheme.palette)
+    }
+
+    /// The dim look's palettes: Retro has one, for every scheme.
+    fn dim_palettes() -> impl Iterator<Item = &'static Palette> {
+        [&retro::GLANCE].into_iter()
     }
 
     // ==============================================================================
@@ -115,7 +140,7 @@ mod tests {
 
     #[test]
     fn sleep_stages_differ_from_each_other() {
-        for theme in themes() {
+        for theme in palettes() {
             for (i, &(a_name, a)) in STAGES.iter().enumerate() {
                 for &(b_name, b) in &STAGES[i + 1..] {
                     let distance = delta_e(theme, a, b);
@@ -131,7 +156,7 @@ mod tests {
 
     #[test]
     fn sleep_stages_stand_out_from_the_background_and_track() {
-        for theme in themes() {
+        for theme in palettes() {
             for &(name, stage) in &STAGES {
                 let background = delta_e(theme, stage, Color::BACKGROUND);
                 assert!(
@@ -153,7 +178,7 @@ mod tests {
     /// background, whether that's white on black or dark brown on cream.
     #[test]
     fn deep_sleep_is_the_heaviest() {
-        for theme in themes() {
+        for theme in palettes() {
             let contrast = |color| (lab(theme, color)[0] - lab(theme, Color::BACKGROUND)[0]).abs();
             let deep = contrast(Color::DEEP);
             for &(name, stage) in &STAGES[1..] {
@@ -167,13 +192,20 @@ mod tests {
         }
     }
 
-    /// In the dim look, the stages are red, white and grey, as the panel
-    /// shows them in idle mode (the top bit of each channel): no two of
-    /// them the same on both the panel's even and odd columns.
+    /// In the dim look, the stages (in Retro's: red, white and grey) are
+    /// told apart as the panel shows them in idle mode (the top bit of
+    /// each channel): no two of them the same on both the panel's even
+    /// and odd columns.
     #[test]
     fn sleep_stages_differ_in_the_dim_look() {
+        for dim in dim_palettes() {
+            stages_differ_in(dim);
+        }
+    }
+
+    fn stages_differ_in(dim: &Palette) {
         let idle = |color| {
-            theme::GLANCE.columns(color).map(|bytes| {
+            dim.columns(color).map(|bytes| {
                 let rgb565 = u16::from_be_bytes(bytes);
                 // Grouped as RGB565's channels: 5, 6 and 5 bits.
                 #[allow(clippy::unusual_byte_groupings)]
@@ -183,30 +215,89 @@ mod tests {
         };
         for (i, &(a_name, a)) in STAGES.iter().enumerate() {
             for &(b_name, b) in &STAGES[i + 1..] {
-                assert_ne!(idle(a), idle(b), "dim: {a_name} and {b_name} look the same");
+                assert_ne!(
+                    idle(a),
+                    idle(b),
+                    "{}: {a_name} and {b_name} look the same",
+                    dim.name
+                );
             }
         }
-        // And the grey is half lit, half the background.
-        let [lit, unlit] = idle(Color::GREY);
-        assert_eq!(lit, idle(Color::DEEP)[0]);
-        assert_eq!(unlit, idle(Color::BACKGROUND)[0]);
+    }
+
+    /// In the dim look, light sleep's grey is half lit, half the
+    /// background: white half-toned.
+    #[test]
+    fn the_dim_grey_is_a_half_tone() {
+        let glance = &retro::GLANCE;
+        let [lit, unlit] = glance.columns(Color::GREY);
+        assert_eq!(lit, glance.bytes(Color::DEEP));
+        assert_eq!(unlit, glance.bytes(Color::BACKGROUND));
+    }
+
+    /// Every dim look has only the colours the panel's idle mode shows as
+    /// they are: each of red, green and blue fully on or off, as idle mode
+    /// keeps only their top bits, so anything between would come out as
+    /// something else (a grey as white or black: faint text, invisible).
+    /// A grey is a half-tone of two of these (see `Palette::columns`).
+    #[test]
+    fn dim_looks_have_only_idle_modes_colours() {
+        for dim in dim_palettes() {
+            for role in 0..Color::COUNT as u8 {
+                let rgb565 = u16::from_be_bytes(dim.bytes(Color(role)));
+                let (red, green, blue) = (rgb565 >> 11, (rgb565 >> 5) & 0x3F, rgb565 & 0x1F);
+                assert!(
+                    matches!(red, 0 | 0x1F)
+                        && matches!(green, 0 | 0x3F)
+                        && matches!(blue, 0 | 0x1F),
+                    "{}: role {role} is {rgb565:#06x}, which idle mode can't show",
+                    dim.name
+                );
+            }
+        }
+    }
+
+    /// Every scheme has a name of its own (the simulator's `theme NAME`
+    /// finds them by name); `sim`'s tests check every built-in theme's
+    /// together.
+    #[test]
+    fn schemes_have_names_of_their_own() {
+        let mut names: Vec<_> = schemes().map(|s| s.palette.name).collect();
+        names.sort();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), count, "two schemes share a name: {names:?}");
+    }
+
+    /// Nor do two share an ID (`palette::id`, a hash of the name), which
+    /// is what the watch saves the chosen one as: two that did would each
+    /// load as the first of them.
+    #[test]
+    fn schemes_have_ids_of_their_own() {
+        let mut ids: Vec<_> = schemes().map(|s| s.palette.id).collect();
+        ids.sort();
+        let count = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), count, "two schemes' names hash to one ID");
     }
 
     /// The measure itself: the colours Last night first drew deep and REM in
     /// (accent and heart) are one red in Arcade, and the tests would say so.
     #[test]
     fn the_old_collision_fails() {
-        assert!(delta_e(&theme::ARCADE, Color::ACCENT, Color::HEART) < BETWEEN_STAGES);
+        let arcade = &retro::ARCADE.palette;
+        assert!(delta_e(arcade, Color::ACCENT, Color::HEART) < BETWEEN_STAGES);
         // And a pair everyone can tell apart passes easily.
-        assert!(delta_e(&theme::ARCADE, Color::TEXT, Color::BACKGROUND) > 80.0);
+        assert!(delta_e(arcade, Color::TEXT, Color::BACKGROUND) > 80.0);
     }
 
     // ==============================================================================
     // The button grid
     // ==============================================================================
 
-    /// What a grid button (`ui::draw_key`) needs to tell apart, in a dark
-    /// theme and in a light one: its edge from the background, its cap from
+    /// What a grid button (Retro's `draw_key`) needs to tell apart, in a
+    /// dark palette and in a light one (`Palette::is_dark`, which it shades
+    /// by): its edge from the background, its cap from
     /// the side it stands on (raised) and the shadow of its well (pressed),
     /// the cap's lit edge from the cap, and a lit (waiting) cap from an
     /// unlit one and from its well. `draw_key` picks these roles; keep the
@@ -231,16 +322,15 @@ mod tests {
 
     #[test]
     fn grid_buttons_have_visible_edges() {
-        for (group, pairs) in [(&theme::DARK[..], KEY_DARK), (&theme::LIGHT[..], KEY_LIGHT)] {
-            for theme in group.iter() {
-                for (what, a, b) in pairs {
-                    let distance = delta_e(theme, a, b);
-                    assert!(
-                        distance >= KEY_PARTS,
-                        "{}: a grid button's {what} differ by only {distance:.1}",
-                        theme.name
-                    );
-                }
+        for theme in palettes() {
+            let pairs = if theme.is_dark() { KEY_DARK } else { KEY_LIGHT };
+            for (what, a, b) in pairs {
+                let distance = delta_e(theme, a, b);
+                assert!(
+                    distance >= KEY_PARTS,
+                    "{}: a grid button's {what} differ by only {distance:.1}",
+                    theme.name
+                );
             }
         }
     }
@@ -257,15 +347,21 @@ mod tests {
 /// the palette.
 #[cfg(kani)]
 mod proofs {
-    use crate::theme::{self, Color, Theme};
+    use crate::palette::{Color, Palette};
+    use crate::retro;
 
-    fn any_theme() -> &'static Theme {
-        match kani::any::<u8>() % 5 {
-            0 => &theme::ARCADE,
-            1 => &theme::TERMINAL,
-            2 => &theme::HANDHELD,
-            3 => &theme::PARCHMENT,
-            _ => &theme::GLANCE,
+    /// Any of Retro's palettes: every scheme in `NIGHT` and `DAY`, so a new
+    /// one is proven as soon as it's listed, and the dim look's.
+    fn any_theme() -> &'static Palette {
+        let (night, day) = (retro::NIGHT.len(), retro::DAY.len());
+        let i = usize::from(kani::any::<u8>());
+        kani::assume(i <= night + day);
+        if i < night {
+            &retro::NIGHT[i].palette
+        } else if i < night + day {
+            &retro::DAY[i - night].palette
+        } else {
+            &retro::GLANCE
         }
     }
 
@@ -287,7 +383,7 @@ mod proofs {
         assert_eq!(even, theme.bytes(role));
         if odd != even {
             assert_eq!(odd, theme.bytes(Color::BACKGROUND));
-            assert!(core::ptr::eq(theme, &theme::GLANCE));
+            assert!(core::ptr::eq(theme, &retro::GLANCE));
             assert!(role == Color::GREY || role == Color::TRACK);
         }
     }
@@ -299,7 +395,7 @@ mod proofs {
     /// white and red, as the theme's docs promise.
     #[kani::proof]
     fn the_dim_look_is_black_white_and_red() {
-        let rgb565 = u16::from_be_bytes(theme::GLANCE.bytes(any_role()));
+        let rgb565 = u16::from_be_bytes(retro::GLANCE.bytes(any_role()));
         let (red, green, blue) = (rgb565 >> 11, (rgb565 >> 5) & 0x3F, rgb565 & 0x1F);
         assert!(red == 0 || red == 0x1F);
         assert!(green == 0 || green == 0x3F);

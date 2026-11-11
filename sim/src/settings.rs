@@ -5,8 +5,9 @@
 //! saved, and the window then boots with it.
 
 use crate::storage::{self, key};
+use crate::themes::{self, Theme as _};
 use crate::watch::run;
-use crate::{alarm, brightness, buttons, geo, theme};
+use crate::{alarm, brightness, buttons, geo};
 
 /// The stored settings, a line each; what isn't stored says so (the UI
 /// then starts with its default).
@@ -19,17 +20,36 @@ async fn read() -> Vec<String> {
     let none = || "not stored".to_owned();
 
     let themes = [
-        ("light theme", key::THEME_LIGHT, &theme::LIGHT[..]),
-        ("dark theme", key::THEME_DARK, &theme::DARK[..]),
+        ("day theme", key::THEME_DAY, key::THEME_LIGHT, true),
+        ("night theme", key::THEME_NIGHT, key::THEME_DARK, false),
     ];
-    for (what, key, group) in themes {
-        let value = storage::load::<1>(key).await.map_or_else(none, |[i]| {
-            // As `App::new` picks one: out-of-range indices wrap around.
-            let theme = group[usize::from(i) % group.len()];
-            format!("{} ({i})", theme.name)
+    for (what, key, old, day) in themes {
+        // By its ID, as boot finds it among this build's schemes (the
+        // first, for one not built in).
+        let value = storage::load::<4>(key).await.map_or_else(none, |id| {
+            let id = u32::from_le_bytes(id);
+            let theme = themes::get(day, themes::find(day, id));
+            let known = themes::schemes(day).iter().any(|t| t.palette().id == id);
+            let unknown = if known { "" } else { ", not built in" };
+            format!("{} ({id:#010x}{unknown})", theme.palette().name)
         });
         lines.push(format!("{what}: {value}"));
+        // What 0.10 and earlier saved, which boot migrates from while
+        // there's no ID (see `themes::migrate`).
+        if let Some([index]) = storage::load::<1>(old).await {
+            let id = themes::migrate(day, index);
+            let theme = themes::get(day, themes::find(day, id));
+            let name = theme.palette().name;
+            lines.push(format!("{what}, as 0.10 saved it: index {index} ({name})"));
+        }
     }
+
+    let value = storage::load::<1>(key::FORCE)
+        .await
+        .map_or_else(none, |[byte]| {
+            crate::ui::Force::from_byte(byte).name().to_owned()
+        });
+    lines.push(format!("force: {value}"));
 
     let value = storage::load::<1>(key::BRIGHTNESS)
         .await

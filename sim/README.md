@@ -18,6 +18,12 @@ It builds for whatever computer you're on (`.cargo/config.toml` sets the
 `host-tuple` target, overriding the firmware's). Without a display (CI),
 build with `--no-default-features` to leave the window out.
 
+It has the firmware's themes as features of the same names (see
+[Themes](../CONTRIBUTING.md#themes)): with none, the firmware's default
+(so `--no-default-features` still builds it), and `--features
+themes-all` every one, as the web page has them. `--list-themes` prints
+those built in, with how many colour schemes each has for night and day.
+
 ## The window
 
 The watch, drawn to scale from PINE64's dimensions and photos: the 1.3″
@@ -112,13 +118,17 @@ tap                               # snooze
   starts over from it, as after a reboot), `steps`,
   `heart`, `temperature`, `asleep`, `movement`, `last-night`,
   `demo-day` (a day of steps and heart rates so far), `alarm`, `smart`,
-  `timer`, `theme`.
+  `timer`, `theme`, and `version` (what the Info screen says the
+  version is: the tour and each theme's screenshots pin one, so a
+  release's doesn't change them).
 - **Time:** `wait 1.5s`, `until HH:MM`.
 - **Output:** `shot FILE.png [THEME]` (with a theme: in its colours, as
   `screenshot.py --theme`; with `--watch`, the whole watch, as the window
   draws it; with `--panel`, as the real panel shows it, as the window
   does), `record FILE.gif` … `stop` (see below), `expect`, and
-  `settings` (what the flash holds, decoded as the firmware does).
+  `settings` (what the flash holds, decoded as the firmware does), and
+  `store KEY HEX` writes raw bytes under a key, as an older firmware
+  might have (to check a boot's migrations).
 
 `gb` takes a line exactly as Gadgetbridge sends it (less the `\x10`
 before it), say from Gadgetbridge's log, and runs it through the
@@ -149,7 +159,10 @@ screenshots are committed, as approved, and `cargo test` checks that
 each script still draws exactly those: `tour.txt`'s in `shots/tour/`,
 `gadgetbridge.txt`'s in `shots/gadgetbridge/`, and
 `readme-screenshots.txt`'s in `../docs/screenshots/`, the README's own,
-so it can't go stale. A test fails on a screenshot that differs (with
+so it can't go stale, and each theme's (`../src/themes/<name>/shots.txt`,
+into `shots/` beside it, for the theme's README), for the themes the
+build has: the default one, unless it's built with others
+(`--features themes-all` checks them all). A test fails on a screenshot that differs (with
 how many pixels, and an image of it before, after, and where it differs,
 in magenta, side by side), on a new one, and on one no longer taken.
 
@@ -163,7 +176,8 @@ UPDATE_SHOTS=1 cargo test
 That makes each approved directory exactly what its script drew: it
 adds new screenshots, rewrites changed ones, and deletes those no longer
 taken. The Info screen shows the version, from Cargo.toml (`0.9.0-dev`
-here), so a release's new version needs approving too. The README's
+here) unless a script says otherwise: the tour and each theme's script
+pin one with `version`, so a release changes none of them. The README's
 `info.png` is the exception: it shows a release's version and commit
 (`UR_VERSION`; see `readme-screenshots.txt`), which the tests' build
 never does, so they neither check nor update it, and the tour's
@@ -322,7 +336,18 @@ Two ways to aim the runs:
 
 - `--corpus DIR` runs the inputs of the simulator's own fuzzer (below)
   instead of seeds, smallest first: paths it found by branch coverage,
-  checked against the hardware.
+  checked against the hardware. With `--gadgetbridge`, `DIR` is the
+  `gadgetbridge` target's, and each input is a session with the model of
+  Gadgetbridge (`gbmock`) as the phone, through this computer's link
+  (`src/gadgetbridge.rs`): a frame compared every step, as for any run,
+  and every line the dev kit sends to the model, which mustn't refuse
+  it. The model answers what the dev kit says, so a session can go
+  differently from the simulator's own (an activity fetch's answer is
+  the dev kit's history); `--out`'s scripts are what ran. Waits are cut
+  to 20 seconds of real time (the model's clock moves the whole wait),
+  and steps and heart rates, which only the simulator can be told, are
+  comments. `--dry --gadgetbridge` runs the sessions so on the simulator
+  alone.
 - `--guided`, with a build from `coverage-build.sh` (a `compare` build
   that marks each function it runs), reads which functions have run after
   every step, and extends the runs that reached new ones rather than
@@ -355,6 +380,9 @@ corpus to one input per branch:
 fuzz/target/x86_64-unknown-linux-gnu/release/steps -merge=1 -use_counters=0 \
     -use_cmp=0 ../tmp/distilled fuzz/corpus/steps
 ```
+
+(The same for the `gadgetbridge` target's, for `--corpus DIR
+--gadgetbridge`.)
 
 Each `compare` also says how long the dev kit took to push its frame
 to the panel (if that pass pushed anything), and how long the

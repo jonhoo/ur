@@ -29,9 +29,11 @@ needs nothing special; LFS stores it.
   `minute_ring` (`activity`'s history as the clock moves), `dfu_slot`
   (where `dfu` erases and writes an update), `rtt_ring` (which bytes
   `field_log` reads of the log's buffer), and `bthome`'s
-  encoding) are pure logic, tested on the computer, as are
-  `theme`'s colours (that those with different meanings differ in every
-  theme).
+  encoding) are pure logic, tested on the computer, as are retro's
+  colours (`palette`, and `themes/retro/schemes.rs`: that those with
+  different meanings differ in every colour scheme).
+- `src/themes/<name>/`: a theme each, how every screen looks; see
+  [Themes](#themes).
 - `host-tests/<module>/`: one crate per hardware-free module (`sleep`'s
   covers `stages` too, `gb`'s `phone`, `gb_buckets`'s `sleep_hold`,
   `aranet`'s `bthome_sensor`, and `dfu`'s is of `dfu_slot`), which
@@ -64,32 +66,6 @@ that target the default, and `build.rs` passes the linker scripts (`link.x` from
 release profile is what runs on watches; unoptimised builds are too large
 and slow.
 
-### Faces and themes
-
-The clock face, and the themes, are chosen when building, by Cargo
-features; without any, it's the usual face, and the Arcade, Terminal,
-Handheld and Parchment themes:
-
-- `face-living-tokyo`: Living Tokyo, a city at night (see
-  `src/face/living_tokyo.rs`), in place of the usual face.
-- `theme-tokyo-night`: the Tokyo Night palettes, Night and Storm after
-  sunset and Day by day, in place of the usual themes.
-- `living-tokyo`: both, the face in the themes it was drawn in.
-
-Each works without the other: the face takes any theme's colours, and
-the themes colour every screen, whichever face. Faces are modules in
-`src/face/`, behind one trait; `src/face/mod.rs` says how to add one.
-
-```sh
-cargo build --release --features living-tokyo
-UR_FEATURES=living-tokyo scripts/release.sh
-```
-
-The simulator takes the same features (`sim/living-tokyo.txt` draws the
-face), but its tests, and their approved screenshots, are of the
-defaults. `host-tests/theme` checks the Tokyo Night themes with
-`--features theme-tokyo-night`.
-
 To build what a release ships, both variants, packaged for the
 bootloader, into `dist/`:
 
@@ -108,8 +84,12 @@ Info screen. The variants:
 - `ur-logging`: keeps its log in the watch's SPI flash, for fetching
   over Bluetooth; see [Field logs](#field-logs). It writes to flash
   constantly, and costs a little battery.
+- `ur-<theme>`: `ur` with only that theme, for each theme other than the
+  default (see [Themes](#themes)); one with colour schemes of one side
+  only shows them by day and by night alike. Only its `-dfu.zip`
+  (`release.sh` checks its ELF fits first, with `scripts/size.py`).
 
-Each comes as `-dfu.zip` (to send over Bluetooth), `.img` (the raw MCUBoot
+Both `ur` and `ur-logging` have the default theme, retro. Each comes as `-dfu.zip` (to send over Bluetooth), `.img` (the raw MCUBoot
 image), `-slot.elf` (the image as an ELF, for flashing over SWD), and
 `.elf` (with symbols, for decoding logs). Neither has the dev kit's
 injected input (the `debug-input` feature; see [Iterating](#iterating)):
@@ -274,6 +254,36 @@ with each screen's name and how many pixels differ, notes that the
 images couldn't be attached, and links the artifact of the run that
 drew them (kept for 7 days).
 
+## Themes
+
+How every screen looks, where its buttons are, and its colours are a
+theme's: a type implementing `themes::Theme`, its colour schemes
+statics of it (see `src/themes/mod.rs`). Retro, in `src/themes/retro/`,
+is the watch's own. Each theme is a Cargo feature, `theme-<name>`, so a
+build has only the themes it names; `theme-retro` is the default,
+`themes-all` every one, and a build needs one (`--no-default-features`
+alone fails, on purpose). The settings' THEME row steps through every
+built-in theme's schemes for the side of the day in use. To build
+another mix:
+
+```sh
+cargo build --release --no-default-features --features theme-retro,theme-<name>
+scripts/release.sh   # ur and ur-logging with the default; ur-<theme> for each other theme
+```
+
+The simulator takes the same features (with none, it has the firmware's
+default: `sim/build.rs` reads it from Cargo.toml); its web page has
+every theme.
+
+[AUTHORING-THEMES.md](AUTHORING-THEMES.md) is how to add one: a colour
+scheme of Retro's (a palette in `src/themes/retro/schemes/`, part of
+`theme-retro`), or a theme of its own, which draws every screen with
+its own code, starting from a copy of Retro's (`scripts/new-theme.sh
+IDENT "Name"` makes one) and the shared `themes::helpers`: the trait,
+where to list it, its README and screenshots, and what CI checks. The
+themes there are, are listed in
+[src/themes/README.md](src/themes/README.md).
+
 ## Finding bugs
 
 Beyond the tests, five tools look for what nobody thought to test. All
@@ -314,7 +324,10 @@ stack, or a grid hold without its release, is shrunk to a repro. See
 
 - `--corpus DIR` runs the simulator fuzzer's inputs instead: what it
   found, by branch coverage, checked against the hardware. Distil the
-  corpus first, to one input per branch (see sim/README.md).
+  corpus first, to one input per branch (see sim/README.md). With
+  `--gadgetbridge`, the corpus is the `gadgetbridge` target's: sessions
+  with the model of Gadgetbridge (below) as the dev kit's phone, which
+  hears every line the dev kit sends.
 - `--guided`, with a build from `sim/coverage-build.sh`, extends the runs
   that reached functions no run had before. It's function coverage, not
   branches (those don't fit in flash), but of everything on the watch,
@@ -375,6 +388,10 @@ it:
   ```sh
   cd sim && cargo +nightly fuzz run -s none gadgetbridge -- -fork=8 -timeout=20
   ```
+
+  Its corpus also runs on a dev kit, the mock hearing what the dev kit
+  sends over the air (`ur-sim --fuzz ELF --peer ADDRESS --corpus DIR
+  --gadgetbridge`; see "Fuzzing a dev kit").
 
 ### cargo-careful and Miri
 
@@ -495,22 +512,6 @@ python3 scripts/flash-stress.py target/thumbv7em-none-eabihf/release/ur --minute
 (`RTT_SECS=3`, so the runner detaches before the saving starts: see
 below.) Its saves stay behind under a key of their own
 (`storage::key::STRESS`), harmless to a normal build.
-
-`scripts/touch_probe.py` looks for a touch controller register that
-tells a fingertip from a bigger contact (a knuckle, a palm, a forearm
-brushing the edge). A build with the `touch-probe` feature reads 0x00–0x0F
-and 0xB0–0xB3 on every touch report and logs them all (see
-`src/touch_probe.rs`). Capture its log while someone touches the dev kit
-as `guide` asks, then analyse it:
-
-```sh
-DEFMT_RTT_BUFFER_SIZE=2048 RTT_SECS=900 cargo run --release --features touch-probe 2>&1 | tee tmp/touch-probe.log
-python3 scripts/touch_probe.py guide    # in another terminal, with the screen on
-python3 scripts/touch_probe.py analyse tmp/touch-probe.log --csv tmp/touch-probe.csv
-```
-
-(The bigger RTT buffer, as a finger down logs ~100 lines a second;
-`analyse` counts the lines dropped anyway.)
 
 A build with the `wedge-i2c` feature checks that the sensors come back
 from a stuck bus by themselves, as they must when a reset (a probe's, a
@@ -685,10 +686,9 @@ Cargo.toml's version is the source of truth. To release:
    commits since the last tag), then move its entries under a heading
    for the new version and update the compare links at the bottom.
 2. Set the version in Cargo.toml, and run any cargo build without
-   `--locked` (e.g. `cargo check`) to update Cargo.lock to match. The
-   simulator's Info screen shows the version too, so approve its new
-   screenshots (`cd sim && UPDATE_SHOTS=1 cargo test`; see
-   [Approved screenshots](#approved-screenshots)).
+   `--locked` (e.g. `cargo check`) to update Cargo.lock to match. (The
+   approved screenshots don't show it: their scripts pin a version of
+   their own.)
 3. Commit, then tag (annotated, with a very brief summary of what changed
    since the last release: the key user-facing effects, naming new
    concepts as the README does, and any particularly impactful change
@@ -725,12 +725,19 @@ gh release download v0.9.0 --pattern sha256.sum --dir published
 
 ## CI
 
-- `check.yml`: rustfmt, clippy (both variants and the dev kit's
-  `compare`, `flash-stress` and `touch-probe` builds, with the pinned
-  toolchain and on beta; and the simulator), [shellcheck], and that the Python
-  scripts parse.
+- `check.yml`: rustfmt, clippy (both variants, the dev kit's `compare`
+  and `flash-stress` builds, and every theme, with the pinned toolchain
+  and on beta; and the simulator, with every theme too), [shellcheck],
+  and that the Python scripts parse.
+- `features.yml`: that every theme builds alone (as its package is) and
+  all together with every feature (`--all-features`), and that the
+  simulator builds with everything. The heavier jobs wait for it:
+  `test.yml`'s simulator, web and firmware jobs, `screenshots.yml`'s
+  rendering, and `pages.yml`'s build (those two only for its simulator
+  check).
 - `test.yml`: the host tests (pinned and beta), the simulator's tests
-  and screenshots (as the run's `screenshots` artifact), and a packaged
+  and screenshots (as the run's `screenshots` artifact; every theme's
+  own too, with `themes-all`), and a packaged
   build (by `release.sh`, so without `debug-input`) of every PR and
   every commit on main, to try on a watch:
   `0.9.0-pr.<number>+<commit>`, or `0.9.0-snap.<commits>+<commit>`. The

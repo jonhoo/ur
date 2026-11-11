@@ -6,9 +6,6 @@
 #
 #     python3 -m http.server -d target/web
 #
-# `UR_FEATURES` builds it with another face or theme (see the firmware's
-# Cargo.toml), say `UR_FEATURES=living-tokyo`.
-#
 # Needs only cargo and the wasm32-unknown-unknown target
 # (`rustup target add wasm32-unknown-unknown`): the module's interface is
 # plain functions (see src/web.rs), so there's no wasm-bindgen step.
@@ -20,10 +17,10 @@ out=${1:-$sim/target/web}
 # `cargo rustc --crate-type cdylib`: the library as a WebAssembly module,
 # without making every native build link a shared library it has no use
 # for. `--target` overrides .cargo/config.toml's host target, and the
-# window (minifb) is left out, as it's the native front end's.
+# window (minifb) is left out, as it's the native front end's. Every
+# theme is in (`themes-all`), for the page's picker to show them all.
 cd "$sim"
-cargo rustc --locked --release --lib --no-default-features \
-    --features "${UR_FEATURES-}" \
+cargo rustc --locked --release --lib --no-default-features --features themes-all \
     --target wasm32-unknown-unknown --crate-type cdylib
 
 mkdir -p "$out"

@@ -71,9 +71,9 @@ on top:
   the watch estimates the room from its own warmth, learning from any
   sensor it meets: roughly ±2–3 °C on the wrist once
   it has, worse before, in the cold, or while you exercise.
-- **Follows the sun:** two dark themes after sunset and two light ones
-  by day, and a screen that's brightest while the sun is up and dim from
-  midnight until you get up.
+- **Follows the sun:** dark colour schemes after sunset and light ones
+  by day, a choice of each ([themes](#themes)), and a screen that's
+  brightest while the sun is up and dim from midnight until you get up.
 - **Gadgetbridge without gaps:** with [InfiniTime]'s protocol,
   Gadgetbridge records steps and heart rate only while connected, and no
   sleep. ur speaks the [Bangle.js protocol] instead, and keeps the
@@ -154,7 +154,7 @@ if it's short.
 
 **Screens:** swipe right for Today (steps and heart rate by the hour),
 then Last night; left for Alarms, the alarms set in Gadgetbridge,
-Settings, then Info; down for the last three notifications; up for the
+the settings (LOOK, then BUTTON GRID), then Info; down for the last three notifications; up for the
 button grid (if on), Music, and Air (while a room sensor is near: its
 CO₂, temperature, humidity and pressure, or those it measures). A short
 bar on an edge means there's more that way.
@@ -182,11 +182,18 @@ bar on an edge means there's more that way.
 - **A ringing alarm:** tap to snooze for 9 minutes; press the button to
   stop it.
 
-On Settings, tap **THEME** for the next theme, **LIGHT** to switch
-brightness from AUTO to SOFT, a step dimmer, for a longer battery,
-**BUTTONS** to turn on the [button grid](docs/buttons.md), **GRID** for
-its layout (six buttons, or two layers), and **BTHOME KEY** (while
-presses go over BTHome) for the key Home Assistant asks for (see
+On the settings' **LOOK**, tap **THEME** for the next colour scheme,
+**FORCE** to show the day's schemes (DAY) or the night's (NIGHT)
+whatever the sun says, or follow the sun (NONE), and **LIGHT** to
+switch brightness from AUTO to SOFT, a step dimmer, for a longer
+battery. With one scheme for the time of day, THEME is dim and can't
+change, nor FORCE with schemes of one side only: a tap says why (FAQ
+[D01](#d01-the-watch-says-only-one-theme),
+[D02](#d02-the-watch-says-no-day-themes-or-no-night-themes)). On
+**BUTTON GRID**, the next, tap **BUTTONS** to turn on the
+[button grid](docs/buttons.md), **GRID** for its layout (six buttons,
+or two layers), and **BTHOME KEY** (while presses go over BTHome) for
+the key Home Assistant asks for (see
 [Home Assistant](docs/buttons.md#home-assistant)). To set an alarm or
 timer, tap it, then swipe the hours and minutes. Alarms set in
 Gadgetbridge are read-only on the watch; a one-off one switches
@@ -238,6 +245,19 @@ Send the zip over Bluetooth with either of these:
 [releases]: https://github.com/jonhoo/ur/releases
 [nrf-dfu-android]: https://play.google.com/store/apps/details?id=no.nordicsemi.android.dfu
 [nrf-dfu-ios]: https://apps.apple.com/app/nrf-device-firmware-update/id1624454660
+
+### Themes
+
+How the watch looks is its theme: Retro, the one in the screenshots,
+with colour schemes for the night and for the day. A build can
+have other themes instead, or as well: LOOK's THEME row then steps
+through every scheme built in. The themes there are, with what they
+look like, are in [src/themes/](src/themes/). A release has a package
+of each other theme, `ur-<theme>-<version>-dfu.zip`, installed as
+above (one with colour schemes for only night or only day shows them
+by day and by night alike); to build any other
+mix, see [CONTRIBUTING.md](CONTRIBUTING.md#themes), and to make a theme
+of your own, [AUTHORING-THEMES.md](AUTHORING-THEMES.md).
 
 ### The first install, over InfiniTime
 
@@ -422,6 +442,29 @@ Gadgetbridge reconnects and asks again. If that didn't help:
 Steps and sleep come separately, when Gadgetbridge fetches them: see
 [Using it](#using-it).
 
+### D01: The watch says "ONLY ONE THEME"
+
+The firmware on the watch has only one colour scheme for this time of
+day (or for the side **FORCE** pins), so **THEME** has nothing to switch
+to. For more, install a release's `ur-<version>-dfu.zip`, which has
+Retro's, several for each side, or another theme's package,
+`ur-<theme>-<version>-dfu.zip` (see [Installing](#installing)). Or
+build one with every theme in it (`--features themes-all`), or the
+themes you like (see [CONTRIBUTING.md](CONTRIBUTING.md#themes)). An
+update keeps the scheme you had for each side, if the new firmware has
+it.
+
+### D02: The watch says "NO DAY THEMES" or "NO NIGHT THEMES"
+
+The firmware on the watch has colour schemes for one side of the day
+only (a theme with night schemes only, say), so it shows them by day
+and by night alike, and **FORCE** has nothing to pick between. That's
+how such a theme is: for schemes of both sides, install a release's
+`ur-<version>-dfu.zip`, which has Retro's, or another theme's package
+with both (a release's notes say which have one side only; see
+[Installing](#installing)), or build one with themes of both sides (see
+[CONTRIBUTING.md](CONTRIBUTING.md#themes)).
+
 ### N01: Notifications don't buzz, and the screen stays dim
 
 The watch thinks you're asleep: it's a quiet night. It ends with the
@@ -438,7 +481,7 @@ Gadgetbridge, under Notifications.
 ### P01: How do I put the watch away for a while?
 
 Use storage mode: long-press the Info screen (swipe left from the clock,
-past Alarms, any alarms from Gadgetbridge, and Settings), then tap to
+past Alarms, any alarms from Gadgetbridge, and the settings), then tap to
 confirm. The watch saves the activity the phone hasn't fetched and
 switches itself off, using roughly 40% of a full charge in six weeks.
 Press the button or plug in the charger to wake it; the phone sets the

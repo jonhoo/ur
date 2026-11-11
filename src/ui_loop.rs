@@ -41,10 +41,10 @@ use crate::display::Display;
 use crate::heart_reading as heart;
 use crate::system_off::Reason;
 use crate::touch::Touch;
-use crate::ui::{App, Status, ThemeChoice};
+use crate::ui::{App, Force, Status, ThemeChoice};
 use crate::{
     activity, alarm, aranet, ble, brightness, buttons, clock, debug, dfu, gb, geo, glance, live,
-    power, sleep, storage, temperature, touch, ui,
+    power, sleep, storage, temperature, themes, touch, ui,
 };
 
 // ==============================================================================
@@ -139,8 +139,8 @@ pub trait Board {
     ) -> impl Future<Output = bool>;
 
     /// Switches the watch off ([`crate::system_off::shut_down`]), showing
-    /// why. On the watch this never returns: the next thing that happens is
-    /// a boot.
+    /// why: what `canvas` holds, drawn by `App::render_off`. On the watch
+    /// this never returns: the next thing that happens is a boot.
     async fn switch_off(&mut self, reason: Reason, canvas: &mut Canvas, panel_awake: bool);
     /// Feeds the watchdog, unless the button is held: holding it long
     /// enough to starve the watchdog is the user's way back into the
@@ -164,6 +164,7 @@ pub trait Board {
 #[derive(Clone, Copy)]
 pub struct Settings {
     themes: ThemeChoice,
+    force: Force,
     brightness: brightness::Setting,
     buttons: buttons::Setting,
     grid: buttons::Layout,
@@ -174,6 +175,7 @@ impl Settings {
     pub fn of(app: &App) -> Self {
         Self {
             themes: app.themes,
+            force: app.force,
             brightness: app.brightness,
             buttons: app.buttons,
             grid: app.grid_layout,
@@ -184,6 +186,7 @@ impl Settings {
     /// The UI as it boots, at `now`, with these settings.
     fn apply(self, now: Instant) -> App {
         let mut app = App::new(now, self.themes, self.alarms);
+        app.force = self.force;
         app.brightness = self.brightness;
         app.buttons = self.buttons;
         app.grid_layout = self.grid;
@@ -207,9 +210,27 @@ impl Stored {
     /// future keeps (the futures are static RAM).
     pub async fn load() -> Self {
         let load_u8 = async |key| storage::load::<1>(key).await.map_or(0, |[value]| value);
+        // Each side's scheme by its ID; or, from before IDs, retro's index
+        // (see `themes::migrate`), until the wearer next picks one. With
+        // neither, that's retro's first scheme for the side (index 0, as
+        // 0.10 took nothing saved to be), or this build's first if it
+        // hasn't retro. In a loop, rather than an `async` closure called
+        // for each side, which would put a copy of its awaits in this
+        // future for each.
+        let mut chosen = [0; 2];
+        for (day, key, old) in [
+            (false, storage::key::THEME_NIGHT, storage::key::THEME_DARK),
+            (true, storage::key::THEME_DAY, storage::key::THEME_LIGHT),
+        ] {
+            let id = match storage::load::<4>(key).await {
+                Some(id) => u32::from_le_bytes(id),
+                None => themes::migrate(day, load_u8(old).await),
+            };
+            chosen[usize::from(day)] = themes::find(day, id) as u8;
+        }
         let themes = ThemeChoice {
-            light: load_u8(storage::key::THEME_LIGHT).await,
-            dark: load_u8(storage::key::THEME_DARK).await,
+            night: chosen[0],
+            day: chosen[1],
         };
         let alarms = storage::load(storage::key::ALARMS)
             .await
@@ -219,6 +240,7 @@ impl Stored {
             .await
             .map(alarm::Phone::from_bytes)
             .unwrap_or_default();
+        let force = Force::from_byte(load_u8(storage::key::FORCE).await);
         let brightness = brightness::Setting::from_byte(load_u8(storage::key::BRIGHTNESS).await);
         let buttons = buttons::Setting::from_byte(load_u8(storage::key::BUTTONS).await);
         let grid = buttons::Layout::from_byte(load_u8(storage::key::GRID).await);
@@ -234,6 +256,7 @@ impl Stored {
         Self {
             settings: Settings {
                 themes,
+                force,
                 brightness,
                 buttons,
                 grid,
@@ -247,11 +270,29 @@ impl Stored {
 
 /// Saves the settings that changed since `before`.
 pub async fn save_changes(before: Settings, app: &mut App) {
-    if app.themes.light != before.themes.light {
-        storage::save(storage::key::THEME_LIGHT, &[app.themes.light]).await;
+    // In a loop, as in `Stored::load`.
+    for (day, key, now, then) in [
+        (
+            false,
+            storage::key::THEME_NIGHT,
+            app.themes.night,
+            before.themes.night,
+        ),
+        (
+            true,
+            storage::key::THEME_DAY,
+            app.themes.day,
+            before.themes.day,
+        ),
+    ] {
+        if now != then {
+            let id = themes::id(day, now.into());
+            storage::save(key, &id.to_le_bytes()).await;
+        }
     }
-    if app.themes.dark != before.themes.dark {
-        storage::save(storage::key::THEME_DARK, &[app.themes.dark]).await;
+    if app.force != before.force {
+        info!("force: {=str}", app.force.name());
+        storage::save(storage::key::FORCE, &[app.force.to_byte()]).await;
     }
     if app.brightness != before.brightness {
         info!("brightness: {=str}", app.brightness.name());
@@ -412,6 +453,8 @@ impl UiLoop {
             None
         };
         if let Some(reason) = off {
+            // Why, drawn here, where the UI's chosen theme is known.
+            app.render_off(canvas, reason);
             board.switch_off(reason, canvas, self.panel_awake).await;
             return Some(reason);
         }
@@ -493,7 +536,7 @@ impl UiLoop {
             if !self.panel_awake || relighting || !app.dim() {
                 board.set_idle(false).await;
             }
-            canvas.set_theme(app.theme());
+            canvas.set_palette(app.palette());
             // Nothing between this and the render may await: see
             // `compare::rendering`.
             #[cfg(feature = "compare")]

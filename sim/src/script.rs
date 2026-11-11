@@ -20,6 +20,7 @@ use crate::geo;
 use crate::gesture::{Gesture, Touch};
 use crate::heart_reading;
 use crate::route;
+use crate::themes::Theme as _;
 use crate::ui::{PhoneEvent, Unpaired};
 use crate::watch::{Watch, find_theme, local_second};
 use crate::{InputEvent, alarm, debug};
@@ -77,6 +78,10 @@ The wearer and the watch:
   demo-day                   fill today's history so far with a typical day
   alarm 1|2 HH:MM [on|off] | smart on|off [HH:MM [HH:MM]] | timer 1|2 MIN
   theme NAME|auto            pick a theme, and its time of day (auto: the sun's)
+  version VERSION            show VERSION (and its build, after a +) on the
+                             Info screen, as a build of it would, rather
+                             than this one's (for screenshots that don't
+                             change with every release)
   buttons off|bthome|app|both
                              the button grid, and where its presses go (as
                              the Settings screen's BUTTONS row)
@@ -104,8 +109,14 @@ Output:
                              clock face, for someone to read)
   expect steps N             fail unless today's steps are N, on the clock
                              face and the Today screen alike
+  expect theme NAME          fail unless the colour scheme the UI picks is
+                             NAME (in any case), dim or not
   settings                   what the flash holds (see --flash), as the
                              firmware decodes it
+  store KEY HEX              save HEX under storage key KEY (see the
+                             firmware's storage.rs), as an older firmware
+                             might have; the next boot (a run with the
+                             same --flash, or switching on again) reads it
   echo TEXT | verbose on|off | help | quit
 ";
 
@@ -518,7 +529,8 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
                 }
                 (false, true) => crate::shot::save_mimicked(&path, watch.backlight)?,
                 (false, false) => {
-                    watch.screenshot(&path, arg(1).map(find_theme).transpose()?)?;
+                    let theme = arg(1).map(find_theme).transpose()?;
+                    watch.screenshot(&path, theme.map(|t| t.palette()))?;
                 }
             }
             watch.log(format!("screenshot: {}", path.display()));
@@ -543,6 +555,13 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
         "stop" => {
             let recorded = crate::record::stop()?;
             watch.log(recorded);
+        }
+        "expect" if arg(0) == Some("theme") => {
+            let name = need(1, "NAME")?;
+            let shown = watch.app.theme().palette().name;
+            if !shown.eq_ignore_ascii_case(name) {
+                return Err(format!("expected theme {name}, not {shown}"));
+            }
         }
         "expect" if arg(0) == Some("steps") => {
             // Today's total, as the clock face shows it, and as the
@@ -579,6 +598,27 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
         "settings" => {
             for line in crate::settings::describe() {
                 watch.log(line);
+            }
+        }
+        "version" => {
+            let version: &'static str = need(0, "VERSION")?.to_owned().leak();
+            crate::version::set(version.split_once('+').unwrap_or((version, "")));
+            watch.refresh();
+        }
+        "store" => {
+            let key = need(0, "KEY HEX")?;
+            let key: u8 = key.parse().map_err(|_| format!("store: key {key}?"))?;
+            let hex = need(1, "KEY HEX")?;
+            let bytes = (0..hex.len())
+                .step_by(2)
+                .map(|i| {
+                    hex.get(i..i + 2)
+                        .and_then(|b| u8::from_str_radix(b, 16).ok())
+                })
+                .collect::<Option<Vec<u8>>>()
+                .ok_or_else(|| format!("store: {hex} isn't hex"))?;
+            if !crate::watch::run(crate::storage::save(key, &bytes), &mut None) {
+                return Err(format!("store: couldn't save key {key}"));
             }
         }
         "echo" => watch.log(args.join(" ")),

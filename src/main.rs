@@ -2,13 +2,13 @@
 //!
 //! This file is board bring-up and the main UI loop. The pieces:
 //!
-//! - [`canvas`] / [`font`] / [`theme`]: the 80×80 pixel-art canvas, its
-//!   glyphs, and colour themes.
+//! - [`canvas`] / [`font`] / [`palette`]: the 80×80 pixel-art canvas, its
+//!   glyphs, and colour palettes.
 //! - [`display`]: the async LCD driver the canvas pushes pixels through.
 //! - [`spi`] / [`spi_flash`]: the bus the LCD shares with the external flash.
 //! - [`ui`] / [`nav`]: screens, navigation, and screen power;
 //!   [`ui_loop`]: what the UI loop does each pass, which the simulator runs
-//!   too.
+//!   too; [`themes`]: how every screen is drawn, and in which colours.
 //! - [`buttons`] / [`bthome`]: the button grid, and its presses as
 //!   advertisements for Home Assistant.
 //! - [`brightness`]: how bright the backlight is.
@@ -49,6 +49,21 @@
 
 #![no_std]
 #![no_main]
+// What every theme may draw with (the canvas and fonts, each screen's
+// view, the helpers in `themes`, and what they read of the rest) is
+// offered whole: a theme draws with what it likes, and needn't use, nor
+// can it delete, the rest. Retro uses all of it, so in a build with
+// Retro (the default, `themes-all`, and every one CI lints), anything
+// unused is dead and warned about as ever. Without it (another theme's
+// package), what that theme leaves unused isn't: only the theme's own
+// code is held to it (its `mod.rs` warns again; see Retro's).
+#![cfg_attr(
+    not(feature = "theme-retro"),
+    allow(
+        dead_code,
+        reason = "a theme alone needn't use every part of what themes draw with"
+    )
+)]
 
 mod activity;
 mod alarm;
@@ -72,7 +87,6 @@ mod decimal;
 mod dfu;
 mod dfu_slot;
 mod display;
-mod face;
 mod field_log;
 mod firmware;
 #[cfg(feature = "flash-stress")]
@@ -96,6 +110,7 @@ mod nav;
 mod nvmc;
 mod on_time;
 mod packet_pool;
+mod palette;
 mod phone;
 mod power;
 mod ppg;
@@ -113,12 +128,11 @@ mod step_counter;
 mod storage;
 mod system_off;
 mod temperature;
-mod theme;
+mod themes;
 mod touch;
-#[cfg(feature = "touch-probe")]
-mod touch_probe;
 mod ui;
 mod ui_loop;
+mod version;
 mod wake;
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -143,6 +157,7 @@ use defmt_rtt as _;
 
 use crate::canvas::Canvas;
 use crate::display::Display;
+use crate::themes::Theme as _;
 use crate::ui_loop::{Board, Stored, UiLoop, Wake};
 
 bind_interrupts!(struct Irqs {
@@ -638,7 +653,7 @@ async fn main(spawner: Spawner) {
 
     // Static rather than on the stack: two 3.2 KB frame buffers.
     static CANVAS: StaticCell<Canvas> = StaticCell::new();
-    let canvas = CANVAS.init(Canvas::new());
+    let canvas = CANVAS.init(Canvas::new(themes::get(false, 0).palette()));
     debug::register_canvas(canvas);
     #[cfg(feature = "debug-input")]
     spawner.spawn(debug::input_task().expect("spawned once"));

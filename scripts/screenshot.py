@@ -59,6 +59,7 @@ the day look at night): the canvas holds colour roles, not colours.
 """
 
 import argparse
+import re
 import struct
 import subprocess
 import sys
@@ -70,7 +71,7 @@ from pathlib import Path
 TARGET = ["esprobe", "--target", "nRF52832_xxAA"]
 WIDTH = HEIGHT = 80
 BYTES = WIDTH * HEIGHT // 2
-# Colour roles in a theme's palette: `Color::COUNT` in src/theme.rs.
+# Colour roles in a palette: `Color::COUNT` in src/palette.rs.
 ROLES = 16
 SCALE = 3
 # `qr::SIZE`, and the panel pixels a module takes (see `Canvas::qr`).
@@ -166,14 +167,17 @@ def png(path: Path, pixels: list[tuple[int, int, int]], width: int, height: int)
 
 
 def theme_symbol(elf: Path, name: str) -> int:
-    # `theme::NAME`, whatever the crate's mangling hash.
+    # A colour scheme: a static called NAME anywhere in a theme's modules,
+    # `themes::<theme>::…::NAME` (v0 mangling: `6themes<len><theme>`, any
+    # more modules, then `<len><NAME>`), whatever the crate's hash. Its
+    # static starts with its palette (retro's type is `repr(transparent)`).
     out = subprocess.run(["llvm-nm", str(elf)], capture_output=True, text=True, check=True)
-    suffix = f"5theme{len(name)}{name}"
+    scheme = re.compile(rf"6themes\d+[a-z0-9_]+(\d+[a-z0-9_]+)*?{len(name)}{re.escape(name)}$")
     for line in out.stdout.splitlines():
         parts = line.split()
-        if len(parts) == 3 and parts[2].endswith(suffix):
+        if len(parts) == 3 and scheme.search(parts[2]):
             return int(parts[0], 16)
-    sys.exit(f"no theme {name} in {elf}")
+    sys.exit(f"no colour scheme {name} in {elf}")
 
 
 def qr_matrix(key: bytes) -> list[int]:
@@ -200,9 +204,9 @@ def screenshot(elf: Path, out: Path, theme_name: str | None = None) -> None:
     (theme,) = read_words(canvas + 2 * BYTES + 4, 1)
     if theme_name is not None:
         theme = theme_symbol(elf, theme_name.upper())
-    # `Theme` is repr(C): name (&str: pointer, length), then a big-endian
+    # `Palette` is repr(C): name (&str: pointer, length), then a big-endian
     # RGB565 colour per role, then the half-toned roles, a bit each (see
-    # `Theme::columns`): every other panel column of those is background.
+    # `Palette::columns`): every other panel column of those is background.
     theme_bytes = b"".join(
         struct.pack("<I", w) for w in read_words(theme + 8, (2 * ROLES + 2 + 3) // 4)
     )

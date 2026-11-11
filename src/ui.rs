@@ -3,7 +3,10 @@
 //! The UI is immediate-mode: [`App::render`] paints the current screen onto
 //! the canvas from scratch, and the canvas works out what actually changed.
 //! All state that affects what's shown lives in [`App`] or in the [`Status`]
-//! snapshot passed to `render`.
+//! snapshot passed to `render`. What's on screen is this module's; how
+//! it looks is the chosen colour scheme's theme's (see [`crate::themes`]),
+//! which draws every screen, as the screens below describe them in the
+//! watch's own theme, retro.
 //!
 //! The screens sit around the clock face, in a line on each side, nearest
 //! first (see [`crate::nav`] for how swipes move along them):
@@ -11,7 +14,8 @@
 //! - Left, the past: Today (steps, and the heart rate, by the hour), then
 //!   Last night (sleep).
 //! - Right, what's next: Alarms, then the phone's alarms, once it has sent
-//!   some; then Settings, and Info.
+//!   some; then the settings, the look's ("LOOK") and the button grid's
+//!   ("BUTTON GRID"), and Info.
 //! - Above: the last [`HISTORY`] notifications, newest nearest, one a page,
 //!   with when each arrived (see [`crate::arrival`]).
 //! - Below: the button grid (see [`buttons`]), if it's on; Music, while
@@ -53,17 +57,26 @@
 //!   on the info screen, offer storage mode (see [`crate::system_off`]),
 //!   which a tap then confirms, and anything else cancels. Elsewhere,
 //!   nothing.
-//! - On the settings screen, tap a row for its next value: the colour
-//!   theme ("THEME", the next within the current group: dark themes after
-//!   sunset, light ones after sunrise; each group remembers its own), the
-//!   brightness ("LIGHT", auto or soft; see [`crate::brightness`]), the
-//!   button grid ("BUTTONS": off, or where its presses go: "BTHOME",
-//!   "VIA APP" for Gadgetbridge on the phone, or "BOTH"), its layout ("GRID": six buttons, or two layers; over
-//!   BTHome, the latter shows "*B04", a caveat: FAQ B04 explains the
-//!   events it sends then), and, on the last row ("BTHOME KEY", there only
-//!   while presses go over BTHome), the key Home Assistant needs for them
-//!   (see [`crate::bthome`]): a QR code to scan, then, at a tap, as text
-//!   with the watch's address. Another tap, or anything else, closes it.
+//! - On the settings screens, tap a row for its next value. On the
+//!   look's: the theme ("THEME": the next colour scheme, of every theme
+//!   built in, for the side of the day showing, night after sunset, day
+//!   after sunrise; each side remembers its own), which side's schemes
+//!   show ("FORCE": NONE for the sun's, or DAY or NIGHT whatever the sun
+//!   says; only the theme's side: the brightness and the rest still go by
+//!   the sun), and the brightness ("LIGHT", auto or
+//!   soft; see [`crate::brightness`]). On the button grid's: where its
+//!   presses go ("BUTTONS": off, "BTHOME", "VIA APP" for Gadgetbridge on
+//!   the phone, or "BOTH"), its layout ("GRID": six buttons, or two
+//!   layers; over BTHome, the latter shows "*B04", a caveat: FAQ B04
+//!   explains the events it sends then), and, on the last row ("BTHOME
+//!   KEY", there only while presses go over BTHome), the key Home
+//!   Assistant needs for them (see [`crate::bthome`]): a QR code to scan,
+//!   then, at a tap, as text with the watch's address. Another tap, or
+//!   anything else, closes it. THEME and FORCE are always there, so no
+//!   row moves: with one scheme for the side showing, THEME can't change,
+//!   nor FORCE with schemes of one side only in the build, and a tap on
+//!   either shows a banner with the FAQ entry that says why ("ONLY ONE
+//!   THEME", D01; "NO DAY THEMES" or "NO NIGHT THEMES", D02).
 //! - On the button grid, taps and holds are the grid's (see [`buttons`]
 //!   for how they become presses). While a press waits to see whether
 //!   more follows, its buttons stay lit; once sent, the last one shows the
@@ -130,7 +143,7 @@
 //! - Notifications: a banner over the bottom of the screen (the app, then
 //!   who it's from) for [`BANNER_TIME`] and a short buzz. If the screen was
 //!   off, the notification gets the whole (dim) screen instead, like a
-//!   glance, as a history page shows it (see [`render_card`]), and the
+//!   glance, as a history page shows it (see [`Theme::notification`]), and the
 //!   screen sleeps again after. Either way, it's kept in
 //!   the history above the clock; one arriving while that's showing goes
 //!   straight to its first page instead of a banner.
@@ -164,7 +177,7 @@
 //!   screen (dimly) as usual, and the second, rather than turning it off
 //!   again, brightens it.
 //! - Everything shows in the dim look (white, and red for what comes
-//!   second, on black; see [`theme::GLANCE`]), at the glance's low
+//!   second, on black, in retro; see [`crate::themes`]), at the glance's low
 //!   backlight.
 //! - With the screen off, the touch controller sleeps (see
 //!   [`crate::touch::set_asleep`]).
@@ -191,7 +204,6 @@
 //! | Navigation's turns don't buzz or glance | Kept | No one navigates in bed; up and walking, the night soon ends |
 //! | Sleep tracking, and when the night ends | Kept: using the watch only counts through the wrist's movement | See [`sleep::Night`] on [`sleep::QUIET_AWAKE`] |
 
-use core::fmt::Write as _;
 use core::num::NonZeroU32;
 
 use embassy_time::{Duration, Instant};
@@ -199,28 +211,28 @@ use heapless::String;
 
 use crate::InputEvent;
 use crate::alarm;
-use crate::aranet::{self, Band, Sighting};
+use crate::aranet::Sighting;
 use crate::arrival;
 use crate::battery::Battery;
 use crate::ble;
 use crate::brightness;
 use crate::bthome::Identity;
 use crate::buttons::{self, Press};
-use crate::canvas::{Canvas, Color, Sweep, marquee_cycle};
+use crate::canvas::{Canvas, Sweep, marquee_cycle};
 use crate::clock::DateTime;
-use crate::day::Day;
-use crate::face::{self, ClockFace};
-use crate::font;
 use crate::gb::{CallAction, MusicCommand, Outgoing};
 use crate::motor::{self, Pattern};
 use crate::nav::{self, Place, Side};
 // Defined apart from the UI, so that `gb` (which decodes them) builds
 // without it, in host tests; see `phone`.
+use crate::palette::Palette;
 use crate::phone::Text;
 pub use crate::phone::{PhoneEvent, Unpaired};
-use crate::route::{self, Route, Turn};
+use crate::route::Route;
 use crate::sleep::{self, Change, Over};
-use crate::theme::{self, Theme};
+use crate::themes::{
+    self, CallButton, EditorButton, EditorField, Handles, MediaAction, RowKind, SettingRow, Theme,
+};
 use crate::touch::Gesture;
 use crate::wake::{self, Action};
 
@@ -278,14 +290,10 @@ pub struct Status<'a> {
     pub heart_rate: Option<u8>,
     /// The temperature in tenths of a °C (see [`crate::temperature`]),
     /// once it's been read: whole degrees (a multiple of ten) unless it's
-    /// from a room sensor. Only the usual clock face shows it; Living
-    /// Tokyo doesn't, but it's still exported for the dev kit's compare
-    /// (see `crate::compare`), so it's kept.
-    #[cfg_attr(feature = "face-living-tokyo", allow(dead_code))]
+    /// from a room sensor.
     pub temperature: Option<i16>,
     /// Whether that's a nearby room sensor's (an Aranet4's or a BTHome
     /// thermometer's), rather than the watch's own (or an estimate from it).
-    #[cfg_attr(feature = "face-living-tokyo", allow(dead_code))]
     pub temperature_from_sensor: bool,
     /// The nearest room sensor's latest reading, for the Air screen.
     pub air: Option<Sighting>,
@@ -312,7 +320,8 @@ enum Screen {
     Music,
     /// The button grid (see [`buttons`]).
     Buttons,
-    Settings,
+    /// One of the two settings screens.
+    Settings(Page),
     /// A nearby Aranet4's readings.
     Air,
     Info,
@@ -327,9 +336,9 @@ enum Screen {
     HaKey,
 }
 
-/// The most screens in a line: the notifications', or the one below (the
-/// grid, music, settings, and info).
-const LONGEST_LINE: usize = if HISTORY > 4 { HISTORY } else { 4 };
+/// The most screens in a line: the notifications', or the one on the
+/// right (the alarms, the phone's, the two settings screens, and info).
+const LONGEST_LINE: usize = if HISTORY > 5 { HISTORY } else { 5 };
 type Screens = heapless::Vec<Screen, LONGEST_LINE>;
 
 /// An alarm ringing.
@@ -340,7 +349,7 @@ struct Ringing {
 
 /// Which setting the editor is changing.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Editing {
+pub enum Editing {
     SmartWeekday,
     SmartWeekend,
     /// Which of [`alarm::ALARMS`].
@@ -348,15 +357,6 @@ enum Editing {
     /// Which of [`alarm::TIMERS`].
     Timer(u8),
 }
-
-// The alarms screen: smart wake across the top, then the two alarms side by
-// side, then the two timers side by side. These are the tops of those
-// bands (also what a tap hits).
-const SMART_TOP: i32 = 11;
-const ALARMS_TOP: i32 = 30;
-const TIMERS_TOP: i32 = 53;
-/// Where the editor's buttons start.
-const EDITOR_BUTTONS_Y: i32 = 60;
 
 struct Banner {
     /// Its text lives elsewhere, rather than in a copy (see
@@ -385,6 +385,11 @@ enum Shows {
     /// That a grid press couldn't go to Home Assistant (see
     /// [`App::ha_unsent`]).
     Unsent,
+    /// That THEME can't change: the build has one scheme for the side
+    /// showing (a tap on it, see [`App::change`]).
+    OneTheme,
+    /// That FORCE can't change: the build has schemes of one side only.
+    OneSide,
 }
 
 /// How many notifications the history above the clock keeps. Each costs
@@ -491,8 +496,8 @@ pub struct App {
     transition: Option<Sweep>,
     /// Whether it's daylight, which picks the light or dark theme group.
     daytime: bool,
-    /// The chosen theme within each group: indices into [`theme::LIGHT`] and
-    /// [`theme::DARK`]. Tapping THEME on the info screen advances the one
+    /// The chosen scheme for each side of the day: indices into
+    /// [`themes::schemes`]. Tapping THEME on the settings advances the one
     /// in use.
     pub themes: ThemeChoice,
     connected: bool,
@@ -551,6 +556,9 @@ pub struct App {
     night: sleep::Night,
     /// The brightness setting, as stored (`main` saves it when it changes).
     pub brightness: brightness::Setting,
+    /// The settings' FORCE, as stored (`main` saves it when it changes): which
+    /// side of the day's schemes the theme shows, if not the sun's.
+    pub force: Force,
     /// Whether it's between local midnight and the wearer getting up (see
     /// [`brightness::small_hours`]).
     small_hours: bool,
@@ -559,9 +567,9 @@ pub struct App {
     /// Pairing or an update has the screen (as of the last tick), and so
     /// every touch (see the module docs).
     takeover: bool,
-    /// Just after a media gesture on the clock: what it did, as a media
-    /// control's icon, and for how many more ticks to show it.
-    media_hint: Option<(&'static [u8; 5], u8)>,
+    /// Just after a media gesture on the clock: what it did, and for how
+    /// many more ticks to show it.
+    media_hint: Option<(MediaAction, u8)>,
     /// The phone's directions, while it navigates (see [`crate::route`]).
     route: Option<Route>,
     /// Whether this connection's phone has been told to turn off "Text as
@@ -597,8 +605,9 @@ const SENT_TIME: Duration = Duration::from_millis(800);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ThemeChoice {
-    pub light: u8,
-    pub dark: u8,
+    /// Indices into `themes::schemes`, for daylight and for darkness.
+    pub day: u8,
+    pub night: u8,
 }
 
 impl App {
@@ -634,6 +643,7 @@ impl App {
             centre_until: Instant::from_ticks(0),
             night: sleep::Night::default(),
             brightness: brightness::Setting::default(),
+            force: Force::default(),
             small_hours: false,
             storage_mode: false,
             takeover: false,
@@ -851,31 +861,61 @@ impl App {
         }
     }
 
-    pub fn theme(&self) -> &'static Theme {
+    /// The palette the screen shows in: the chosen scheme's, or in the
+    /// dim look, its dim one.
+    pub fn palette(&self) -> &'static Palette {
+        let theme = self.theme();
         if self.dim() {
-            &theme::GLANCE
+            theme.dim()
         } else {
-            self.chosen_theme()
+            theme.palette()
         }
     }
 
-    /// The theme chosen for the time of day, whether or not it's showing
-    /// (it isn't while dim).
-    fn chosen_theme(&self) -> &'static Theme {
-        let (group, choice): (&[&Theme], u8) = if self.daytime {
-            (&theme::LIGHT, self.themes.light)
+    /// The colour scheme chosen for the time of day (see
+    /// [`crate::themes`]), which draws every screen, dim or not.
+    pub fn theme(&self) -> &'static themes::Scheme {
+        let day = self.theme_side();
+        let choice = if day {
+            self.themes.day
         } else {
-            (&theme::DARK, self.themes.dark)
+            self.themes.night
         };
-        group[usize::from(choice) % group.len()]
+        themes::get(day, usize::from(choice))
     }
 
-    /// The next theme in the group currently in use.
-    fn next_theme(&mut self) {
-        let (choice, count) = if self.daytime {
-            (&mut self.themes.light, theme::LIGHT.len())
+    /// FORCE, as it applies: in a build with schemes of one side only,
+    /// whatever was saved (by a build with both) pins nothing, as there's
+    /// nothing to pin, and shows as NONE. It stays saved, for a build with
+    /// both again.
+    fn force(&self) -> Force {
+        if themes::has(true) && themes::has(false) {
+            self.force
         } else {
-            (&mut self.themes.dark, theme::DARK.len())
+            Force::Sun
+        }
+    }
+
+    /// Whether the theme shows a scheme for daylight, rather than for
+    /// darkness: the sun's say (`daytime`), unless the settings' FORCE pins
+    /// a side. Only the theme's: the brightness, and everything else
+    /// that goes by the sun, still does.
+    fn theme_side(&self) -> bool {
+        match self.force() {
+            Force::Sun => self.daytime,
+            Force::Day => true,
+            Force::Night => false,
+        }
+    }
+
+    /// The next scheme for the side the theme shows.
+    fn next_theme(&mut self) {
+        let day = self.theme_side();
+        let count = themes::count(day);
+        let choice = if day {
+            &mut self.themes.day
+        } else {
+            &mut self.themes.night
         };
         *choice = ((usize::from(*choice) + 1) % count) as u8;
     }
@@ -914,9 +954,10 @@ impl App {
                 // than at the end of the line below, behind the grid,
                 // music, and the air, which come and go (so the way to
                 // them would change); after the phone's alarms, so the two
-                // kinds of alarm stay together. Settings first, as it's
-                // the one that's used.
-                add(Screen::Settings);
+                // kinds of alarm stay together. The settings first, as
+                // they're what's used: the look's, then the grid's.
+                add(Screen::Settings(Page::Look));
+                add(Screen::Settings(Page::Grid));
                 add(Screen::Info);
             }
             Side::Above => {
@@ -947,7 +988,7 @@ impl App {
     fn place(&self) -> Place {
         let screen = match self.screen {
             Screen::Storage => Screen::Info,
-            Screen::HaQr | Screen::HaKey => Screen::Settings,
+            Screen::HaQr | Screen::HaKey => Screen::Settings(Page::Grid),
             screen => screen,
         };
         Side::ALL
@@ -1023,6 +1064,10 @@ impl App {
             Shows::IntentsOff => ("INTENTS OFF", "SEE FAQ C04"),
             Shows::UpdateRefused => ("UPDATE REFUSED", "SEE FAQ U02"),
             Shows::Unsent => ("BTHOME NOT SENT", "SEE FAQ B05"),
+            Shows::OneTheme => ("ONLY ONE THEME", "SEE FAQ D01"),
+            // The side there are none of, which FORCE would pick.
+            Shows::OneSide if themes::has(true) => ("NO NIGHT THEMES", "SEE FAQ D02"),
+            Shows::OneSide => ("NO DAY THEMES", "SEE FAQ D02"),
         };
         app.clear();
         who.clear();
@@ -1288,12 +1333,13 @@ impl App {
                     send(Outgoing::Call(CallAction::Ignore));
                 }
                 InputEvent::Touch(touch)
-                    if touch.gesture == Gesture::Tap && touch.y >= CALL_BUTTONS_Y =>
+                    if let Some(button) = (touch.gesture == Gesture::Tap)
+                        .then(|| self.theme().call_button(touch.x, touch.y))
+                        .flatten() =>
                 {
-                    let action = if touch.x < 40 {
-                        CallAction::Reject
-                    } else {
-                        CallAction::Accept
+                    let action = match button {
+                        CallButton::Decline => CallAction::Reject,
+                        CallButton::Answer => CallAction::Accept,
                     };
                     send(Outgoing::Call(action));
                     self.call = None;
@@ -1333,7 +1379,11 @@ impl App {
             InputEvent::Touch(touch) => match (touch.gesture, self.screen) {
                 // Storage mode needs a long press, then a tap: hard to do by
                 // accident, while anything else backs out.
-                (Gesture::Tap, Screen::Storage) => self.storage_mode = true,
+                (Gesture::Tap, Screen::Storage)
+                    if self.theme().storage_confirms(touch.x, touch.y) =>
+                {
+                    self.storage_mode = true
+                }
                 (_, Screen::Storage) => self.go_to(Screen::Info, Sweep::LeftToRight),
                 (Gesture::LongPress, Screen::Info) => {
                     self.go_to(Screen::Storage, Sweep::RightToLeft);
@@ -1341,20 +1391,16 @@ impl App {
                 }
                 (Gesture::Tap, Screen::HaQr) => self.go_to(Screen::HaKey, Sweep::RightToLeft),
                 (_, Screen::HaQr | Screen::HaKey) => {
-                    self.go_to(Screen::Settings, Sweep::LeftToRight)
+                    self.go_to(Screen::Settings(Page::Grid), Sweep::LeftToRight)
                 }
                 (Gesture::Tap | Gesture::LongPress, Screen::Buttons) => self.on_grid(touch, now),
                 (Gesture::SwipeLeft, _) => self.navigate(nav::Swipe::Left),
                 (Gesture::SwipeRight, _) => self.navigate(nav::Swipe::Right),
                 (Gesture::SwipeUp, _) => self.navigate(nav::Swipe::Up),
                 (Gesture::SwipeDown, _) => self.navigate(nav::Swipe::Down),
-                (Gesture::Tap, Screen::Music) if touch.y >= MUSIC_CONTROLS_Y => {
-                    // Left, middle, and right thirds.
-                    let command = match touch.x {
-                        ..27 => MusicCommand::Previous,
-                        27..53 => MusicCommand::PlayPause,
-                        _ => MusicCommand::Next,
-                    };
+                (Gesture::Tap, Screen::Music)
+                    if let Some(command) = self.theme().music_control(touch.x, touch.y) =>
+                {
                     send(Outgoing::Music(command));
                     if let Some(music) = &mut self.music {
                         match command {
@@ -1364,25 +1410,30 @@ impl App {
                     }
                 }
                 (Gesture::Tap, Screen::Alarms) => {
-                    if let Some(row) = alarm_at(touch.x, touch.y) {
+                    if let Some(row) = self.theme().alarm_at(touch.x, touch.y) {
                         self.editing = Some(row);
                     }
                 }
                 // A quick switch, without opening the editor.
                 (Gesture::LongPress, Screen::Alarms) => {
-                    if let Some(row) = alarm_at(touch.x, touch.y) {
+                    if let Some(row) = self.theme().alarm_at(touch.x, touch.y) {
                         self.toggle(row, now);
                         motor::buzz(Pattern::NOTIFY);
                     }
                 }
-                (Gesture::Tap, Screen::Settings) => match settings_row(touch.y, self.buttons) {
-                    Some(Row::Theme) => self.next_theme(),
-                    Some(Row::Light) => self.brightness = self.brightness.next(),
-                    Some(Row::Buttons) => self.buttons = self.buttons.next(),
-                    Some(Row::Grid) => self.grid_layout = self.grid_layout.next(),
-                    Some(Row::BtHomeKey) => self.go_to(Screen::HaQr, Sweep::RightToLeft),
-                    None => {}
-                },
+                (Gesture::Tap, Screen::Settings(page)) => {
+                    let settings = page.settings(self.buttons);
+                    let rows = self.settings_rows(settings);
+                    let shown = themes::SettingsPage {
+                        title: page.title(),
+                        rows: &rows,
+                    };
+                    if let Some(row) = self.theme().settings_row(&shown, touch.x, touch.y)
+                        && let Some(&setting) = settings.get(row)
+                    {
+                        self.change(setting, now);
+                    }
+                }
                 // TODO: remove once something real uses the motor; for now
                 // this is how we check it works.
                 (Gesture::Tap, Screen::Info) => motor::buzz(Pattern::NOTIFY),
@@ -1433,7 +1484,7 @@ impl App {
             .checked_sub(Duration::from_millis(touch.held_ms.into()))
             .unwrap_or(now);
         let layout = self.grid_layout;
-        let button = buttons::at(layout, touch.x, touch.y);
+        let button = self.theme().grid_button(layout, touch.x, touch.y);
         for press in self
             .grid
             .touch(layout, button, kind, started, now)
@@ -1567,34 +1618,34 @@ impl App {
             return;
         }
         send(Outgoing::Music(command));
-        let icon = match (command, &mut self.music) {
+        let action = match (command, &mut self.music) {
             // As the music screen does, the new state straight away, if
             // it's known.
             (MusicCommand::PlayPause, Some(music)) if music.playing.is_some() => {
                 music.toggle();
                 if music.playing() {
-                    &font::PLAY
+                    MediaAction::Play
                 } else {
-                    &font::PAUSE
+                    MediaAction::Pause
                 }
             }
-            // Otherwise, not a guess: the toggle's own icon. The phone says
+            // Otherwise, not a guess: the toggle itself. The phone says
             // which it was once its player changes.
-            (MusicCommand::PlayPause, _) => &font::PLAY_PAUSE,
+            (MusicCommand::PlayPause, _) => MediaAction::PlayPause,
             (MusicCommand::Next, music) => {
                 if let Some(music) = music {
                     music.likely_playing();
                 }
-                &font::NEXT
+                MediaAction::Next
             }
             (MusicCommand::Previous, music) => {
                 if let Some(music) = music {
                     music.likely_playing();
                 }
-                &font::PREVIOUS
+                MediaAction::Previous
             }
         };
-        self.media_hint = Some((icon, MEDIA_HINT_TICKS));
+        self.media_hint = Some((action, MEDIA_HINT_TICKS));
         motor::buzz(Pattern::NOTIFY);
     }
 
@@ -1625,27 +1676,29 @@ impl App {
             }
             return;
         };
+        let theme = self.theme();
         let up = match touch.gesture {
             Gesture::SwipeUp => 1,
             Gesture::SwipeDown => -1,
-            Gesture::Tap if touch.y >= EDITOR_BUTTONS_Y => {
-                if touch.x < 40 {
-                    self.toggle(editing, now);
-                } else if editing == Editing::SmartWeekday {
-                    self.editing = Some(Editing::SmartWeekend);
-                } else {
-                    done(self);
+            Gesture::Tap => {
+                match theme.editor_button(touch.x, touch.y) {
+                    Some(EditorButton::Switch) => self.toggle(editing, now),
+                    Some(EditorButton::Next) if editing == Editing::SmartWeekday => {
+                        self.editing = Some(Editing::SmartWeekend)
+                    }
+                    Some(EditorButton::Next) => done(self),
+                    None => {}
                 }
                 return;
             }
             _ => return,
         };
-        // Left half: hours; right half: minutes (5 at a time, but 1 for the
-        // timer, where short durations are common).
-        let step = match (touch.x < 40, editing) {
-            (true, _) => 60,
-            (false, Editing::Timer(_)) => 1,
-            (false, _) => 5,
+        // Hours, or minutes: 5 at a time, but 1 for the timer, where short
+        // durations are common.
+        let step = match (theme.editor_field(touch.x, touch.y), editing) {
+            (EditorField::Hours, _) => 60,
+            (EditorField::Minutes, Editing::Timer(_)) => 1,
+            (EditorField::Minutes, _) => 5,
         };
         let value = match editing {
             Editing::SmartWeekday => &mut self.alarms.smart_weekday,
@@ -1668,7 +1721,7 @@ impl App {
     /// then took it for), and a banner waiting to be seen under it never
     /// started its time. Nothing is lost by closing it: each edit takes
     /// effect, and is saved, as it's made, so this is what DONE does, and
-    /// what the other screens that change settings (Settings, the grid's
+    /// what the other screens that change settings (the settings, the grid's
     /// layout) amount to when a wake takes the wearer off them.
     fn screen_off(&mut self) {
         self.awake = false;
@@ -2043,7 +2096,7 @@ impl App {
             self.last_input = now;
         }
         self.media_hint = match self.media_hint {
-            Some((icon, ticks)) if ticks > 1 => Some((icon, ticks - 1)),
+            Some((action, ticks)) if ticks > 1 => Some((action, ticks - 1)),
             _ => None,
         };
         if Route::expire(&mut self.route, now.as_millis()) {
@@ -2107,7 +2160,7 @@ impl App {
     /// How long the screen stays on after the last input: [`SCREEN_TIMEOUT`],
     /// or on the music screen, long enough for the title and artist to
     /// scroll by once, from wherever they are. They scroll from when the
-    /// track started (see `render_music`), not from the last input, so a
+    /// track started (see [`Theme::music`]), not from the last input, so a
     /// whole cycle shows every part of them. That's ~19 s for a 30-letter
     /// title, against the clock face's 10 s; the music screen is opened
     /// rarely enough that the extra time costs little.
@@ -2125,11 +2178,9 @@ impl App {
     /// its release, up to [`crate::gesture::HOLD_LIMIT`] (see
     /// [`crate::gesture::screen_timeout`]).
     fn screen_timeout(&self) -> Duration {
-        let overflow =
-            |text: &str, scale: i32| font::small_text_width(text) * scale - MUSIC_TEXT_WIDTH;
         let timeout = match (self.screen, &self.music) {
             (Screen::Music, Some(music)) => {
-                let overflow = overflow(&music.track, 2).max(overflow(&music.artist, 1));
+                let overflow = self.theme().music_overflow(&music.artist, &music.track);
                 SCREEN_TIMEOUT.max(marquee_cycle(overflow))
             }
             (Screen::HaQr | Screen::HaKey, _) => Duration::MAX,
@@ -2141,58 +2192,62 @@ impl App {
     /// Whether something on screen is scrolling, so frames are needed more
     /// often than once a second (see [`crate::canvas::MARQUEE_FRAME`]).
     pub fn animating(&self) -> bool {
-        let overflows =
-            |text: &str, scale: i32, room: i32| font::small_text_width(text) * scale > room;
         if !self.awake {
             return false;
         }
+        let theme = self.theme();
         if let Some(call) = &self.call {
-            return overflows(&call.caller, 2, CALL_TEXT_WIDTH);
+            return theme.call_overflow(&call.caller) > 0;
         }
         // Notifications never scroll: what doesn't fit ends in an
-        // ellipsis (see `render_card` and `render_banner`).
+        // ellipsis (see retro's `messages`).
         match self.screen {
-            Screen::Music => self.music.as_ref().is_some_and(|m| {
-                overflows(&m.artist, 1, MUSIC_TEXT_WIDTH)
-                    || overflows(&m.track, 2, MUSIC_TEXT_WIDTH)
-            }),
+            Screen::Music => self
+                .music
+                .as_ref()
+                .is_some_and(|m| theme.music_overflow(&m.artist, &m.track) > 0),
             _ => false,
         }
     }
 
+    /// Draws the screen, with the chosen scheme's theme (see
+    /// [`crate::themes`]).
     pub fn render(&self, canvas: &mut Canvas, status: &Status, now: Instant) {
+        let theme = self.theme();
         // Updates, pairing, then calls take over the screen until they're
         // done.
         if let Some(percent) = status.update_progress {
-            render_update(canvas, percent, now);
+            theme.update(canvas, percent, now);
             return;
         }
         if let Some(passkey) = status.passkey {
-            render_pairing(canvas, passkey);
+            theme.pairing(canvas, passkey);
             return;
         }
         if let Some(call) = &self.call {
-            render_call(canvas, call, now);
+            let call = themes::Call {
+                caller: &call.caller,
+                elapsed: now - call.since,
+                silenced: call.silenced,
+            };
+            theme.call(canvas, &call);
             return;
         }
         if let Some(ringing) = &self.ringing {
-            render_ringing(canvas, ringing, status);
+            theme.ringing(canvas, ringing.kind, status);
             return;
         }
         if let Some(since) = self.finding {
-            render_find(canvas, now - since);
+            theme.find(canvas, now - since);
             return;
         }
         if self.glancing() {
-            match &self.route {
-                Some(route) => render_route_glance(canvas, status, &route.step),
-                None => render_glance(canvas, status),
-            }
-            // Just after a media gesture, what it did, in the top right
-            // corner, which both layouts leave free.
-            if let Some((icon, _)) = self.media_hint {
-                canvas.sprite(65, 3, font::MEDIA_HINT_W, icon, 2, Color::TEXT);
-            }
+            let glance = themes::Glance {
+                status,
+                route: self.route.as_ref().map(|route| &route.step),
+                media: self.media_hint.map(|(action, _)| action),
+            };
+            theme.glance(canvas, &glance);
             return;
         }
         // Text kept as Latin-1 (see `phone::Text`), as UTF-8 to draw.
@@ -2204,17 +2259,17 @@ impl App {
             // alone. A tap wakes it to the clock, with the notification as
             // a banner, for the time.
             self.banner_text(banner.shows, &mut app, &mut who);
-            render_card(canvas, &app, &who, "");
+            theme.notification(canvas, &app, &who, "");
             return;
         }
         if let Some(editing) = self.editing {
-            render_editor(
-                canvas,
+            let editor = themes::Editor {
                 editing,
-                &self.alarms,
-                &self.alarm_state,
-                status.uptime_secs as i64,
-            );
+                settings: &self.alarms,
+                state: &self.alarm_state,
+                uptime_secs: status.uptime_secs as i64,
+            };
+            theme.editor(canvas, &editor);
             return;
         }
         let next_alarm = status.local_second.and_then(|second| {
@@ -2225,36 +2280,37 @@ impl App {
                 status.uptime_secs as i64,
             )
         });
+        // The clock face, there or in place of a page with nothing to show.
+        let clock = |canvas: &mut Canvas, media| {
+            let face = themes::Face {
+                status,
+                next_alarm,
+                media,
+                unseen: self.notifications.unseen,
+                dim: self.dim(),
+            };
+            theme.clock(canvas, &face);
+        };
         match self.screen {
             Screen::Clock => {
                 // While media plays, a note; just after a media gesture,
                 // what it did.
-                let icon = match (self.media_hint, &self.music) {
-                    (Some((icon, _)), _) => Some((font::MEDIA_HINT_W, &icon[..], 3)),
-                    (None, Some(music)) if music.playing() => {
-                        Some((font::NOTE_W, &font::NOTE[..], 2))
-                    }
+                let media = match (self.media_hint, &self.music) {
+                    (Some((action, _)), _) => Some(themes::Media::Did(action)),
+                    (None, Some(music)) if music.playing() => Some(themes::Media::Playing),
                     _ => None,
                 };
-                // The slot is there only while an icon is: a fixed width
-                // (see `face::classic`) so the temperature doesn't shift as
-                // one icon replaces another (a gesture's, then the note),
-                // but no empty gap once the media is paused or stopped
-                // and the gesture's icon has gone. The temperature moves
-                // over once then, which reads as the icon going away.
-                let media = icon.is_some().then_some(icon);
-                self.render_face(canvas, status, next_alarm, media)
+                clock(canvas, media);
             }
             // From the day's history, only while it shows: walking it
             // costs a little time, while keeping it up to date would cost
             // RAM.
-            Screen::Today => render_today(canvas, crate::activity::today().as_ref(), status.steps),
-            Screen::LastNight => render_last_night(canvas, status.sleep),
-            Screen::Alarms => render_alarms(canvas, &self.alarms, &self.alarm_state, status),
-            Screen::PhoneAlarms => render_phone_alarms(canvas, &self.phone_alarms),
+            Screen::Today => theme.today(canvas, crate::activity::today().as_ref(), status.steps),
+            Screen::LastNight => theme.last_night(canvas, status.sleep),
+            Screen::Alarms => theme.alarms(canvas, &self.alarms, &self.alarm_state, status),
+            Screen::PhoneAlarms => theme.phone_alarms(canvas, &self.phone_alarms),
             // As a notification that arrived with the screen off shows,
-            // with when it arrived in its corner, and the handles (see
-            // `edge_bar`).
+            // with when it arrived in its corner, and the handles.
             Screen::Notification(i) => match self.notifications.list.get(usize::from(i)) {
                 Some(n) => {
                     let mut arrived = String::<{ arrival::MAX_LEN }>::new();
@@ -2268,78 +2324,73 @@ impl App {
                     }
                     n.app.write_to(&mut app);
                     n.who.write_to(&mut who);
-                    render_card(canvas, &app, &who, &arrived);
+                    theme.notification(canvas, &app, &who, &arrived);
                 }
-                None => self.render_face(canvas, status, next_alarm, None),
+                None => clock(canvas, None),
             },
             Screen::Music => match &self.music {
-                Some(music) => render_music(canvas, music, now),
-                None => self.render_face(canvas, status, next_alarm, None),
+                Some(music) => {
+                    let music = themes::Music {
+                        artist: &music.artist,
+                        track: &music.track,
+                        playing: music.playing,
+                        elapsed: now - music.since,
+                    };
+                    theme.music(canvas, &music);
+                }
+                None => clock(canvas, None),
             },
             Screen::Air => match &status.air {
-                Some(sighting) => render_air(canvas, sighting, now),
-                None => self.render_face(canvas, status, next_alarm, None),
+                Some(sighting) => theme.air(canvas, sighting, now),
+                None => clock(canvas, None),
             },
             Screen::Buttons => {
                 let sent = self.sent.filter(|&(_, until, _)| now < until);
-                // The dim look is white on black: dark.
-                let dark = self.dim() || !self.daytime;
-                let sent = sent.map(|(press, _, ok)| (press, ok));
-                render_buttons(canvas, self.grid_layout, &self.grid, sent, dark);
+                let grid = themes::Grid {
+                    layout: self.grid_layout,
+                    grid: &self.grid,
+                    sent: sent.map(|(press, _, ok)| (press, ok)),
+                    dim: self.dim(),
+                };
+                theme.buttons(canvas, &grid);
             }
-            Screen::Settings => render_settings(
-                canvas,
-                self.chosen_theme(),
-                self.brightness,
-                self.buttons,
-                self.grid_layout,
-            ),
-            Screen::Info => render_info(canvas, status),
-            Screen::Storage => render_storage_prompt(canvas),
-            Screen::HaQr => render_ha_qr(canvas, status.bthome.as_ref()),
-            Screen::HaKey => render_ha_key(canvas, status.bthome.as_ref()),
+            Screen::Settings(page) => {
+                let rows = self.settings_rows(page.settings(self.buttons));
+                let shown = themes::SettingsPage {
+                    title: page.title(),
+                    rows: &rows,
+                };
+                theme.settings(canvas, &shown);
+            }
+            Screen::Info => theme.info(canvas, status),
+            Screen::Storage => theme.storage_prompt(canvas),
+            Screen::HaQr => theme.bthome_qr(canvas, status.bthome.as_ref()),
+            Screen::HaKey => theme.bthome_key(canvas, status.bthome.as_ref()),
         }
         match self.place() {
-            // Notifications nobody has seen: an accent-coloured handle on
-            // the edge they're behind. The clock face has no other hints:
-            // its edges are full, and it's where the wearer learns the
-            // layout from. Unless the face says it its own way (see
-            // `ClockFace::UNSEEN_HANDLE`).
-            Place::Clock if self.notifications.unseen && face::Active::UNSEEN_HANDLE => {
-                edge_bar(canvas, Side::Above, Color::ACCENT);
-            }
+            // Notifications nobody has seen. The clock face has no other
+            // hints: its edges are full, and it's where the wearer learns
+            // the layout from.
+            Place::Clock if self.notifications.unseen => theme.handles(canvas, Handles::Unseen),
             Place::Line { side, index }
                 if !matches!(self.screen, Screen::Storage | Screen::HaQr | Screen::HaKey) =>
             {
-                render_hint(canvas, side, index, self.line(side).len());
+                let count = self.line(side).len();
+                theme.handles(canvas, Handles::Line { side, index, count });
             }
             _ => {}
         }
         if let Some(banner) = &self.banner {
             self.banner_text(banner.shows, &mut app, &mut who);
-            render_banner(canvas, &app, &who);
+            theme.banner(canvas, &app, &who);
         }
     }
-}
 
-impl App {
-    /// The clock face, whichever is built in (see [`crate::face`]).
-    fn render_face(
-        &self,
-        canvas: &mut Canvas,
-        status: &Status,
-        next_alarm: Option<(alarm::Kind, i64)>,
-        media: Option<Option<(u32, &[u8], i32)>>,
-    ) {
-        let cx = face::Context {
-            status,
-            next_alarm,
-            media,
-            unseen: self.notifications.unseen,
-            daytime: self.daytime,
-            dim: self.dim(),
-        };
-        face::Active::render(canvas, &cx);
+    /// What shows for the few seconds before the watch switches itself
+    /// off (see `ui_loop`), drawn by the chosen scheme in whatever palette
+    /// the canvas is in.
+    pub fn render_off(&self, canvas: &mut Canvas, reason: crate::system_off::Reason) {
+        self.theme().off(canvas, reason);
     }
 }
 
@@ -2378,32 +2429,6 @@ fn sweep(towards: Side) -> Sweep {
     }
 }
 
-/// A short bar along `edge` of the screen, in the middle: a handle, as on
-/// a drawer, saying there's a screen that way to swipe to. (Dots, one a
-/// screen, read as specks on the screen; chevrons, as part of the text
-/// beside them.) It takes the outer 2 pixels, and screens keep one more
-/// clear: their text starts 3 or 4 in.
-fn edge_bar(canvas: &mut Canvas, edge: Side, color: Color) {
-    const LENGTH: i32 = 12;
-    const MIDDLE: i32 = 40 - LENGTH / 2;
-    let (x, y, w, h) = match edge {
-        Side::Left => (0, MIDDLE, 2, LENGTH),
-        Side::Right => (78, MIDDLE, 2, LENGTH),
-        Side::Above => (MIDDLE, 0, LENGTH, 2),
-        Side::Below => (MIDDLE, 78, LENGTH, 2),
-    };
-    canvas.fill_rect(x, y, w, h, color);
-}
-
-/// Where a swipe leads from a screen `index` out along the line on `side`,
-/// of `count`: home, always, and further out if there's more.
-fn render_hint(canvas: &mut Canvas, side: Side, index: usize, count: usize) {
-    edge_bar(canvas, side.opposite(), Color::TEXT_DIM);
-    if index + 1 < count {
-        edge_bar(canvas, side, Color::TEXT_DIM);
-    }
-}
-
 // ==============================================================================
 // Text that fits
 // ==============================================================================
@@ -2430,1576 +2455,181 @@ fn fits(ok: bool) {
     assert!(ok, "text fits its buffer");
 }
 
-/// What every screen clears to.
-pub(crate) const BACKGROUND: Color = Color::BACKGROUND;
-
-/// The glance: the hours above the minutes, as big as fits with room
-/// around them, and nothing else.
-///
-/// The sizes follow from three rules. The digits scale by whole numbers
-/// (they're pixel art). The block keeps a margin of about a tenth of the
-/// screen (8 px), as one big focal element needs room to read as placed
-/// rather than spilling over. And by proximity, the gap between the
-/// hours' digits (one glyph cell) is half the gap between hours and
-/// minutes (two cells), so they read as two numbers rather than a grid of
-/// four digits. 5× (25×35 digits) can't keep the margin; 4× (20×28) can:
-/// a 45×65 block, with 7–8 px above and below.
-fn render_glance(canvas: &mut Canvas, status: &Status) {
-    canvas.clear(BACKGROUND);
-    let Some(t) = &status.local_time else {
-        return;
-    };
-    const SCALE: i32 = 4;
-    const WIDTH: i32 = font::DIGIT_W as i32 * SCALE;
-    const HEIGHT: i32 = 7 * SCALE;
-    const GAP_X: i32 = SCALE;
-    const GAP_Y: i32 = 2 * SCALE;
-    // Centred, counting the 1 px shadow.
-    const LEFT: i32 = (80 - (2 * WIDTH + GAP_X + 1)) / 2;
-    const TOP: i32 = (80 - (2 * HEIGHT + GAP_Y + 1)) / 2;
-    for (row, value) in [t.hour, t.minute].into_iter().enumerate() {
-        let y = TOP + row as i32 * (HEIGHT + GAP_Y);
-        let value = u64::from(value);
-        draw_digit(canvas, LEFT, y, value / 10, SCALE, Color::TEXT);
-        draw_digit(
-            canvas,
-            LEFT + WIDTH + GAP_X,
-            y,
-            value % 10,
-            SCALE,
-            Color::TEXT,
-        );
-    }
-}
-
-/// The glance while the phone navigates: the next turn takes the middle of
-/// the screen, as an arrow with the distance under it, then the street
-/// (two lines of the small font at most, as Gadgetbridge gives it). The
-/// time stays, smaller, at the top: a glance is still for the time too,
-/// but on the way somewhere, the turn is what a look at the wrist is for.
-///
-/// From the top: the time (2×, 10 px), the arrow (16×16 at 2×), the
-/// distance (2×), and the street (1×), with 4 px between them; it just
-/// fits, with the street's second line ending a pixel above the bottom.
-fn render_route_glance(canvas: &mut Canvas, status: &Status, step: &route::Step) {
-    canvas.clear(BACKGROUND);
-    const TIME_Y: i32 = 3;
-    const ARROW_Y: i32 = 17;
-    const DISTANCE_Y: i32 = ARROW_Y + 32 + 4;
-    const STREET_Y: i32 = DISTANCE_Y + 10 + 4;
-    let centred = |canvas: &mut Canvas, y: i32, text: &str, scale: i32, color: Color| {
-        let width = font::small_text_width(text) * scale;
-        canvas.text_scaled(40 - width / 2, y, text, color, scale);
-    };
-    if let Some(t) = &status.local_time {
-        let time = hhmm(i64::from(t.hour) * 60 + i64::from(t.minute));
-        centred(canvas, TIME_Y, &time, 2, Color::TEXT_DIM);
-    }
-
-    let (arrow, mirror) = match step.turn {
-        Turn::Straight => (&font::TURN_STRAIGHT, false),
-        Turn::Right => (&font::TURN_RIGHT, false),
-        Turn::Left => (&font::TURN_RIGHT, true),
-        Turn::SlightRight | Turn::KeepRight => (&font::TURN_SLIGHT_RIGHT, false),
-        Turn::SlightLeft | Turn::KeepLeft => (&font::TURN_SLIGHT_RIGHT, true),
-        Turn::SharpRight => (&font::TURN_SHARP_RIGHT, false),
-        Turn::SharpLeft => (&font::TURN_SHARP_RIGHT, true),
-        // Gadgetbridge doesn't know which side the traffic keeps to, so a
-        // U-turn at a roundabout is drawn as a plain one, going round left.
-        Turn::UturnLeft | Turn::RoundaboutUturn => (&font::TURN_UTURN_LEFT, false),
-        Turn::UturnRight => (&font::TURN_UTURN_LEFT, true),
-        Turn::RoundaboutRight => (&font::TURN_ROUNDABOUT_RIGHT, false),
-        Turn::RoundaboutLeft => (&font::TURN_ROUNDABOUT_RIGHT, true),
-        Turn::RoundaboutStraight => (&font::TURN_ROUNDABOUT_STRAIGHT, false),
-        Turn::Finish => (&font::TURN_FINISH, false),
-        Turn::OffRoute => (&font::TURN_OFF_ROUTE, false),
-        Turn::Unknown => (&font::TURN_UNKNOWN, false),
-    };
-    let arrow_x = 40 - font::TURN_W as i32;
-    canvas.sprite16(arrow_x, ARROW_Y, arrow, mirror, 2, Color::TEXT);
-
-    // "1,234 km" fits at 2× (62 px); the 1× fallback is for safety.
-    let scale = if font::small_text_width(&step.distance) * 2 <= 76 {
-        2
-    } else {
-        1
-    };
-    centred(canvas, DISTANCE_Y, &step.distance, scale, Color::TEXT);
-
-    let mut lines = [font::Line::default(); 2];
-    let street = step.street.trim();
-    match font::fill(street, font::Face::Small, 76, &mut lines) {
-        count @ 0..=2 => {
-            for (i, &line) in lines[..count].iter().enumerate() {
-                let width = font::small_text_width(line.of(street))
-                    + font::small_text_width(line.tail.as_str())
-                    + if line.tail == font::Tail::None { 0 } else { 1 };
-                let y = STREET_Y + i as i32 * 7;
-                canvas.line(
-                    40 - width / 2,
-                    y,
-                    street,
-                    line,
-                    font::Face::Small,
-                    Color::TEXT_DIM,
-                );
-            }
-        }
-        // Too long even for two lines (one very long word): its start.
-        _ => canvas.text_cut(2, STREET_Y, &step.street, Color::TEXT_DIM),
-    }
-}
-
-/// Time left, as short as it reads well: "M:SS" under 10 minutes (where
-/// seconds matter), "42 MIN" under an hour, "2H05" beyond.
-pub(crate) fn countdown(seconds: i64) -> heapless::String<8> {
-    let mut text = heapless::String::new();
-    // Hours stop at 99, as the editor's two digits do (see `render_editor`).
-    let seconds = seconds.clamp(0, 100 * 3600 - 1);
-    let result = if seconds < 10 * 60 {
-        write!(text, "{}:{:02}", seconds / 60, seconds % 60)
-    } else if seconds < 60 * 60 {
-        write!(text, "{} MIN", (seconds + 59) / 60)
-    } else {
-        write!(text, "{}H{:02}", seconds / 3600, seconds / 60 % 60)
-    };
-    result.fits();
-    text
-}
-
-/// `minutes` (after midnight, or a duration) as HH:MM.
-pub(crate) fn hhmm(minutes: i64) -> heapless::String<6> {
-    // Two digits of hours, and never negative: a time of day, or a
-    // night's sleep. Every caller lays the text out as five characters
-    // wide; more would still fit the buffer (to "999:59"), and so pass
-    // unnoticed, shifted or cut on the screen.
-    debug_assert!((0..100 * 60).contains(&minutes), "not a time: {minutes}");
-    let mut text = heapless::String::new();
-    write!(text, "{:02}:{:02}", minutes / 60, minutes % 60).fits();
-    text
-}
-
 // ==============================================================================
-// The past: today and last night
-// ==============================================================================
-
-/// Today's charts: a column per hour from midnight, [`CHART_BAR`] wide and
-/// [`CHART_PITCH`] apart, from [`CHART_LEFT`] (24 of them end at x = 75).
-const CHART_LEFT: i32 = 4;
-const CHART_PITCH: i32 = 3;
-const CHART_BAR: i32 = 2;
-
-/// Today's steps and heart rate: for each, a figure for the day, then a
-/// chart hour by hour since midnight, over a faint baseline that shows
-/// how much of the day is left.
-fn render_today(canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>) {
-    canvas.clear(BACKGROUND);
-    canvas.text(4, 3, "TODAY", Color::ACCENT);
-    // Figures end at x = 74, leaving the right edge to the hint.
-    let day = day.copied().unwrap_or_default();
-    let column = |hour: usize| CHART_LEFT + CHART_PITCH * hour as i32;
-
-    // Steps: the step counter's total (which, unlike the history, counts
-    // steps from before the phone set the clock), then the hours, scaled
-    // to the busiest, but to at least 500 steps, so a quiet day looks it.
-    const STEPS_BASE: i32 = 30;
-    const STEPS_HEIGHT: u32 = 10;
-    canvas.sprite(4, 11, font::FOOT_W, &font::FOOT, 1, Color::TEXT_DIM);
-    canvas.text(10, 12, "STEPS", Color::TEXT_DIM);
-    let mut text = heapless::String::<10>::new();
-    match steps {
-        Some(steps) => write!(text, "{steps}").fits(),
-        None => text.push_str("--").fits(),
-    }
-    canvas.text_right(75, 12, &text, Color::TEXT);
-    let most = u32::from(day.most_steps()).max(500);
-    for (i, hour) in day.hours.iter().enumerate() {
-        let height = (u32::from(hour.steps) * STEPS_HEIGHT).div_ceil(most) as i32;
-        canvas.fill_rect(
-            column(i),
-            STEPS_BASE - height,
-            CHART_BAR,
-            height,
-            Color::ACCENT,
-        );
-        canvas.fill_rect(column(i), STEPS_BASE, CHART_BAR, 1, Color::TRACK);
-    }
-
-    // The heart rate: resting (see `Day::resting`), then each hour's
-    // range, from its lowest reading to its highest, on a scale from the
-    // day's lowest to its highest in whole tens, but at least 40 BPM
-    // tall, so a calm day doesn't look like a wild one.
-    // TODO: the scale's ends as figures, if the shape alone isn't enough.
-    const HEART_BASE: i32 = 64;
-    const HEART_HEIGHT: i32 = 20;
-    canvas.sprite(4, 35, font::HEART_W, &font::HEART, 1, Color::HEART);
-    canvas.sprite(
-        4,
-        35,
-        font::HEART_W,
-        &font::HEART_SHINE,
-        1,
-        Color::HEART_SHINE,
-    );
-    canvas.text(13, 36, "RESTING", Color::TEXT_DIM);
-    let mut text = heapless::String::<3>::new();
-    match day.resting() {
-        Some(bpm) => write!(text, "{bpm}").fits(),
-        None => text.push_str("--").fits(),
-    }
-    canvas.text_right(75, 36, &text, Color::TEXT);
-    if let Some((low, high)) = day.heart_range() {
-        let floor = i32::from(low) / 10 * 10;
-        let ceiling = ((i32::from(high) + 9) / 10 * 10).max(floor + 40);
-        // The top of the row `bpm` is drawn in.
-        let y = |bpm: u8| {
-            HEART_BASE - 1 - (i32::from(bpm) - floor) * (HEART_HEIGHT - 1) / (ceiling - floor)
-        };
-        for (i, hour) in day.hours.iter().enumerate() {
-            if hour.heart_max > 0 {
-                let top = y(hour.heart_max);
-                let height = y(hour.heart_min) - top + 1;
-                canvas.fill_rect(column(i), top, CHART_BAR, height, Color::HEART);
-            }
-        }
-    }
-    for i in 0..day.hours.len() {
-        canvas.fill_rect(column(i), HEART_BASE, CHART_BAR, 1, Color::TRACK);
-    }
-    for hour in [0, 6, 12, 18] {
-        let mut label = heapless::String::<2>::new();
-        write!(label, "{hour}").fits();
-        canvas.text(column(hour), HEART_BASE + 4, &label, Color::TEXT_FAINT);
-    }
-}
-
-/// The last night's (or nap's) sleep: how long, big, from when to when,
-/// and in which stages.
-fn render_last_night(canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>) {
-    canvas.clear(BACKGROUND);
-    canvas.text(4, 3, "LAST NIGHT", Color::ACCENT);
-    let Some(sleep) = sleep else {
-        canvas.text_centered(40, 36, "NO SLEEP YET", Color::TEXT_FAINT);
-        return;
-    };
-
-    // Time asleep (not counting time lying awake) as H:MM, in the clock's
-    // 3× digits, laid out as its are (2 px between digits, 7 px for the
-    // colon), and centred.
-    const TOP: i32 = 14;
-    const SCALE: i32 = 3;
-    const DIGIT: i32 = font::DIGIT_W as i32 * SCALE;
-    let (hours, minutes) = (sleep.asleep_minutes / 60, sleep.asleep_minutes % 60);
-    let mut digits = heapless::Vec::<u16, 4>::new();
-    if hours >= 10 {
-        let _ = digits.push(hours / 10 % 10);
-    }
-    let _ = digits.push(hours % 10);
-    let _ = digits.push(minutes / 10);
-    let _ = digits.push(minutes % 10);
-    let width = DIGIT * digits.len() as i32 + 2 * (digits.len() as i32 - 2) + 7;
-    let mut x = 40 - width / 2;
-    let colon_after = digits.len() - 2;
-    for (i, &digit) in digits.iter().enumerate() {
-        if i == colon_after {
-            for row in [2, 4] {
-                let y = TOP + row * SCALE;
-                canvas.fill_rect(x + 1, y + 1, 3, 3, Color::SHADOW);
-                canvas.fill_rect(x, y, 3, 3, Color::ACCENT);
-            }
-            x += 3 + 2;
-        }
-        draw_digit(canvas, x, TOP, u64::from(digit), SCALE, Color::TEXT);
-        x += DIGIT + 2;
-    }
-    canvas.text_centered(40, 40, "ASLEEP", Color::TEXT_DIM);
-
-    // From falling asleep to waking, in local time (as the offset is now).
-    if let Some(offset) = crate::clock::utc_offset_minutes() {
-        let local = |utc_minute: i64| hhmm((utc_minute + i64::from(offset)).rem_euclid(24 * 60));
-        let mut window = heapless::String::<16>::new();
-        write!(
-            window,
-            "{} - {}",
-            local(sleep.start_utc_minute),
-            local(sleep.end_utc_minute)
-        )
-        .fits();
-        canvas.text_centered(40, 50, &window, Color::TEXT);
-    }
-
-    // The stages (see `crate::stages`): their shares of the time asleep as
-    // one bar, and each one's time below its name, in that stage's colour
-    // (roles of their own: the general ones collide in some themes).
-    // The stages are parts of the time asleep (`stages::Stages::asleep`
-    // is their sum), so the first two's shares of the bar leave the third
-    // its own; were they more, the bar would run off the screen.
-    debug_assert!(
-        u32::from(sleep.deep_minutes) + u32::from(sleep.rem_minutes)
-            <= u32::from(sleep.asleep_minutes),
-        "more deep and REM sleep than sleep"
-    );
-    let light = sleep
-        .asleep_minutes
-        .saturating_sub(sleep.deep_minutes + sleep.rem_minutes);
-    let stages = [
-        ("DEEP", sleep.deep_minutes, Color::DEEP),
-        ("REM", sleep.rem_minutes, Color::REM),
-        ("LIGHT", light, Color::GREY),
-    ];
-    const BAR: i32 = 72;
-    let total = i32::from(sleep.asleep_minutes.max(1));
-    let mut x = 4;
-    for (i, &(name, minutes, color)) in stages.iter().enumerate() {
-        // The last takes what's left, so rounding can't leave a gap.
-        let width = if i + 1 == stages.len() {
-            4 + BAR - x
-        } else {
-            i32::from(minutes) * BAR / total
-        };
-        canvas.fill_rect(x, 60, width, 4, color);
-        x += width;
-        let center = 16 + 24 * i as i32;
-        canvas.text_centered(center, 67, name, color);
-        canvas.text_centered(center, 74, &hhmm(i64::from(minutes)), Color::TEXT);
-    }
-}
-
-// ==============================================================================
-// Alarms
-// ==============================================================================
-
-/// What a touch at (x, y) on the alarms screen is on.
-fn alarm_at(x: i32, y: i32) -> Option<Editing> {
-    let right = u8::from(x >= 40);
-    if y < SMART_TOP {
-        None
-    } else if y < ALARMS_TOP {
-        Some(Editing::SmartWeekday)
-    } else if y < TIMERS_TOP {
-        Some(Editing::At(right))
-    } else {
-        Some(Editing::Timer(right))
-    }
-}
-
-/// Smart wake across the top (label and state, then both times), then the
-/// two alarms and the two timers in pairs of cells, each cell a label, its
-/// time, and its state.
-fn render_alarms(
-    canvas: &mut Canvas,
-    settings: &alarm::Settings,
-    state: &alarm::State,
-    status: &Status,
-) {
-    canvas.clear(BACKGROUND);
-    canvas.text(4, 3, "ALARMS", Color::ACCENT);
-    let switch = |on: bool| {
-        if on {
-            ("ON", Color::GOOD)
-        } else {
-            ("OFF", Color::TEXT_FAINT)
-        }
-    };
-
-    let (text, color) = switch(settings.smart);
-    canvas.text(4, SMART_TOP + 1, "SMART WAKE", Color::TEXT_DIM);
-    canvas.text_right(77, SMART_TOP + 1, text, color);
-    let mut times = heapless::String::<20>::new();
-    write!(
-        times,
-        "{} / {}",
-        hhmm(settings.smart_weekday.into()),
-        hhmm(settings.smart_weekend.into())
-    )
-    .fits();
-    canvas.text(4, SMART_TOP + 8, &times, Color::TEXT);
-
-    // Hairlines between the bands, so the pairs read as pairs.
-    for y in [ALARMS_TOP - 2, TIMERS_TOP - 2] {
-        canvas.fill_rect(4, y, 72, 1, Color::TEXT_FAINT);
-    }
-    let cell = |canvas: &mut Canvas,
-                column: usize,
-                top: i32,
-                label: &str,
-                value: &str,
-                status: (&str, Color)| {
-        let x = 4 + 40 * column as i32;
-        canvas.text(x, top + 1, label, Color::TEXT_DIM);
-        canvas.text(x, top + 8, value, Color::TEXT);
-        canvas.text(x, top + 15, status.0, status.1);
-    };
-    for i in 0..alarm::ALARMS {
-        let time = hhmm(settings.at_time[i].into());
-        cell(
-            canvas,
-            i,
-            ALARMS_TOP,
-            ["ALARM 1", "ALARM 2"][i],
-            &time,
-            switch(settings.at[i]),
-        );
-    }
-    for t in 0..alarm::TIMERS {
-        // While running: time left, ticking; otherwise the duration.
-        let left = state.remaining(t, status.uptime_secs as i64);
-        let (value, running) = match left {
-            Some(left) => (countdown(left), ("RUNNING", Color::GOOD)),
-            None => (duration(settings.timers[t]), ("", Color::TEXT_FAINT)),
-        };
-        cell(
-            canvas,
-            t,
-            TIMERS_TOP,
-            ["TIMER 1", "TIMER 2"][t],
-            &value,
-            running,
-        );
-    }
-}
-
-/// The phone's alarms, a row each: the time, the weekdays it rings on (or
-/// "ONCE"), and whether it's on. Ten rows fit, as many as Gadgetbridge
-/// sends.
-fn render_phone_alarms(canvas: &mut Canvas, phone: &alarm::Phone) {
-    canvas.clear(BACKGROUND);
-    canvas.text(4, 3, "PHONE ALARMS", Color::ACCENT);
-    for (row, alarm) in phone.alarms().iter().enumerate() {
-        let y = 11 + 7 * row as i32;
-        let on = alarm.on();
-        let text = if on { Color::TEXT } else { Color::TEXT_FAINT };
-        canvas.text(4, y, &hhmm(alarm.time.into()), text);
-        if alarm.days == 0 {
-            canvas.text(26, y, "ONCE", text);
-        } else {
-            // Its weekdays bright, the others faint, so the row reads as
-            // a little calendar.
-            for (day, letter) in ["M", "T", "W", "T", "F", "S", "S"].into_iter().enumerate() {
-                let color = if on && alarm.days >> day & 1 != 0 {
-                    Color::TEXT
-                } else {
-                    Color::TEXT_FAINT
-                };
-                canvas.text(26 + 4 * day as i32, y, letter, color);
-            }
-        }
-        let (state, color) = if on {
-            ("ON", Color::GOOD)
-        } else {
-            ("OFF", Color::TEXT_FAINT)
-        };
-        canvas.text_right(77, y, state, color);
-    }
-}
-
-/// A timer's duration (not counting down): "3 MIN", "1H30".
-fn duration(minutes: u16) -> heapless::String<8> {
-    let mut text = heapless::String::new();
-    let result = if minutes < 60 {
-        write!(text, "{minutes} MIN")
-    } else {
-        write!(text, "{}H{:02}", minutes / 60, minutes % 60)
-    };
-    result.fits();
-    text
-}
-
-/// One setting, big, with how to change it.
-fn render_editor(
-    canvas: &mut Canvas,
-    editing: Editing,
-    settings: &alarm::Settings,
-    state: &alarm::State,
-    uptime: i64,
-) {
-    canvas.clear(BACKGROUND);
-    // A running timer shows what's left (as MM:SS under an hour); anything
-    // else, the setting being edited (HH:MM).
-    let left = match editing {
-        Editing::Timer(t) => state.remaining(usize::from(t), uptime),
-        _ => None,
-    };
-    let (title, value, on) = match editing {
-        Editing::SmartWeekday => ("SMART: WEEKDAYS", settings.smart_weekday, settings.smart),
-        Editing::SmartWeekend => ("SMART: WEEKENDS", settings.smart_weekend, settings.smart),
-        Editing::At(i) => (
-            ["ALARM 1", "ALARM 2"][usize::from(i)],
-            settings.at_time[usize::from(i)],
-            settings.at[usize::from(i)],
-        ),
-        Editing::Timer(t) => (
-            ["TIMER 1", "TIMER 2"][usize::from(t)],
-            settings.timers[usize::from(t)],
-            left.is_some(),
-        ),
-    };
-    canvas.text_centered(40, 4, title, Color::ACCENT);
-
-    // Two pairs of the clock's 2× digits (10 px cells, 2 px gaps), the
-    // colon between; for settings, hours on the left half and minutes on
-    // the right, matching where to swipe.
-    let (pair, labels, color) = match left {
-        Some(left) if left < 60 * 60 => ((left / 60, left % 60), ("MIN", "SEC"), Color::ACCENT),
-        // Two digits of hours: a timer is at most `alarm::MAX_TIMER`, but
-        // should more ever be left, it reads 99:59 rather than overflowing.
-        Some(left) => {
-            let left = left.min(100 * 3600 - 1);
-            (
-                (left / 3600, left / 60 % 60),
-                ("HOURS", "MINUTES"),
-                Color::ACCENT,
-            )
-        }
-        None => (
-            (i64::from(value / 60), i64::from(value % 60)),
-            ("HOURS", "MINUTES"),
-            Color::TEXT,
-        ),
-    };
-    let digits = [pair.0 / 10, pair.0 % 10, pair.1 / 10, pair.1 % 10];
-    for (&digit, x) in digits.iter().zip([12, 24, 44, 56]) {
-        draw_digit(canvas, x, 22, digit as u64, 2, color);
-    }
-    for y in [26, 32] {
-        canvas.fill_rect(39, y, 2, 2, Color::ACCENT);
-    }
-    canvas.text_centered(20, 44, labels.0, Color::TEXT_FAINT);
-    canvas.text_centered(60, 44, labels.1, Color::TEXT_FAINT);
-    let hint = if left.is_some() {
-        "LEFT"
-    } else {
-        "SWIPE UP/DOWN"
-    };
-    canvas.text_centered(40, 51, hint, Color::TEXT_FAINT);
-
-    let (left, left_color) = match (editing, on) {
-        (Editing::Timer(_), true) => ("STOP", Color::BAD),
-        (Editing::Timer(_), false) => ("START", Color::GOOD),
-        (_, true) => ("ON", Color::GOOD),
-        (_, false) => ("OFF", Color::TEXT_FAINT),
-    };
-    let right = if editing == Editing::SmartWeekday {
-        "NEXT"
-    } else {
-        "DONE"
-    };
-    canvas.fill_rect(2, EDITOR_BUTTONS_Y, 36, 18, left_color);
-    canvas.text_centered(20, EDITOR_BUTTONS_Y + 7, left, BACKGROUND);
-    canvas.fill_rect(42, EDITOR_BUTTONS_Y, 36, 18, Color::ACCENT);
-    canvas.text_centered(60, EDITOR_BUTTONS_Y + 7, right, BACKGROUND);
-}
-
-/// The time, big, and how to stop it.
-fn render_ringing(canvas: &mut Canvas, ringing: &Ringing, status: &Status) {
-    canvas.clear(BACKGROUND);
-    let title = match ringing.kind {
-        alarm::Kind::Smart => "GOOD MORNING",
-        alarm::Kind::At(_) | alarm::Kind::Phone(_) | alarm::Kind::Snooze => "ALARM",
-        alarm::Kind::Timer(_) => "TIME'S UP",
-    };
-    canvas.text_centered(40, 6, title, Color::ACCENT);
-    canvas.sprite(37, 15, font::BELL_W, &font::BELL, 1, Color::ACCENT);
-    if let Some(second) = status.local_second {
-        let time = second.div_euclid(60).rem_euclid(24 * 60);
-        let digits = [time / 600, time / 60 % 10, time % 60 / 10, time % 10];
-        for (&digit, x) in digits.iter().zip([12, 24, 44, 56]) {
-            draw_digit(canvas, x, 28, digit as u64, 2, Color::TEXT);
-        }
-        for y in [32, 38] {
-            canvas.fill_rect(39, y, 2, 2, Color::ACCENT);
-        }
-    }
-    canvas.text_centered(40, 56, "TAP: SNOOZE", Color::TEXT_DIM);
-    canvas.text_centered(40, 66, "BUTTON: STOP", Color::TEXT_DIM);
-}
-
-/// "Find my watch": HERE, big, with rings round it that spread a ring a
-/// second, as a ping does, so the screen catches the eye from across a
-/// room (or from under a cushion), and how to stop it. `elapsed` is how
-/// long the phone has been looking.
-fn render_find(canvas: &mut Canvas, elapsed: Duration) {
-    canvas.clear(BACKGROUND);
-    canvas.text_centered(40, 6, "FIND MY WATCH", Color::ACCENT);
-    // "HERE" at 3×: 45×15, at x 17..62, y 28..43.
-    let (x, y, w, h) = (17, 28, 45, 15);
-    canvas.text_scaled(x, y, "HERE", Color::TEXT, 3);
-    // One to three rings, 4 px apart, outlined a pixel thick.
-    let rings = elapsed.as_secs() % 3 + 1;
-    for ring in 1..=rings as i32 {
-        let gap = 4 * ring;
-        let (left, top, width, height) = (x - gap, y - gap, w + 2 * gap, h + 2 * gap);
-        canvas.fill_rect(left, top, width, 1, Color::ACCENT);
-        canvas.fill_rect(left, top + height - 1, width, 1, Color::ACCENT);
-        canvas.fill_rect(left, top, 1, height, Color::ACCENT);
-        canvas.fill_rect(left + width - 1, top, 1, height, Color::ACCENT);
-    }
-    canvas.text_centered(40, 66, "TAP: FOUND IT", Color::TEXT_DIM);
-}
-
-/// One big 5×7 digit at `scale`, with a 1 px drop shadow down and right.
-pub(crate) fn draw_digit(
-    canvas: &mut Canvas,
-    x: i32,
-    y: i32,
-    digit: u64,
-    scale: i32,
-    color: Color,
-) {
-    let glyph = digit_glyph(digit);
-    canvas.sprite(x + 1, y + 1, font::DIGIT_W, glyph, scale, Color::SHADOW);
-    canvas.sprite(x, y, font::DIGIT_W, glyph, scale, color);
-}
-
-/// The 5×7 glyph for `digit`. A value too big for its cell (a bug
-/// upstream) draws as 9 rather than indexing out of range: a wrong digit
-/// on the screen beats a panic and a reset.
-pub(crate) fn digit_glyph(digit: u64) -> &'static [u8; 7] {
-    // Where debug assertions are on (the simulator and its fuzzer), that
-    // bug is caught here instead: a 9 that isn't one reads as a fine
-    // screen. (As was the timer editor's hours, past 99: F1.)
-    debug_assert!(digit <= 9, "not a digit: {digit}");
-    &font::DIGITS[digit.min(9) as usize]
-}
-
-// ==============================================================================
-// Info screen
-// ==============================================================================
-
-/// First value row, and the spacing between rows.
-const INFO_TOP: i32 = 12;
-const INFO_LINE: i32 = 8;
-
-/// The watch's state, for a look (and for bug reports). The settings that
-/// used to be at its foot have a screen of their own, before it.
-fn render_info(canvas: &mut Canvas, status: &Status) {
-    canvas.clear(BACKGROUND);
-    // The version without its build metadata (`0.9.0-pr.12`); the commit
-    // goes in the BUILD row (see `build.rs`).
-    canvas.text(4, 3, concat!("UR ", env!("UR_RELEASE")), Color::ACCENT);
-
-    let battery = status.battery;
-    let mv = battery.millivolts();
-    let secs = status.uptime_secs;
-    let mut values: [heapless::String<12>; 3] = Default::default();
-    write!(
-        values[0],
-        "{}% {}.{:02}V",
-        battery.percent(),
-        mv / 1000,
-        (mv % 1000) / 10
-    )
-    .fits();
-    write!(values[1], "{}", battery.status()).fits();
-    write!(
-        values[2],
-        "{:02}:{:02}:{:02}",
-        secs / 3600,
-        (secs / 60) % 60,
-        secs % 60
-    )
-    .fits();
-    // "PAIRED" rather than "CONNECTED": the phone only counts as here once
-    // it has written over an authenticated link (see `ble`), which takes
-    // its bond, so this says both that it's connected and that it's paired
-    // (and bonded: ur always stores the keys it pairs with).
-    let phone = if status.connected {
-        "PAIRED"
-    } else if let Some(why) = status.unpaired {
-        why.title()
-    } else {
-        "WAITING"
-    };
-    // Which commit this build is from, for bug reports: "DEV" for a local
-    // `cargo build`, which doesn't know.
-    let build = match env!("UR_BUILD") {
-        "" => "DEV",
-        build => build,
-    };
-    let rows = [
-        ("BATTERY", values[0].as_str()),
-        ("POWER", &values[1]),
-        ("UPTIME", &values[2]),
-        ("PHONE", phone),
-        ("BUILD", build),
-    ];
-    for (i, (label, value)) in rows.into_iter().enumerate() {
-        let y = INFO_TOP + INFO_LINE * i as i32;
-        canvas.text(4, y, label, Color::TEXT_DIM);
-        canvas.text_right(77, y, value, Color::TEXT);
-    }
-
-    // Storage mode is a long press here, which nothing else would show.
-    // TODO: tapping still buzzes (a motor test); drop that once alarms
-    // exercise the motor.
-    canvas.text_centered(40, 68, "HOLD: STORAGE MODE", Color::TEXT_FAINT);
-}
-
-// ==============================================================================
-// Settings
+// The settings' rows
 // ==============================================================================
 //
-// One setting a row, each a tap for its next value, between hairlines:
-// up to five rows of 14 canvas pixels (~5 mm), as much of a fingertip as
-// fits under the title.
+// Which settings there are, on which screen, and what each says, is the
+// UI's; how a row looks, where it is, and so which a tap is on, the
+// theme's (see `Theme::settings`). Every screen keeps each setting in its
+// place: one that can't change in the build (THEME with one scheme for
+// the side, FORCE with schemes of one side) is still there, saying so
+// at a tap, rather than leaving a gap or moving the rows below it up.
 
-/// Where the rows start, and how tall each is.
-const SETTINGS_TOP: i32 = 10;
-const SETTINGS_ROW: i32 = 14;
+/// The settings screens, side by side on the right-hand line.
+#[derive(Clone, Copy, PartialEq, Eq, defmt::Format)]
+enum Page {
+    /// The look's: THEME, FORCE, LIGHT.
+    Look,
+    /// The button grid's: BUTTONS, GRID, BTHOME KEY.
+    Grid,
+}
 
-/// The settings screen's rows, top to bottom.
+impl Page {
+    fn title(self) -> &'static str {
+        match self {
+            Page::Look => "LOOK",
+            // Not "BUTTONS", which would only repeat its first row's label.
+            Page::Grid => "BUTTON GRID",
+        }
+    }
+
+    /// Its settings, top to bottom: BTHome's key only while the grid's
+    /// presses go over BTHome, as it's of no use otherwise. It's last, so
+    /// it comes and goes (at a tap on BUTTONS) without moving another row.
+    fn settings(self, buttons: buttons::Setting) -> &'static [Setting] {
+        const LOOK: [Setting; 3] = [Setting::Theme, Setting::Force, Setting::Light];
+        const GRID: [Setting; 3] = [Setting::Buttons, Setting::Layout, Setting::BtHomeKey];
+        match self {
+            Page::Look => &LOOK,
+            Page::Grid if buttons.bthome() => &GRID,
+            Page::Grid => &GRID[..2],
+        }
+    }
+}
+
+/// One setting: a row on a settings screen.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Row {
+enum Setting {
     Theme,
+    Force,
     Light,
     Buttons,
-    Grid,
+    /// GRID: the grid's layout.
+    Layout,
     BtHomeKey,
 }
 
-const ROWS: [Row; 5] = [
-    Row::Theme,
-    Row::Light,
-    Row::Buttons,
-    Row::Grid,
-    Row::BtHomeKey,
-];
+/// Which side of the day's schemes the theme shows (the settings' FORCE): as
+/// the sun says, or always the day's or the night's.
+#[derive(Clone, Copy, PartialEq, Eq, Default, defmt::Format)]
+pub enum Force {
+    #[default]
+    Sun,
+    Day,
+    Night,
+}
 
-/// The rows shown with the grid's presses going where `buttons` says:
-/// BTHome's key only while they go over BTHome, as it's of no use
-/// otherwise. It's last, so hiding it moves no other row, and a tap
-/// where it would be is a tap on nothing. (Nothing else changes the
-/// setting while its screen is open: the row only goes at a tap on
-/// BUTTONS.)
-fn settings_rows(buttons: buttons::Setting) -> &'static [Row] {
-    if buttons.bthome() {
-        &ROWS
-    } else {
-        &ROWS[..ROWS.len() - 1]
+impl Force {
+    /// As Settings shows it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Force::Sun => "NONE",
+            Force::Day => "DAY",
+            Force::Night => "NIGHT",
+        }
+    }
+
+    /// What a tap on FORCE makes it.
+    pub fn next(self) -> Self {
+        match self {
+            Force::Sun => Force::Day,
+            Force::Day => Force::Night,
+            Force::Night => Force::Sun,
+        }
+    }
+
+    pub fn to_byte(self) -> u8 {
+        self as u8
+    }
+
+    /// As stored; anything else, as nothing stored: the sun's.
+    pub fn from_byte(byte: u8) -> Self {
+        match byte {
+            1 => Force::Day,
+            2 => Force::Night,
+            _ => Force::Sun,
+        }
     }
 }
 
-/// Which row a tap at `y` is on.
-fn settings_row(y: i32, buttons: buttons::Setting) -> Option<Row> {
-    let row = y.checked_sub(SETTINGS_TOP)? / SETTINGS_ROW;
-    settings_rows(buttons)
-        .get(usize::try_from(row).ok()?)
-        .copied()
-}
+impl App {
+    /// `settings`' rows, in words, for the theme to draw.
+    fn settings_rows(&self, settings: &[Setting]) -> heapless::Vec<SettingRow, 3> {
+        settings
+            .iter()
+            .map(|&setting| self.setting_row(setting))
+            .collect()
+    }
 
-fn render_settings(
-    canvas: &mut Canvas,
-    theme: &Theme,
-    light: brightness::Setting,
-    buttons: buttons::Setting,
-    layout: buttons::Layout,
-) {
-    canvas.clear(BACKGROUND);
-    canvas.text(4, 3, "SETTINGS", Color::ACCENT);
-    for (i, &row) in settings_rows(buttons).iter().enumerate() {
-        let top = SETTINGS_TOP + SETTINGS_ROW * i as i32;
-        if i > 0 {
-            canvas.fill_rect(4, top, 72, 1, Color::TEXT_FAINT);
-        }
-        let (label, value, color) = match row {
-            Row::Theme => ("THEME", theme.name, Color::TEXT),
-            Row::Light => ("LIGHT", light.name(), Color::TEXT),
-            Row::Buttons => ("BUTTONS", buttons.name(), Color::TEXT),
-            Row::Grid => ("GRID", layout.name(), Color::TEXT),
-            // Not a value, but somewhere to go.
-            Row::BtHomeKey => ("BTHOME KEY", "SHOW", Color::TEXT_DIM),
+    fn setting_row(&self, setting: Setting) -> SettingRow {
+        let (label, value) = match setting {
+            Setting::Theme => ("THEME", self.theme().palette().name),
+            Setting::Force => ("FORCE", self.force().name()),
+            Setting::Light => ("LIGHT", self.brightness.name()),
+            Setting::Buttons => ("BUTTONS", self.buttons.name()),
+            Setting::Layout => ("GRID", self.grid_layout.name()),
+            Setting::BtHomeKey => ("BTHOME KEY", "SHOW"),
         };
-        let y = top + (SETTINGS_ROW - 5) / 2 + 1;
-        canvas.text(4, y, label, Color::TEXT_DIM);
-        canvas.text_right(77, y, value, color);
+        let kind = match setting {
+            // Not a value, but somewhere to go.
+            Setting::BtHomeKey => RowKind::Link,
+            _ if self.changeable(setting) => RowKind::Choice,
+            _ => RowKind::Fixed,
+        };
         // Two layers reach Home Assistant unlike six buttons do (as dimmers
         // turned by the code): FAQ B04 says how, and how to automate them.
         // The asterisk, as on a footnote, says it's a caveat to the value
         // beside it, not a value of its own.
-        if row == Row::Grid && buttons.bthome() && layout == buttons::Layout::TwoLayers {
-            canvas.text(24, y, "*B04", Color::TEXT_FAINT);
+        let note = (setting == Setting::Layout
+            && self.buttons.bthome()
+            && self.grid_layout == buttons::Layout::TwoLayers)
+            .then_some("*B04");
+        SettingRow {
+            label,
+            value,
+            kind,
+            note,
         }
     }
-}
 
-/// Home Assistant's key as a QR code, filling the screen (see
-/// [`Canvas::qr`]), for a phone's camera: what it reads is the key as
-/// text (32 hex digits, which Home Assistant takes in capitals too), to
-/// paste into its BTHome integration. A tap shows it as text instead.
-fn render_ha_qr(canvas: &mut Canvas, identity: Option<&Identity>) {
-    canvas.clear(BACKGROUND);
-    let Some(identity) = identity else {
-        canvas.text_centered(40, 36, "NO KEY YET", Color::TEXT_DIM);
-        return;
-    };
-    canvas.qr(&identity.key);
-}
-
-const HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-/// Home Assistant's key, for typing into its BTHome integration: 32 hex
-/// digits, big, in four rows of two groups of four, and the address it'll
-/// find the watch at, for picking it out among what it discovers.
-fn render_ha_key(canvas: &mut Canvas, identity: Option<&Identity>) {
-    canvas.clear(BACKGROUND);
-    canvas.text_centered(40, 3, "BTHOME KEY", Color::ACCENT);
-    let Some(identity) = identity else {
-        canvas.text_centered(40, 36, "NO KEY YET", Color::TEXT_DIM);
-        return;
-    };
-    let digit = |byte: u8, high: bool| HEX[usize::from(if high { byte >> 4 } else { byte & 15 })];
-    for (row, bytes) in identity.key.chunks(4).enumerate() {
-        let mut text = [b' '; 9];
-        for (i, &byte) in bytes.iter().enumerate() {
-            // A space between the two groups.
-            let at = 2 * i + usize::from(i >= 2);
-            text[at] = digit(byte, true);
-            text[at + 1] = digit(byte, false);
+    /// Whether a tap changes `setting`, in this build: THEME needs another
+    /// scheme for the side showing, FORCE schemes of both sides to pick
+    /// between.
+    fn changeable(&self, setting: Setting) -> bool {
+        match setting {
+            Setting::Theme => themes::count(self.theme_side()) > 1,
+            Setting::Force => themes::has(true) && themes::has(false),
+            _ => true,
         }
-        // Hex digits and spaces, so never empty (and no `expect`, whose
-        // `Utf8Error` `Debug` would cost flash).
-        let text = core::str::from_utf8(&text).unwrap_or_default();
-        // 2×: 8 px a character, so 72 px (bar the last one's gap).
-        canvas.text_scaled(5, 13 + 13 * row as i32, text, Color::TEXT, 2);
     }
-    // As people write it: most significant byte first.
-    let mut address = heapless::String::<17>::new();
-    for (i, &byte) in identity.address.iter().rev().enumerate() {
-        if i > 0 {
-            let _ = address.push(':');
-        }
-        let _ = address.push(char::from(digit(byte, true)));
-        let _ = address.push(char::from(digit(byte, false)));
-    }
-    canvas.text_centered(40, 69, &address, Color::TEXT_DIM);
-}
 
-// ==============================================================================
-// The button grid
-// ==============================================================================
-//
-// Nine buttons in a 3×3 grid (two layers), or six in two rows of three,
-// unlabelled: each 22 px (~8 mm) square, 5 px apart, either way. Nine
-// fill the screen; six are the top two rows of nine, moved down to the
-// middle, rather than stretched to fill it: square, they look like the
-// arcade buttons they're drawn as, and the same either way. A touch hits
-// the screen in thirds across, and thirds or halves down (see
-// `buttons::at`), each with a button in its middle (give or take a
-// pixel), so the gaps between them, and with six, the space above and
-// below, belong to the nearest. They stay clear of the edges' handles.
-//
-// Drawn as an old arcade cabinet's or console's buttons, in the theme's
-// colours: a chunky keycap with a lit edge and a glint at its top left,
-// standing on its own dark side, 4 px deep. Pressed, it sinks: the cap
-// drops 3 px into its well, the side gone and the well's shadow above it.
-//
-//    raised             pressed
-//    ┌────────┐         ┌────────┐
-//    │▓▓▓▓▓▓▓▓│ edge    │████████│ the well's shadow
-//    │▓ ▪     │ glint   │█       │
-//    │▓  cap  │         │   cap  │
-//    │████████│ side    │        │
-//    └────────┘         └────────┘
-
-/// How a grid button looks.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Key {
-    Up,
-    /// Held down: a sequence's first button, while its second waits; or
-    /// a hold's, while the finger's still on it.
-    Down,
-    /// Held down and lit: what's waiting to see whether more follows.
-    Lit,
-    /// Just sent, with its code: lit in the "good" colour, or the "bad"
-    /// one if it went nowhere.
-    Sent(Press, bool),
-}
-
-/// The grid. `dark` picks the shading for a dark theme (or the dim look),
-/// where edges catch light against black; on a light one, the ink is the
-/// dark and the paper the light.
-fn render_buttons(
-    canvas: &mut Canvas,
-    layout: buttons::Layout,
-    grid: &buttons::Grid,
-    sent: Option<(Press, bool)>,
-    dark: bool,
-) {
-    canvas.clear(BACKGROUND);
-    let (first, second) = grid.waiting();
-    let held = grid.held();
-    // How many, and where the first row's top is: two rows (49 px)
-    // centred in the 80.
-    let (count, top) = match layout {
-        buttons::Layout::Six => (6, 15),
-        buttons::Layout::TwoLayers => (9, 2),
-    };
-    for button in 1..=count {
-        let x = 2 + 27 * i32::from((button - 1) % 3);
-        let y = top + 27 * i32::from((button - 1) / 3);
-        let key = match (sent, first, second) {
-            (Some((press, ok)), ..) if press.last() == button => Key::Sent(press, ok),
-            // A hold, once what it sent has shown: pressed for as long as
-            // the finger's on it, up again at the lift.
-            _ if held == Some(button) => Key::Down,
-            (_, _, Some(second)) if second == button => Key::Lit,
-            (_, Some(first), Some(_)) if first == button => Key::Down,
-            (_, Some(first), None) if first == button => Key::Lit,
-            _ => Key::Up,
-        };
-        draw_key(canvas, x, y, key, dark);
-    }
-}
-
-/// One button at (`x`, `y`), 22 px square.
-fn draw_key(canvas: &mut Canvas, x: i32, y: i32, key: Key, dark: bool) {
-    const SIZE: i32 = 22;
-    /// How deep the side is, and so how far a pressed cap sinks (less a
-    /// pixel, so it still sits in a well).
-    const DEPTH: i32 = 4;
-    // The outline, the cap, its lit edge, and the side (and the well's
-    // shadow).
-    let (outline, cap, light, side) = if dark {
-        (
-            Color::TEXT_FAINT,
-            Color::TRACK,
-            Color::TEXT_DIM,
-            Color::SHADOW,
-        )
-    } else {
-        (Color::TEXT, Color::TRACK, BACKGROUND, Color::TEXT)
-    };
-    let (face, down) = match key {
-        Key::Up => (cap, false),
-        Key::Down => (cap, true),
-        Key::Lit => (Color::ACCENT, true),
-        Key::Sent(_, true) => (Color::GOOD, true),
-        Key::Sent(_, false) => (Color::BAD, true),
-    };
-    canvas.fill_rect(x, y, SIZE, SIZE, outline);
-    // Rounded off, a pixel at each corner.
-    for (cx, cy) in [
-        (x, y),
-        (x + SIZE - 1, y),
-        (x, y + SIZE - 1),
-        (x + SIZE - 1, y + SIZE - 1),
-    ] {
-        canvas.pixel(cx, cy, BACKGROUND);
-    }
-    let (inner, width) = (x + 1, SIZE - 2);
-    // Where the cap's top is: sunk into its well when pressed.
-    let top = if down { y + DEPTH } else { y + 1 };
-    if down {
-        canvas.fill_rect(inner, y + 1, width, DEPTH - 1, side);
-        canvas.fill_rect(inner, top, width, y + SIZE - 1 - top, face);
-        // The well's shadow falls on the cap's left edge too.
-        canvas.fill_rect(inner, top, 1, y + SIZE - 1 - top, side);
-    } else {
-        let cap_height = SIZE - 2 - DEPTH;
-        canvas.fill_rect(inner, top, width, cap_height, face);
-        // The cap's lower lip, then its side.
-        canvas.fill_rect(inner, top + cap_height - 1, width, 1, outline);
-        canvas.fill_rect(inner, top + cap_height, width, DEPTH, side);
-        // Light from the top left: its edge, and a glint.
-        canvas.fill_rect(inner, top, width - 1, 1, light);
-        canvas.fill_rect(inner, top + 1, 1, cap_height - 2, light);
-        canvas.fill_rect(x + 3, top + 2, 2, 1, light);
-        canvas.pixel(x + 3, top + 3, light);
-    }
-    if let Key::Sent(press, _) = key {
-        let mut code = heapless::String::<2>::new();
-        write!(code, "{}", press.code).fits();
-        let width = font::small_text_width(&code) * 2;
-        canvas.text_scaled(x + 1 + (SIZE - width) / 2, top + 1, &code, BACKGROUND, 2);
-        let how = match press.gesture {
-            buttons::Gesture::Tap => "TAP",
-            buttons::Gesture::DoubleTap => "2X",
-            // Never shown: a release leaves the hold's on the screen.
-            buttons::Gesture::Hold | buttons::Gesture::Release => "HOLD",
-            buttons::Gesture::LongPress => "LONG",
-        };
-        canvas.text_centered(x + 1 + SIZE / 2, top + 12, how, BACKGROUND);
-    }
-}
-
-// ==============================================================================
-// Switching off
-// ==============================================================================
-
-/// Lines of a message about switching off, centred, from `y` down.
-fn render_lines(canvas: &mut Canvas, y: i32, lines: &[&str], color: Color) {
-    for (i, line) in lines.iter().enumerate() {
-        canvas.text_centered(40, y + INFO_LINE * i as i32, line, color);
-    }
-}
-
-/// Asks whether to switch to storage mode (see [`crate::system_off`]).
-fn render_storage_prompt(canvas: &mut Canvas) {
-    canvas.clear(BACKGROUND);
-    canvas.text_centered(40, 6, "STORAGE MODE", Color::ACCENT);
-    let explanation = ["OFF UNTIL THE", "BUTTON OR THE", "CHARGER WAKES IT"];
-    render_lines(canvas, 20, &explanation, Color::TEXT);
-    render_lines(
-        canvas,
-        54,
-        &["TAP: OFF NOW", "ELSE: CANCEL"],
-        Color::TEXT_DIM,
-    );
-}
-
-/// What shows for the few seconds before the watch switches itself off.
-pub fn render_off(canvas: &mut Canvas, reason: crate::system_off::Reason) {
-    use crate::system_off::Reason;
-    canvas.clear(BACKGROUND);
-    let (title, color, wake): (_, _, &[&str]) = match reason {
-        Reason::BatteryEmpty => ("BATTERY EMPTY", Color::BAD, &["CHARGE TO", "WAKE IT"]),
-        Reason::Storage => (
-            "STORAGE MODE",
-            Color::ACCENT,
-            &["BUTTON OR", "CHARGER", "WAKES IT"],
-        ),
-    };
-    canvas.text_centered(40, 14, title, color);
-    render_lines(canvas, 30, &["SWITCHING OFF"], Color::TEXT_DIM);
-    render_lines(canvas, 46, wake, Color::TEXT);
-}
-
-// ==============================================================================
-// Pairing
-// ==============================================================================
-
-/// The six-digit passkey, big enough to read at a glance while typing it on
-/// the phone.
-fn render_pairing(canvas: &mut Canvas, passkey: u32) {
-    canvas.clear(BACKGROUND);
-    canvas.text_centered(40, 12, "PAIRING", Color::ACCENT);
-    canvas.text_centered(40, 22, "ENTER ON PHONE:", Color::TEXT_DIM);
-
-    // Six 2× digits (10 px) with 2 px gaps: 70 px, centred.
-    let mut digits = [0u64; 6];
-    let mut rest = u64::from(passkey);
-    for digit in digits.iter_mut().rev() {
-        *digit = rest % 10;
-        rest /= 10;
-    }
-    for (i, &digit) in digits.iter().enumerate() {
-        draw_digit(canvas, 5 + 12 * i as i32, 36, digit, 2, Color::TEXT);
-    }
-}
-
-// ==============================================================================
-// Firmware update
-// ==============================================================================
-
-/// A chunky segmented progress bar, as on an old console's loading screen:
-/// 16 cells in a frame, filled cells lit with a highlight, and the cell being
-/// filled flickering in the transition's dither pattern.
-fn render_update(canvas: &mut Canvas, percent: u8, now: Instant) {
-    const CELLS: i32 = 16;
-    const CELL: i32 = 4;
-    const LEFT: i32 = 40 - (CELLS * CELL) / 2;
-    const TOP: i32 = 38;
-
-    canvas.clear(BACKGROUND);
-    canvas.text_centered(40, 14, "UPDATING", Color::ACCENT);
-    canvas.text_centered(40, 24, "KEEP CLOSE", Color::TEXT_DIM);
-
-    // Frame, with a drop shadow like the digits'.
-    let (width, height) = (CELLS * CELL + 3, CELL + 5);
-    canvas.fill_rect(LEFT - 1, TOP - 1, width, height, Color::SHADOW);
-    canvas.fill_rect(LEFT - 2, TOP - 2, width, height, Color::TEXT_DIM);
-    canvas.fill_rect(LEFT - 1, TOP - 1, width - 2, height - 2, BACKGROUND);
-
-    let filled = i32::from(percent) * CELLS / 100;
-    for cell in 0..CELLS {
-        let x = LEFT + cell * CELL;
-        if cell < filled {
-            // The heart's red: the one dash of colour in otherwise
-            // single-hue themes (handheld), so progress pops.
-            canvas.fill_rect(x, TOP, CELL - 1, CELL, Color::HEART);
-            canvas.fill_rect(x, TOP, CELL - 1, 1, Color::HEART_SHINE);
-        } else if cell == filled {
-            // Flip the checkerboard's phase every frame (one a second).
-            let phase = (now.as_secs() % 2) as i32;
-            for dy in 0..CELL {
-                for dx in 0..CELL - 1 {
-                    let color = if (dx + dy + phase) % 2 == 0 {
-                        Color::DITHER_A
-                    } else {
-                        Color::DITHER_B
-                    };
-                    canvas.pixel(x + dx, TOP + dy, color);
-                }
+    /// A tap on `setting`'s row: its next value, or for one that can't
+    /// change, a banner saying why, and where the README says how to get a
+    /// build where it can.
+    fn change(&mut self, setting: Setting, now: Instant) {
+        if !self.changeable(setting) {
+            if setting == Setting::Theme {
+                defmt::info!("ui: one scheme for this side, in this build (FAQ D01)");
+                self.show_banner(Shows::OneTheme, now);
+            } else {
+                defmt::info!("ui: schemes for one side only, in this build (FAQ D02)");
+                self.show_banner(Shows::OneSide, now);
             }
+            return;
+        }
+        match setting {
+            Setting::Theme => self.next_theme(),
+            Setting::Force => self.force = self.force.next(),
+            Setting::Light => self.brightness = self.brightness.next(),
+            Setting::Buttons => self.buttons = self.buttons.next(),
+            Setting::Layout => self.grid_layout = self.grid_layout.next(),
+            Setting::BtHomeKey => self.go_to(Screen::HaQr, Sweep::RightToLeft),
         }
     }
-
-    // The percentage in the clock's 2× digits, right-aligned under the bar.
-    let mut x = 40 + 17;
-    let mut rest = u64::from(percent);
-    loop {
-        x -= 12;
-        draw_digit(canvas, x, 52, rest % 10, 2, Color::TEXT);
-        rest /= 10;
-        if rest == 0 {
-            break;
-        }
-    }
-    canvas.text(40 + 19, 59, "%", Color::TEXT_DIM);
 }
-
-// ==============================================================================
-// Notifications, calls, and music
-// ==============================================================================
-
-// Notifications look like the watch's other screens: their app is the
-// title, top left in the accent colour, as TODAY's or ALARMS' is, with
-// when it arrived top right in the history, as MUSIC's state is. Then a
-// rule, and who it's from, centred below, in a face that makes it the
-// most important thing on the screen. The banner is the same in short,
-// over the bottom of whatever shows.
-//
-// Who it's from is the 3×5 at 2× if it fits on one line (up to about 9
-// letters), or on two of about the same width (see `large`): a poster,
-// the size the watch's other big text is. Anything longer is in the
-// medium face (see `font::medium_glyph`), balanced over as few lines as
-// it takes (see `font::wrap`), never the small 1×, which is too small to
-// read at a glance. Either way it's centred, as a name on a screen of its
-// own is expected to be, and as it was before the medium face: the
-// balanced lines read as a block, and a short name doesn't sit in a
-// corner. (The banner, which has to be compact, is the exception: see
-// `render_banner`.)
-
-/// Text columns of the banner and the notification card, as of a call:
-/// four columns (12 of the panel's pixels) clear of each edge, for a
-/// little more air than the three there were. Four still leave room for
-/// 18 letters at 1× and 9 at 2×, as three did; a fifth would take a
-/// letter off each.
-const BANNER_TEXT: core::ops::Range<i32> = 4..76;
-const BANNER_TEXT_WIDTH: i32 = BANNER_TEXT.end - BANNER_TEXT.start;
 
 /// A notification's app, and who it's from, as UTF-8 to draw: room for
 /// what [`Text`] keeps of each (see [`Text::write_to`]).
 type AppText = String<{ 2 * 24 + 1 }>;
 type WhoText = String<{ 2 * 40 + 1 }>;
-
-/// Line pitch of the medium face: 7 px capitals, 2 accent rows, and a
-/// row's gap, so an accent never touches the line above.
-const MEDIUM_PITCH: i32 = font::MEDIUM_HEIGHT + font::ACCENT_ROWS + 1;
-
-/// The most lines who it's from takes in the card: 40 letters at about 11
-/// a line, with room to spare for long words.
-const CARD_LINES: usize = 5;
-
-/// How unequal two lines at 2× may be: the shorter at least 7/10 of the
-/// longer, in pixels. In this all but monospaced font, a 5- and a 5-letter
-/// word are equal, 4 and 5 make 79%, 5 and 7 just make it at 70%, and 4
-/// and 6 (65%) or 3 and 8 (35%) don't. Below about this, the pair reads
-/// as a long line with a stub hanging off it rather than as a block.
-const BALANCE_TENTHS: i32 = 7;
-
-/// Who it's from at 2×, as `lines` of the small font: how many (one or
-/// two), or 0 if it's not short enough. Two only split at a space, about
-/// equal (see [`BALANCE_TENTHS`]): a first name and a surname, typically.
-/// Never hyphenated: a broken word in large type is harder to read than
-/// the same word whole in the medium face, and so is a big first line
-/// over a one-word second.
-fn large(who: &str, lines: &mut [font::Line; CARD_LINES]) -> usize {
-    // `wrap` balances the lines already: what's left is to check how it
-    // broke them. A break at a space is neither a hyphen nor a joint in a
-    // link; an ellipsis at the end means it needed more than two.
-    let count = font::wrap(
-        who,
-        font::Face::Small,
-        BANNER_TEXT_WIDTH / 2,
-        &mut lines[..2],
-    );
-    let [top, bottom, ..] = *lines;
-    match count {
-        1 => 1,
-        2 if bottom.tail == font::Tail::None && who.as_bytes().get(top.end) == Some(&b' ') => {
-            let (a, b) = (
-                top.width(who, font::Face::Small),
-                bottom.width(who, font::Face::Small),
-            );
-            if a.min(b) * 10 >= a.max(b) * BALANCE_TENTHS {
-                2
-            } else {
-                0
-            }
-        }
-        _ => 0,
-    }
-}
-
-/// A notification, with the whole screen (one that arrived with the screen
-/// off, in the dim look, or a page of the history): the app top left in
-/// the accent colour, and `time` top right (when it arrived, in the
-/// history; nothing on a notification that has just come, as that's now),
-/// a rule under them, as on Today, and who it's from below, centred, big
-/// if it's short (see [`large`]).
-fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str) {
-    canvas.clear(BACKGROUND);
-    // The app gives way to the time: 4 px between them, and an ellipsis.
-    let time_width = font::small_text_width(time);
-    let gap = if time.is_empty() { 0 } else { time_width + 4 };
-    small_fitted(
-        canvas,
-        BANNER_TEXT.start,
-        3,
-        app,
-        BANNER_TEXT_WIDTH - gap,
-        Color::ACCENT,
-    );
-    canvas.text_right(BANNER_TEXT.end, 3, time, Color::TEXT_DIM);
-    // Dashed, 2 px on and 1 off: Today's chart baselines, in a colour
-    // that shows in every look.
-    for x in (BANNER_TEXT.start..BANNER_TEXT.end).step_by(3) {
-        canvas.fill_rect(x, 11, 2, 1, Color::TEXT_FAINT);
-    }
-
-    // At 2× (pitch, capitals' height, and accents' rows, all doubled),
-    // or in the medium face.
-    let mut lines = [font::Line::default(); CARD_LINES];
-    let (count, face, scale, pitch, height) = match large(who, &mut lines) {
-        0 => (
-            font::wrap(who, font::Face::Medium, BANNER_TEXT_WIDTH, &mut lines),
-            font::Face::Medium,
-            1,
-            MEDIUM_PITCH,
-            font::MEDIUM_HEIGHT,
-        ),
-        count => (
-            count,
-            font::Face::Small,
-            2,
-            2 * (5 + font::ACCENT_ROWS + 2),
-            2 * 5,
-        ),
-    };
-    // The capitals centred on the screen, which is where the eye expects
-    // a name (centring the space below the rule put them 6 px low), but
-    // no nearer the rule than two clear rows above the accents. Accents
-    // above the first line are left out of the centring, as most names
-    // have none.
-    let block = pitch * (count as i32 - 1) + height;
-    let top = (40 - block / 2).max(12 + 2 + font::ACCENT_ROWS * scale);
-    for (i, &line) in lines[..count].iter().enumerate() {
-        let y = top + pitch * i as i32;
-        // The tail (an ellipsis or a hyphen) is part of the width.
-        let x = 40 - line.width(who, face) * scale / 2;
-        if scale == 2 {
-            canvas.text_scaled(x, y, line.of(who), Color::TEXT, 2);
-        } else {
-            canvas.line(x, y, who, line, face, Color::TEXT);
-        }
-    }
-}
-
-/// `text` in the small font at (`x`, `y`), in `room` px, ending in an
-/// ellipsis if it doesn't fit.
-fn small_fitted(canvas: &mut Canvas, x: i32, y: i32, text: &str, room: i32, color: Color) {
-    let mut line = [font::Line::default()];
-    if font::wrap(text, font::Face::Small, room, &mut line) > 0 {
-        canvas.line(x, y, text, line[0], font::Face::Small, color);
-    }
-}
-
-/// Line pitch of the small font in the banner: 5 px capitals, 2 accent
-/// rows, and a row's gap, so an accent never touches the line above.
-const SMALL_PITCH: i32 = 5 + font::ACCENT_ROWS + 1;
-
-/// Over the bottom of the screen, as compact as it was before the
-/// redesign: an accent rule, the app (or what happened) small in the
-/// accent colour, and who it's from (or what to do) small too, on one
-/// line or two, ending in an ellipsis if even two won't do. The history
-/// has the rest. One line is 17 px, over the clock face's steps, leaving
-/// the heart rate and the next alarm in view; two, 25, from just under
-/// the date and the seconds, which a 4 s banner can afford; the time
-/// always shows.
-///
-/// Small, not in the medium face that names are given on a screen of
-/// their own: its 7 px capitals, their accents, and a row clear of the
-/// app above them make 9 rows to the small font's 7, and the 17 px can't
-/// spare them without the app crowding the rule or the text the bottom
-/// edge. Rows, from the rule: 1 clear, the app's 5, 1 clear (so Å's ring
-/// never touches it), 2 for accents, 5 for the capitals, and 2 clear at
-/// the bottom.
-fn render_banner(canvas: &mut Canvas, app: &str, who: &str) {
-    let mut lines = [font::Line::default(); 2];
-    let count = font::wrap(who, font::Face::Small, BANNER_TEXT_WIDTH, &mut lines).max(1);
-    let top = 63 - SMALL_PITCH * (count as i32 - 1);
-    canvas.fill_rect(0, top, 80, 80 - top, BACKGROUND);
-    canvas.fill_rect(0, top, 80, 1, Color::ACCENT);
-    small_fitted(
-        canvas,
-        BANNER_TEXT.start,
-        top + 2,
-        app,
-        BANNER_TEXT_WIDTH,
-        Color::ACCENT,
-    );
-    for (i, &line) in lines[..count].iter().enumerate() {
-        let y = top + 2 + 5 + 1 + font::ACCENT_ROWS + SMALL_PITCH * i as i32;
-        canvas.line(
-            BANNER_TEXT.start,
-            y,
-            who,
-            line,
-            font::Face::Small,
-            Color::TEXT,
-        );
-    }
-}
-
-/// Where the decline/answer buttons start, for both drawing and tapping.
-const CALL_BUTTONS_Y: i32 = 55;
-/// The caller's name scrolls within columns 4..76.
-const CALL_TEXT_WIDTH: i32 = 72;
-
-fn render_call(canvas: &mut Canvas, call: &Call, now: Instant) {
-    canvas.clear(BACKGROUND);
-    canvas.text_centered(40, 6, "INCOMING CALL", Color::ACCENT);
-
-    // The caller at 2×, centred if it fits, scrolling if not.
-    let width = font::small_text_width(&call.caller) * 2;
-    let left = if width <= CALL_TEXT_WIDTH {
-        40 - width / 2
-    } else {
-        4
-    };
-    canvas.marquee(
-        left..4 + CALL_TEXT_WIDTH,
-        24,
-        &call.caller,
-        Color::TEXT,
-        2,
-        now - call.since,
-    );
-
-    let hint = if call.silenced {
-        "SILENCED"
-    } else {
-        "BUTTON: SILENCE"
-    };
-    canvas.text_centered(40, 44, hint, Color::TEXT_FAINT);
-
-    for (x, label, color) in [(2, "DECLINE", Color::BAD), (42, "ANSWER", Color::GOOD)] {
-        canvas.fill_rect(x, CALL_BUTTONS_Y, 36, 18, color);
-        canvas.text_centered(x + 18, CALL_BUTTONS_Y + 7, label, BACKGROUND);
-    }
-}
-
-/// Where the transport controls start, for both drawing and tapping.
-const MUSIC_CONTROLS_Y: i32 = 52;
-/// Artist and track scroll within columns 3..77.
-const MUSIC_TEXT_WIDTH: i32 = 74;
-
-// ==============================================================================
-// Air
-// ==============================================================================
-//
-// Canvas layout (80×80), y ranges inclusive:
-//
-//    3..7    AIR (left); how old the reading is (right)
-//   13..33   CO₂ in ppm, in the time's digits at 3×, centred
-//   38..42   "PPM CO2" (left); the band, GOOD/FAIR/POOR (right)
-//   46..48   three segments, the band's lit: it reads without colour
-//   54..63   temperature and humidity at 2×
-//   69..73   pressure (left); the sensor's battery (right)
-//
-// A sensor without CO₂ (a BTHome thermometer) has the temperature big in
-// its place, "°C" for its label, and no band; then the humidity at 2×
-// (right), labelled (left).
-
-/// A nearby room sensor's latest reading (see [`crate::aranet`]): from an
-/// Aranet4, the CO₂ big, since that's what the watch can't otherwise know
-/// and what to act on (open a window), then what else it measures. From a
-/// BTHome thermometer, the temperature big (to the tenth, as on the clock
-/// face), and whatever else it sends.
-///
-/// Not on the clock face: CO₂ changes over tens of minutes, and its number
-/// would crowd a face that's read at a glance, many times a day. The
-/// temperature there comes from the same reading (see
-/// `crate::temperature`).
-///
-/// The readings are as old as the last scan, at most a quarter of an hour
-/// with a sensor around (opening this screen scans again if the last is a
-/// minute old), so the age is always shown; past [`aranet::STALE`], the
-/// numbers go faint.
-fn render_air(canvas: &mut Canvas, sighting: &Sighting, now: Instant) {
-    canvas.clear(BACKGROUND);
-    canvas.text(4, 3, "AIR", Color::ACCENT);
-    let reading = &sighting.reading;
-    let age = sighting.age(now.as_millis());
-    let mut text = heapless::String::<12>::new();
-    match age {
-        0..60 => text.push_str("NOW").fits(),
-        60..3600 => write!(text, "{} MIN", age / 60).fits(),
-        _ => write!(text, "{} H", age / 3600).fits(),
-    }
-    let stale = age >= aranet::STALE;
-    canvas.text_right(76, 3, &text, Color::TEXT_DIM);
-    let value = if stale {
-        Color::TEXT_FAINT
-    } else {
-        Color::TEXT
-    };
-
-    // The temperature, to the tenth: "--.-" if invalid. Within ±100 °C
-    // (and a sauna's), so that big it still fits the width.
-    let mut temperature = heapless::String::<8>::new();
-    match reading.tenths().map(|t| t.clamp(-999, 1999)) {
-        Some(t) => {
-            let sign = if t < 0 { "-" } else { "" };
-            write!(temperature, "{sign}{}.{}", t.abs() / 10, t.abs() % 10).fits()
-        }
-        None => temperature.push_str("--.-").fits(),
-    }
-
-    // The big number: CO₂ when the sensor measures it (dashes while an
-    // Aranet4 calibrates), the temperature from a thermometer.
-    const BIG_Y: i32 = 13;
-    let mut text = heapless::String::<8>::new();
-    let thermometer = reading.co2.is_none() && reading.kind != aranet::Kind::Aranet4;
-    if thermometer {
-        draw_big_number(canvas, BIG_Y, &temperature, value);
-        canvas.text(4, 38, "°C", Color::TEXT_DIM);
-    } else {
-        match reading.co2 {
-            Some(ppm) => {
-                write!(text, "{}", ppm.min(9999)).fits();
-                draw_big_number(canvas, BIG_Y, &text, value);
-            }
-            // A digit's width each.
-            None => {
-                for x in [6, 23, 40, 57] {
-                    canvas.fill_rect(x, BIG_Y + 9, 15, 3, value);
-                }
-            }
-        }
-        canvas.text(4, 38, "PPM CO2", Color::TEXT_DIM);
-    }
-    // The band: the word, and which third of the bar is lit, so it reads
-    // in every theme, even those of one hue.
-    if let Some(band) = reading.band {
-        let color = match band {
-            Band::Good => Color::GOOD,
-            Band::Fair => Color::TEXT,
-            Band::Poor => Color::BAD,
-        };
-        canvas.text_right(76, 38, band.word(), color);
-        for (i, segment) in [Band::Good, Band::Fair, Band::Poor].into_iter().enumerate() {
-            let lit = if segment == band { color } else { Color::TRACK };
-            canvas.fill_rect(4 + 25 * i as i32, 46, 22, 3, lit);
-        }
-    }
-
-    // Temperature (unless it's big already) and humidity, at 2×.
-    if thermometer {
-        if reading.humidity.is_some() {
-            canvas.text(4, 57, "HUMIDITY", Color::TEXT_DIM);
-        }
-    } else {
-        temperature.push('°').fits();
-        canvas.text_scaled(4, 54, &temperature, value, 2);
-    }
-    if let Some(humidity) = reading.humidity {
-        let mut text = heapless::String::<4>::new();
-        write!(text, "{}%", humidity.min(100)).fits();
-        canvas.text_scaled(76 - 2 * font::small_text_width(&text), 54, &text, value, 2);
-    }
-
-    // Pressure, and the sensor's own battery, red when it wants changing:
-    // each if the sensor sends it.
-    let mut text = heapless::String::<10>::new();
-    if let Some(pressure) = reading.pressure {
-        // Widened: a BTHome sensor's pressure is clamped to `u16::MAX`
-        // tenths (see `bthome_sensor`), and adding 5 to that overflowed.
-        write!(text, "{} HPA", (u32::from(pressure) + 5) / 10).fits();
-    }
-    canvas.text(4, 69, &text, Color::TEXT_DIM);
-    if let Some(battery) = reading.battery {
-        let mut text = heapless::String::<8>::new();
-        write!(text, "BAT {}%", battery.min(100)).fits();
-        let color = if battery <= 15 {
-            Color::BAD
-        } else {
-            Color::TEXT_DIM
-        };
-        canvas.text_right(76, 69, &text, color);
-    }
-}
-
-/// `text` (digits, '.', '-') in the time's digits at 3×, centred, with
-/// its top at `y`: the point is the glyphs' bottom row, a dash their
-/// middle one (three of the digits' pixels each).
-fn draw_big_number(canvas: &mut Canvas, y: i32, text: &str, color: Color) {
-    let advance = |c: char| match c {
-        '.' => 5,
-        '-' => 11,
-        _ => 17,
-    };
-    let width: i32 = text.chars().map(advance).sum::<i32>() - 2;
-    let mut x = 40 - width / 2;
-    for c in text.chars() {
-        let mark = |canvas: &mut Canvas, dy: i32, w: i32| {
-            canvas.fill_rect(x + 1, y + dy + 1, w, 3, Color::SHADOW);
-            canvas.fill_rect(x, y + dy, w, 3, color);
-        };
-        match c {
-            '.' => mark(canvas, 18, 3),
-            '-' => mark(canvas, 9, 9),
-            // Anything else isn't a digit either: drawn as one too big
-            // (see `digit_glyph`), rather than underflowing.
-            digit => {
-                let value = digit.to_digit(10).unwrap_or(u32::MAX);
-                draw_digit(canvas, x, y, u64::from(value), 3, color)
-            }
-        }
-        x += advance(c);
-    }
-}
-
-fn render_music(canvas: &mut Canvas, music: &Music, now: Instant) {
-    let elapsed = now - music.since;
-    canvas.clear(BACKGROUND);
-    canvas.text(3, 4, "MUSIC", Color::ACCENT);
-    canvas.text_right(
-        77,
-        4,
-        match music.playing {
-            Some(true) => "PLAYING",
-            Some(false) => "PAUSED",
-            None => "",
-        },
-        Color::TEXT_DIM,
-    );
-
-    canvas.marquee(
-        3..3 + MUSIC_TEXT_WIDTH,
-        17,
-        &music.artist,
-        Color::TEXT_DIM,
-        1,
-        elapsed,
-    );
-    canvas.marquee(
-        3..3 + MUSIC_TEXT_WIDTH,
-        29,
-        &music.track,
-        Color::TEXT,
-        2,
-        elapsed,
-    );
-
-    // Previous, play/pause, next: 5×5 icons at 3×, centred in thirds.
-    let play_pause = if music.playing() {
-        &font::PAUSE
-    } else {
-        &font::PLAY
-    };
-    for (x, icon) in [(6, &font::PREVIOUS), (33, play_pause), (60, &font::NEXT)] {
-        canvas.sprite(x, MUSIC_CONTROLS_Y + 6, 5, icon, 3, Color::TEXT);
-    }
-}

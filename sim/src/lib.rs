@@ -1,7 +1,7 @@
 //! `ur-sim`: the watch's UI on a computer.
 //!
 //! This runs the firmware's own UI code (`src/ui.rs`, and the canvas,
-//! themes, fonts, alarms, clock, sunrise, and navigation logic it uses) on
+//! palettes, fonts, alarms, clock, sunrise, and navigation logic it uses) on
 //! the host, included here with `#[path]` as the host tests do. What needs
 //! hardware is replaced by a stand-in with the same interface: the panel
 //! ([`display`]) collects the pixels the canvas pushes, the accelerometer's
@@ -67,8 +67,6 @@ mod day;
 #[path = "../../src/decimal.rs"]
 #[allow(dead_code)]
 mod decimal;
-#[path = "../../src/face/mod.rs"]
-mod face;
 #[path = "../../src/font.rs"]
 #[allow(dead_code)]
 mod font;
@@ -100,6 +98,9 @@ mod motor;
 mod nav;
 #[path = "../../src/on_time.rs"]
 mod on_time;
+#[path = "../../src/palette.rs"]
+#[allow(dead_code)]
+mod palette;
 #[path = "../../src/phone.rs"]
 mod phone;
 #[path = "../../src/qr.rs"]
@@ -123,9 +124,55 @@ mod storage;
 #[path = "../../src/temperature.rs"]
 #[allow(dead_code)]
 mod temperature;
-#[path = "../../src/theme.rs"]
-#[allow(dead_code)]
-mod theme;
+#[path = "../../src/themes/mod.rs"]
+mod themes;
+
+/// What every built-in theme must have, whatever it draws: a scheme at
+/// least, and schemes with names and IDs (see `palette::id`) of their own
+/// across every theme, as Settings' THEME row and flash know them. With
+/// `--features themes-all` (as CI runs it), every theme in the repository.
+#[cfg(test)]
+mod every_theme {
+    use crate::themes::{THEMES, Theme as _};
+
+    #[test]
+    fn has_schemes_with_names_and_ids_of_their_own() {
+        let mut names = Vec::new();
+        for theme in THEMES {
+            assert!(
+                !theme.night.is_empty() || !theme.day.is_empty(),
+                "{} has no schemes",
+                theme.name
+            );
+            for scheme in theme.night.iter().chain(theme.day) {
+                names.push((scheme.palette().name, scheme.palette().id));
+            }
+        }
+        // Each fits retro's THEME row (as every theme's must on its own),
+        // the measure for a name the watch shows: where Retro is built in,
+        // as with `themes-all`. (Each theme also asserts its own row fits
+        // what it shows, as it draws it.)
+        #[cfg(feature = "theme-retro")]
+        {
+            for (name, _) in &names {
+                assert!(
+                    crate::themes::retro::name_fits(name),
+                    "{name} is too long for retro's THEME row"
+                );
+            }
+            // 50 px of the small font: "TOKYO STORMS" (47) fits, one letter
+            // more (51) doesn't.
+            assert!(crate::themes::retro::name_fits("TOKYO STORMS"));
+            assert!(!crate::themes::retro::name_fits("TOKYO STORMSS"));
+        }
+        for (i, &(name, id)) in names.iter().enumerate() {
+            for &(other, other_id) in &names[i + 1..] {
+                assert_ne!(name, other, "two schemes called {name}");
+                assert_ne!(id, other_id, "{name} and {other} have one ID");
+            }
+        }
+    }
+}
 #[path = "../../src/ui.rs"]
 #[allow(dead_code)]
 mod ui;
@@ -177,6 +224,26 @@ mod debug {
 
     pub fn battery_sample() -> Option<i16> {
         None
+    }
+}
+
+/// `src/version.rs`: the version the Info screen shows, which the
+/// `version` command can set, so that screenshots don't change with each
+/// release (the tour and the themes' pin one); build.rs's otherwise.
+mod version {
+    use std::sync::Mutex;
+
+    static SHOWN: Mutex<Option<(&'static str, &'static str)>> = Mutex::new(None);
+
+    pub fn shown() -> (&'static str, &'static str) {
+        SHOWN
+            .lock()
+            .expect("nothing panics holding it")
+            .unwrap_or((env!("UR_RELEASE"), env!("UR_BUILD")))
+    }
+
+    pub fn set(version: (&'static str, &'static str)) {
+        *SHOWN.lock().expect("nothing panics holding it") = Some(version);
     }
 }
 

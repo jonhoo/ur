@@ -1,25 +1,5 @@
-//! The usual clock face: the time, large, over the day's readings (see
-//! the layout below). It's the one built in unless a face feature picks
-//! another (see [`super`]).
-
-use core::fmt::Write as _;
-
-use crate::alarm;
-use crate::battery::Battery;
-use crate::canvas::{Canvas, Color};
-use crate::font;
-use crate::ui::{BACKGROUND, Fits as _, Status, countdown, digit_glyph, draw_digit, hhmm};
-
-use super::{ClockFace, Context, STEP_GOAL};
-
-pub struct Classic;
-
-impl ClockFace for Classic {
-    fn render(canvas: &mut Canvas, cx: &Context) {
-        render_clock(canvas, cx.status, cx.next_alarm, cx.media, cx.dim);
-    }
-}
-
+//! Retro's clock face, and the battery it shows.
+//
 // Canvas layout (80×80), y ranges inclusive:
 //
 //    3..7    status bar: media, or no phone and time-sync state, then the
@@ -37,17 +17,35 @@ impl ClockFace for Classic {
 // day's goal rather than a number: the exact count is on Today, one
 // swipe right.
 
-/// `media` is an icon for the status bar's left end, while a phone is
-/// connected: its width, rows, and top. `dim`: in the dim look.
-fn render_clock(
-    canvas: &mut Canvas,
-    status: &Status,
-    next_alarm: Option<(alarm::Kind, i64)>,
-    // `None` without media; otherwise the icon to show in the media slot,
-    // if any: (width, rows, y).
-    media: Option<Option<(u32, &[u8], i32)>>,
-    dim: bool,
-) {
+use core::fmt::Write as _;
+
+use super::{BACKGROUND, action_icon, digit_glyph, draw_digit};
+use crate::alarm;
+use crate::battery::Battery;
+use crate::canvas::{Canvas, Color};
+use crate::font;
+use crate::themes::helpers::{countdown, hhmm, iso_date, percent as percent_text};
+use crate::themes::{Face, Media, STEP_GOAL};
+use crate::ui::Fits;
+
+pub(super) fn render_clock(canvas: &mut Canvas, face: &Face) {
+    let Face {
+        status,
+        next_alarm,
+        dim,
+        ..
+    } = *face;
+    // The media slot's icon, while there's one (with a phone connected):
+    // its width, rows, and top. The slot is there only while an icon is:
+    // a fixed width (below) so the temperature doesn't shift as one icon
+    // replaces another (a gesture's, then the note), but no empty gap
+    // once the media is paused or stopped and the gesture's icon has
+    // gone. The temperature moves over once then, which reads as the
+    // icon going away.
+    let media = face.media.map(|media| match media {
+        Media::Did(action) => (font::MEDIA_HINT_W, &action_icon(action)[..], 3),
+        Media::Playing => (font::NOTE_W, &font::NOTE[..], 2),
+    });
     canvas.clear(BACKGROUND);
     let battery_left = render_battery(canvas, status.battery, status.uptime_secs);
 
@@ -66,11 +64,9 @@ fn render_clock(
         // centred in it, so nothing after it moves as the icon changes.
         const MEDIA_SLOT: u32 = font::NOTE_W;
         match media {
-            Some(icon) => {
-                if let Some((width, rows, y)) = icon {
-                    let left = 3 + (MEDIA_SLOT.saturating_sub(width) / 2) as i32;
-                    canvas.sprite(left, y, width, rows, 1, Color::ACCENT);
-                }
+            Some((width, rows, y)) => {
+                let left = 3 + (MEDIA_SLOT.saturating_sub(width) / 2) as i32;
+                canvas.sprite(left, y, width, rows, 1, Color::ACCENT);
                 Some(3 + MEDIA_SLOT as i32 + 3)
             }
             None => Some(3),
@@ -188,12 +184,12 @@ fn render_clock(
     // (without the shadow, which at 1× would only thicken them), and in the
     // accent colour, so they're still easy to find.
     const NOTE_Y: i32 = 39;
-    let mut date = heapless::String::<10>::new();
-    match &status.local_time {
-        Some(t) => write!(date, "{:04}-{:02}-{:02}", t.year, t.month, t.day).fits(),
-        None => date.push_str("----------").fits(),
-    }
-    canvas.text(4, NOTE_Y, &date, Color::TEXT_DIM);
+    let date = status
+        .local_time
+        .as_ref()
+        .map(|t| iso_date(t.year, t.month, t.day));
+    let date = date.as_deref().unwrap_or("----------");
+    canvas.text(4, NOTE_Y, date, Color::TEXT_DIM);
     for (digit, x) in [seconds / 10, seconds % 10].into_iter().zip([64, 70]) {
         let glyph = digit_glyph(digit);
         canvas.sprite(x, NOTE_Y - 1, font::DIGIT_W, glyph, 1, Color::ACCENT);
@@ -251,7 +247,7 @@ fn render_clock(
         let x = 76 - font::small_text_width(&time);
         canvas.text(x, READING_Y, &time, Color::TEXT);
         let (icon, width) = match kind {
-            alarm::Kind::Timer(_) => (&HOURGLASS, HOURGLASS_W),
+            alarm::Kind::Timer(_) => (&font::HOURGLASS, font::HOURGLASS_W),
             _ => (&font::BELL, font::BELL_W),
         };
         let icon_x = x - width as i32 - 2;
@@ -345,24 +341,13 @@ fn render_battery(canvas: &mut Canvas, battery: &Battery, uptime_secs: u64) -> i
     }
     canvas.fill_rect(X + 1, Y + 1, fill.min(8), 3, color);
 
-    let mut text = heapless::String::<8>::new();
-    write!(text, "{percent}%").fits();
+    let text = percent_text(percent);
     let text_x = X - 2 - font::small_text_width(&text);
     canvas.text(text_x, Y, &text, color);
     if battery.charging {
-        let x = text_x - 2 - BOLT_W as i32;
-        canvas.sprite(x, Y, BOLT_W, &BOLT, 1, Color::HEART);
+        let x = text_x - 2 - font::BOLT_W as i32;
+        canvas.sprite(x, Y, font::BOLT_W, &font::BOLT, 1, Color::HEART);
         return x;
     }
     text_x
 }
-
-/// 5×7 hourglass, for timers (so a countdown isn't read as a time of day).
-const HOURGLASS_W: u32 = 5;
-const HOURGLASS: [u8; 7] = [
-    0b11111, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b11111,
-];
-
-/// 4×5 lightning bolt, for charging.
-const BOLT_W: u32 = 4;
-const BOLT: [u8; 5] = [0b0011, 0b0110, 0b1111, 0b0110, 0b1100];

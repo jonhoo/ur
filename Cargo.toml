@@ -1,6 +1,6 @@
 [package]
 name = "ur"
-version = "0.10.0-rc.5"
+version = "0.10.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jonhoo/ur"
@@ -55,6 +55,20 @@ opt-level = "z"
 opt-level = 1
 
 [features]
+default = ["theme-retro"]
+
+# Themes (see src/themes/): how every screen looks, each with its colour
+# schemes. A build has only the themes it names, to keep its image small,
+# and Settings' THEME row steps through their schemes; it needs one at
+# least (`--no-default-features` alone doesn't build). A theme is
+# `theme-<its directory's name>`, and in `themes-all` too.
+#
+# Retro, the watch's own look, after old handhelds and arcade cabinets.
+theme-retro = []
+# Every theme in the repository: the web simulator's, and CI's check that
+# every theme builds.
+themes-all = ["theme-retro"]
+
 # Keep the defmt log in the SPI flash, for watches without a debug probe; see
 # `src/field_log.rs`. Not for builds read through a probe.
 field-log = []
@@ -78,26 +92,8 @@ coverage = ["compare"]
 # erases and writes never overrun their radio timeslots; see
 # `src/flash_stress.rs`. Only for dev kits.
 flash-stress = []
-# Read and log (over RTT) everything the touch controller reports, not just
-# the six bytes used, for `scripts/touch_probe.py` to look for a register
-# that tells a fingertip from a palm; see `src/touch_probe.rs`. Logs ~100
-# lines a second while touched, so not with `field-log`, and only for dev
-# kits: releases leave it out (scripts/release.sh checks).
-touch-probe = []
 # Wedge the sensor bus for the first 5 s after boot, so that touch, the
 # accelerometer and the heart-rate sensor all have to recover from it; see
 # `wedge_task` in `src/i2c.rs`. Only for dev kits: it implies `debug-input`
 # so that scripts/release.sh refuses it.
 wedge-i2c = ["debug-input"]
-# Watch faces and themes: one of each is built in, and these swap them. The
-# defaults are the usual clock face, and the Arcade, Terminal, Handheld and
-# Parchment themes.
-#
-# Living Tokyo, a city at night, as the clock face; see
-# `src/face/living_tokyo.rs`.
-face-living-tokyo = []
-# The Tokyo Night palettes in place of the usual themes: Night and Storm
-# after sunset, Day by day. See `src/theme.rs`.
-theme-tokyo-night = []
-# Both: Living Tokyo in the Tokyo Night themes it was drawn in.
-living-tokyo = ["face-living-tokyo", "theme-tokyo-night"]

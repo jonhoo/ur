@@ -41,6 +41,7 @@ use crate::gb::{self, Incoming, LineBuffer};
 use crate::gesture::{Gesture, Touch};
 use crate::script;
 use crate::shot;
+use crate::themes::Theme as _;
 use crate::ui::{App, PhoneEvent, Status, ThemeChoice, Unpaired};
 use crate::ui_loop::{Stored, UiLoop};
 use crate::{InputEvent, activity, debug, storage, time};
@@ -490,11 +491,11 @@ impl DevKit {
         {
             return Ok(palette.clone());
         }
-        // `Theme` is `repr(C)`: the name (`&str`: pointer, length), then
+        // `Palette` is `repr(C)`: the name (`&str`: pointer, length), then
         // a big-endian RGB565 colour per role, then the half-toned roles
         // (a bit each). (The dev kit's firmware has to be this tree's, for
         // the count to match.)
-        let count = crate::theme::Color::COUNT;
+        let count = crate::palette::Color::COUNT;
         let bytes = self.read_bytes(theme + 8, 2 * count + 2)?;
         let palette = Palette {
             colors: bytes[..2 * count]
@@ -646,7 +647,7 @@ struct Frame {
 }
 
 /// A theme's colours (RGB565, a role each), and which roles it half-tones
-/// (a bit each; see `Theme::columns`).
+/// (a bit each; see `Palette::columns`).
 #[derive(Clone)]
 struct Palette {
     colors: Vec<u16>,
@@ -737,7 +738,7 @@ impl<'a> Follower<'a> {
             devkit,
             rig,
             app: boot_app(&boot),
-            canvas: Box::new(Canvas::new()),
+            canvas: Box::new(Canvas::new(crate::themes::get(false, 0).palette())),
             display: Display,
             replayed: 0,
             connected: false,
@@ -768,6 +769,7 @@ impl<'a> Follower<'a> {
         if let Some(peer) = &mut self.rig.peer {
             peer.poll();
             peer.received.clear();
+            peer.heard.clear();
         }
         eprintln!(
             "following the dev kit from its boot at {} s of uptime",
@@ -902,11 +904,7 @@ impl<'a> Follower<'a> {
             }
             "wait" => {
                 let wait = script::duration(arg(0).ok_or("wait: needs a duration")?)?;
-                let until = StdInstant::now() + StdDuration::from_micros(wait.as_micros());
-                while let Some(left) = until.checked_duration_since(StdInstant::now()) {
-                    std::thread::sleep(left.min(POLL));
-                    self.catch_up(None)?;
-                }
+                self.idle(StdDuration::from_micros(wait.as_micros()))?;
             }
             "compare" => {
                 let name = arg(0).ok_or("compare: needs a NAME")?;
@@ -1014,6 +1012,31 @@ impl<'a> Follower<'a> {
             }
         }
         Ok(Vec::new())
+    }
+
+    /// Follows the dev kit for `wait`, doing nothing else.
+    fn idle(&mut self, wait: StdDuration) -> Result<(), String> {
+        let until = StdInstant::now() + wait;
+        while let Some(left) = until.checked_duration_since(StdInstant::now()) {
+            std::thread::sleep(left.min(POLL));
+            self.catch_up(None)?;
+        }
+        Ok(())
+    }
+
+    /// The lines the dev kit sent this computer since the last call (or
+    /// since it booted), as it sent them, for a model of Gadgetbridge to
+    /// hear (`gadgetbridge.rs`). Gives the dev kit `settle` first, for the
+    /// answers to what was just sent to come over the air. These are
+    /// every line, not only the UI's that `compare` checks: the time, the
+    /// battery, an activity fetch's.
+    pub fn take_heard(&mut self, settle: StdDuration) -> Result<Vec<Vec<u8>>, String> {
+        self.idle(settle)?;
+        let Some(peer) = &mut self.rig.peer else {
+            return Ok(Vec::new());
+        };
+        peer.poll();
+        Ok(std::mem::take(&mut peer.heard))
     }
 
     /// `gb LINE`: sends the line, as Gadgetbridge would, from this
@@ -1271,9 +1294,17 @@ impl<'a> Follower<'a> {
     fn replay(&mut self, event: &Event) -> Result<(), String> {
         let at = Instant::from_ticks(event.at);
         time::set(at);
-        self.app.set_connected(self.connected);
-        self.app.set_air(self.air);
-        self.app.set_daytime(self.daytime);
+        // The flags as the dev kit's last pass left them, as its UI had
+        // them for this event. Not for a change of them, though: the pass
+        // that logged it applied the new flags straight away, and the old
+        // ones applied first could undo what came before (a disconnect
+        // forgets the music, so a `musicstate` handled just before the
+        // pass that saw the phone connect would be lost here only).
+        if event.kind != kind::STATE {
+            self.app.set_connected(self.connected);
+            self.app.set_air(self.air);
+            self.app.set_daytime(self.daytime);
+        }
         let input = match event.kind {
             kind::TICK => {
                 let second =
@@ -1608,7 +1639,7 @@ impl<'a> Follower<'a> {
                 address: pass.bthome_address,
             }),
         };
-        self.canvas.set_theme(self.app.theme());
+        self.canvas.set_palette(self.app.palette());
         self.app.render(&mut self.canvas, &status, now);
         let Self {
             canvas, display, ..
@@ -1774,8 +1805,8 @@ fn side_by_side(path: &Path, sim: &[u16], devkit: &[u16]) -> Result<(), String> 
 /// The UI the dev kit's boot made, from the settings it exported.
 fn boot_app(boot: &compare::Boot) -> App {
     let themes = ThemeChoice {
-        light: boot.theme_light,
-        dark: boot.theme_dark,
+        day: boot.theme_light,
+        night: boot.theme_dark,
     };
     let mut app = App::new(
         Instant::from_ticks(boot.at),
@@ -1783,6 +1814,7 @@ fn boot_app(boot: &compare::Boot) -> App {
         alarm::Settings::from_bytes(boot.alarms),
     );
     app.phone_alarms = alarm::Phone::from_bytes(boot.phone_alarms);
+    app.force = crate::ui::Force::from_byte(boot.force);
     app.brightness = brightness::Setting::from_byte(boot.brightness);
     app.buttons = crate::buttons::Setting::from_byte(boot.buttons);
     app.grid_layout = crate::buttons::Layout::from_byte(boot.grid);
@@ -1802,6 +1834,7 @@ pub(crate) fn booted_from(image: Vec<u8>) -> Result<App, String> {
 pub(crate) struct Persisted {
     light_theme: u8,
     dark_theme: u8,
+    force: u8,
     brightness: u8,
     buttons: u8,
     grid: u8,
@@ -1812,8 +1845,9 @@ pub(crate) struct Persisted {
 impl Persisted {
     pub(crate) fn of(app: &App) -> Self {
         Self {
-            light_theme: app.themes.light,
-            dark_theme: app.themes.dark,
+            light_theme: app.themes.day,
+            dark_theme: app.themes.night,
+            force: app.force.to_byte(),
             brightness: app.brightness.to_byte(),
             buttons: app.buttons.to_byte(),
             grid: app.grid_layout.to_byte(),
@@ -1834,6 +1868,7 @@ impl Persisted {
         };
         field("light theme", &got.light_theme, &expected.light_theme);
         field("dark theme", &got.dark_theme, &expected.dark_theme);
+        field("force", &got.force, &expected.force);
         field("brightness", &got.brightness, &expected.brightness);
         field("buttons", &got.buttons, &expected.buttons);
         field("grid", &got.grid, &expected.grid);
@@ -2026,13 +2061,20 @@ impl Rig {
     /// notification twice, which reads as the dev kit sending everything
     /// twice.
     fn connect(&mut self) -> Result<(), String> {
+        let mut heard = Vec::new();
         if let Some(peer) = &mut self.peer {
             peer.poll();
             if peer.dropped {
+                // What it heard before the link went down is still to be
+                // taken (see `Follower::take_heard`).
+                heard = std::mem::take(&mut peer.heard);
                 self.peer = None;
             }
         }
-        self.peer()?.request("connect").map(drop)
+        let peer = self.peer()?;
+        heard.append(&mut peer.heard);
+        peer.heard = heard;
+        peer.request("connect").map(drop)
     }
 
     /// Back as a run starts: no thermometer, no phone connected.
@@ -2055,6 +2097,11 @@ struct Peer {
     partial: Vec<u8>,
     /// The lines the watch sent, since they were last taken.
     received: Vec<String>,
+    /// The same lines, as the watch sent them (its bytes, line feed and
+    /// all), for a model of Gadgetbridge to hear (see
+    /// [`Follower::take_heard`]): apart, as `received` is taken at every
+    /// `compare`, and lossily (as UTF-8).
+    heard: Vec<Vec<u8>>,
     /// The link went down since the process started (see
     /// `scripts/gb-peer.py`'s `dropped`).
     dropped: bool,
@@ -2090,6 +2137,7 @@ impl Peer {
             lines,
             partial: Vec::new(),
             received: Vec::new(),
+            heard: Vec::new(),
             dropped: false,
             asked: None,
         })
@@ -2155,10 +2203,11 @@ impl Peer {
                 .filter_map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok());
             self.partial.extend(bytes);
             while let Some(end) = self.partial.iter().position(|&b| b == b'\n') {
-                let line: Vec<u8> = self.partial.drain(..=end).collect();
-                let line = String::from_utf8_lossy(&line).trim_end().to_owned();
+                let bytes: Vec<u8> = self.partial.drain(..=end).collect();
+                let line = String::from_utf8_lossy(&bytes).trim_end().to_owned();
                 eprintln!("  phone: got {line}");
                 self.received.push(line);
+                self.heard.push(bytes);
             }
         } else if line == "dropped" {
             eprintln!("  phone: the dev kit disconnected");
