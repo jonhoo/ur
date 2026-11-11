@@ -93,8 +93,7 @@ FORCE is a choice), which the simulator's tests check (see
   the 80×80 canvas; and its colours by folke's [Tokyo Night] for Neovim.
   Its other screens are Retro's, copied.
 - Contributed by: Matteo Bigoi ([crisidev](https://github.com/crisidev)).
-- Maintained by: for the contributor to confirm (Matteo Bigoi, if he
-  will look after it).
+- Maintained by: Matteo Bigoi ([crisidev](https://github.com/crisidev)).
 
 [`WatchFaceLivingTokyo.cpp`]: https://github.com/crisidev/InfiniTime/blob/87341ef4d0b4276e83a3ce8c1d1540fe21adb9d2/src/displayapp/screens/WatchFaceLivingTokyo.cpp
 [Tokyo Night]: https://github.com/folke/tokyonight.nvim

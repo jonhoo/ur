@@ -29,8 +29,7 @@ yellow, and deep and REM sleep its cyan and magenta.
 
 - Inspired by: [Tokyo Night], folke's colour scheme for Neovim.
 - Contributed by: Matteo Bigoi ([crisidev](https://github.com/crisidev)).
-- Maintained by: for the contributor to confirm (Matteo Bigoi, if he
-  will look after them).
+- Maintained by: Matteo Bigoi ([crisidev](https://github.com/crisidev)).
 
 [Tokyo Night]: https://github.com/folke/tokyonight.nvim
 
