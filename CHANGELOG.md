@@ -19,7 +19,10 @@ missing below were test builds for the dev kit.
 
 ### Changed
 
+- Send the night to Gadgetbridge, and so to Health Connect, about 47 minutes after you get up rather than 2¼ hours after you last slept: once you've been awake for 46 minutes, walked or had the watch off your wrist for at least two minutes of them, and aren't lying still, the watch settles the night's sleep and stages for good and the next fetch gets it, and the morning's steps after it go as they come (but for a stillness of 10 minutes or more, which may yet be a nap); a lie-in after that is a sleep of its own, and a morning without walking or taking the watch off, or a short nap, waits the 2¼ hours as before (introduced in 0.10.0) (79c00c8, f41606c)
+- Ring smart wake early only at a stir after ten minutes of light sleep (none of them deep or REM, nor all still), or at its time if that doesn't come, rather than at the first stir in its window, which came within its first few minutes on most mornings, from deep and REM sleep as often as light: against a Garmin over four nights, rings before the time from deep sleep went from 11% to almost none, and from REM from 37% to 21%, while about a quarter of mornings now ring at the time (a7f266e)
 - Split the Settings screen in two, side by side where it was, before Info: LOOK, with THEME, FORCE and LIGHT, and BUTTON GRID, with BUTTONS, GRID and BTHOME KEY; three rows at most each, so every row is taller, about 7 mm rather than 5, for a fingertip, and none moves as another comes or goes (98b856d)
+- Try longer heart-rate measurements on a busy wrist in the logging build (`ur-logging`), an experiment whose field logs will say whether more time reads more, and how well: on half the awake rounds of background measurements, one that has no reading after its usual 30 s on a busy wrist goes on to 90 s, and one that reads early on a busy wrist keeps recording to 90 s (its first reading counts as before; what it reads after is only logged, never shown or sent), each when the hourly LED budget can spare it and still leave the next try its share; and every awake measurement now logs the accelerometer's samples alongside, to tell a walk's rhythm from the pulse. That's ~0.4 MB more log a day, so the log holds ~22 hours rather than ~26 (fetch it daily), and ~2 mAh a day (up to ~8 if the light draws more than its datasheet says). The `ur` build is unchanged (5b59a9a)
 
 ### Deprecated
 
@@ -28,6 +31,16 @@ missing below were test builds for the dev kit.
 ### Fixed
 
 ### Security
+
+## [0.10.1] - 2026-11-11
+
+A patch for 0.10.0's **media gestures**: a tap, then a hold, skips to the
+next track again, and a firm first tap no longer wakes a glance.
+
+### Fixed
+
+- Skip to the next track again with a tap, then a hold (introduced in 0.10.0), rather than playing or pausing, often twice with two buzzes: the touch controller sometimes reports a finger held still as lifted and pressed again about 10 ms later, which cut the hold into short taps that never reached 0.6 s, two of which made a double tap; a press that quick, near where the finger lifted, now continues the same touch, which also keeps a button grid hold from sending a second hold partway through (8fe4930)
+- Keep a glance on screen through a double tap or a tap, then a hold, whose first tap is firm (introduced in 0.10.0): such a first tap used to wake the screen at once, the gesture then acting on the clock face it woke to, so whether a glance stayed depended on how firmly it was tapped; now only a heavy tap (75 ms or more) wakes a glance at once, and a firm but lighter tap on its own wakes it half a second later, once no second touch can follow (e6b36c8)
 
 ## [0.10.0] - 2026-11-11
 
@@ -338,7 +351,8 @@ built up to that point, below.
 - Install under the PineTime's stock MCUBoot bootloader, and receive firmware updates over Bluetooth (fdc5a70)
 - Keep a field log in flash in the logging build, and fetch it over Bluetooth (57f261f)
 
-[Unreleased]: https://github.com/jonhoo/ur/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/jonhoo/ur/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/jonhoo/ur/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/jonhoo/ur/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jonhoo/ur/compare/v0.8.17...v0.9.0
 [0.8.17]: https://github.com/jonhoo/ur/compare/v0.8.16...v0.8.17

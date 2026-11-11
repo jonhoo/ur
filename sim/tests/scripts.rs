@@ -5,8 +5,9 @@
 //!
 //! `tour.txt` checks itself with `expect`; this checks that it, the
 //! README's screenshots, Gadgetbridge's lines, and each built-in theme's
-//! screenshots (`src/themes/<name>/shots.txt`) run to the end, and that
-//! every screenshot they take is the approved one, pixel for pixel.
+//! README screenshots (`src/themes/<name>/shots.txt`) run to the end, and
+//! that every screenshot they take is the approved one, pixel for pixel;
+//! and that each theme's every screen (`screens.txt`) draws.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -219,22 +220,47 @@ fn the_readme_screenshots() {
     });
 }
 
-/// Each theme's own screenshots, for its README (`src/themes/<name>/`:
-/// `shots.txt` takes them, into `shots/`), for every theme this build
-/// has: just the default with `--no-default-features`, every one with
-/// `--features themes-all` (as CI runs them too). Each is listed in
+// ==============================================================================
+// Each theme's screens
+// ==============================================================================
+//
+// A theme has two scripts. `shots.txt` takes its README's few
+// screenshots (each scheme's clock face, Last night and LOOK a side,
+// the dim look's glance and notification), the only ones approved and
+// committed: every approval of a PNG is another Git LFS object. And
+// `screens.txt` goes round every screen, a side each, which is only run:
+// to see that no screen of any theme panics, fails a debug assertion
+// (Retro's text that must fit, say) or breaks its script. It compares no
+// pixels: the tour checks most of Retro's screens', and a PR's
+// screenshot comment shows any README shot that changed.
+
+/// The built-in themes' directories' names, under `src/themes/`: just the
+/// default with `--no-default-features`, every one with `--features
+/// themes-all` (as CI runs them too).
+fn built_themes() -> Vec<&'static str> {
+    // `theme-<name>`, in `src/themes/<name>/` (see the build script).
+    let built: Vec<_> = env!("UR_THEME_FEATURES")
+        .split(',')
+        .filter(|f| !f.is_empty())
+        .map(|f| f.trim_start_matches("theme-"))
+        .collect();
+    assert!(!built.is_empty(), "no theme built in");
+    built
+}
+
+fn themes_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/themes")
+}
+
+/// Each theme's README screenshots (`src/themes/<name>/`: `shots.txt`
+/// takes them, into `shots/`), against the approved ones, and that its
+/// README shows each, and no other. Each theme is listed in
 /// `src/themes/README.md`, too.
 #[test]
 fn every_themes_screenshots() {
-    // `theme-<name>`, in `src/themes/<name>/` (see the build script).
-    let built = env!("UR_THEME_FEATURES")
-        .split(',')
-        .filter(|f| !f.is_empty());
-    let themes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/themes");
+    let themes = themes_dir();
     let index = std::fs::read_to_string(themes.join("README.md")).expect("src/themes/README.md");
-    let mut checked = 0;
-    for feature in built {
-        let name = feature.trim_start_matches("theme-");
+    for name in built_themes() {
         for file in ["shots.txt", "README.md"] {
             assert!(
                 themes.join(name).join(file).is_file(),
@@ -251,9 +277,49 @@ fn every_themes_screenshots() {
             approved: &format!("../src/themes/{name}/shots"),
             unchecked: &[],
         });
-        checked += 1;
+
+        // What's approved is what the README shows: a shot it doesn't is
+        // an LFS object for nothing, and one it shows that isn't there,
+        // a broken image. (Checked or approved above, `shots/` is what
+        // the script drew.)
+        let readme = std::fs::read_to_string(themes.join(name).join("README.md"))
+            .expect("the theme's README reads");
+        let shown: BTreeSet<String> = readme
+            .split("shots/")
+            .skip(1)
+            .filter_map(|after| {
+                let end = after.find(".png")?;
+                let file = &after[..end];
+                file.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
+                    .then(|| format!("{file}.png"))
+            })
+            .collect();
+        let approved = pngs(&themes.join(name).join("shots"));
+        let unshown: Vec<_> = approved.difference(&shown).collect();
+        let missing: Vec<_> = shown.difference(&approved).collect();
+        assert!(
+            unshown.is_empty() && missing.is_empty(),
+            "src/themes/{name}/README.md must show exactly shots.txt's screenshots: \
+             not shown: {unshown:?}; shown, but not taken: {missing:?}"
+        );
     }
-    assert!(checked > 0, "no theme built in");
+}
+
+/// Each theme's every screen (`src/themes/<name>/screens.txt`), run to the
+/// end, without writing a screenshot (`--no-shots`): a smoke test.
+#[test]
+fn every_themes_screens() {
+    let themes = themes_dir();
+    for name in built_themes() {
+        let script = format!("../src/themes/{name}/screens.txt");
+        assert!(
+            themes.join(name).join("screens.txt").is_file(),
+            "src/themes/{name}/ has no screens.txt, to go round every screen"
+        );
+        let (ok, log) = run(&script, &["--no-shots"]);
+        assert!(ok, "{script}:\n{log}");
+    }
 }
 
 #[test]
@@ -400,10 +466,12 @@ fn a_hold_held_on_is_a_long_press() {
 }
 
 /// With a phone connected, a double tap plays or pauses without waking
-/// the screen (or ending a glance) only if its first tap is light. A
-/// deliberate first tap wakes it at once, and the second plays or pauses
-/// on the clock face, as it would have with the screen off. The awake
-/// clock face's own double tap plays or pauses too.
+/// the screen (or ending a glance) only if its first tap is light: with
+/// the screen off, under 40 ms, and on a glance, under 75 ms (a 60 ms
+/// one, deliberate from off, leaves the glance be). A heavier first tap
+/// wakes it at once, and the second plays or pauses on the clock face,
+/// as it would have with the screen off. The awake clock face's own
+/// double tap plays or pauses too.
 #[test]
 fn a_double_tap_plays_or_pauses_without_waking_only_after_a_light_first_tap() {
     let dir = out("double-tap");
@@ -417,7 +485,9 @@ fn a_double_tap_plays_or_pauses_without_waking_only_after_a_light_first_tap() {
          expect screen-on\nexpect not dim\nexpect buzzing\n\
          wait 11s\nglance\ntap 40,40 30\nwait 150ms\ntap 40,40 50\nexpect dim\n\
          expect buzzing\n\
-         wait 6s\nglance\ntap 40,40 60\nexpect not dim\nwait 150ms\ntap 40,40 50\n\
+         wait 6s\nglance\ntap 40,40 60\nexpect dim\nwait 150ms\ntap 40,40 50\n\
+         expect dim\nexpect buzzing\n\
+         wait 6s\nglance\ntap 40,40 90\nexpect not dim\nwait 150ms\ntap 40,40 50\n\
          expect not dim\nexpect buzzing\n\
          echo clock\nwait 2s\ntap 40,40 50\nwait 150ms\ntap 40,40 50\nexpect buzzing\n",
     )
@@ -425,10 +495,70 @@ fn a_double_tap_plays_or_pauses_without_waking_only_after_a_light_first_tap() {
     let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
     assert!(ok, "{log}");
     let (gestures, clock) = log.split_once("] clock\n").expect("the script runs on");
-    assert_eq!(gestures.matches(r#""n":"playpause""#).count(), 4, "{log}");
+    assert_eq!(gestures.matches(r#""n":"playpause""#).count(), 5, "{log}");
     assert_eq!(gestures.matches(r#""n":"next""#).count(), 0, "{log}");
     assert_eq!(clock.matches(r#""n":"playpause""#).count(), 1, "{log}");
     assert_eq!(clock.matches(r#""n":"next""#).count(), 0, "{log}");
+}
+
+/// On a glance, with a phone connected, a deliberate tap that isn't
+/// heavy (40–74 ms) waits to wake the screen until no second touch can
+/// follow it: alone, it wakes the screen half a second on, even past the
+/// glance's own time (the tick that would end the glance, aligned here
+/// by `until`, comes while it waits); with a second tap, it plays or pauses, and with a
+/// hold, skips, the glance staying either way. A lighter tap alone does
+/// nothing, and a heavy one wakes the screen at once.
+#[test]
+fn a_deliberate_tap_on_a_glance_wakes_the_screen_unless_a_second_follows() {
+    let dir = out("glance-wait");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "time 2026-11-09 12:00:00 +01:00\nconnect\nwait 11s\n\
+         echo alone\nglance\ntap 40,40 60\nexpect dim\nwait 450ms\nexpect dim\n\
+         wait 100ms\nexpect not dim\nexpect screen-on\nwait 11s\nexpect not screen-on\n\
+         until 12:01\necho late\nglance\nwait 4500ms\ntap 40,40 60\nwait 350ms\n\
+         expect dim\nwait 350ms\nexpect not dim\nexpect screen-on\nwait 11s\n\
+         echo double\nglance\ntap 40,40 60\nwait 150ms\ntap 40,40 50\nexpect dim\n\
+         expect buzzing\nwait 1s\nexpect dim\nwait 6s\nexpect not screen-on\n\
+         echo hold\nglance\ntap 40,40 60\nwait 300ms\npress 40,40\nwait 610ms\n\
+         expect buzzing\nexpect dim\nlift\nwait 1s\nexpect dim\nwait 6s\n\
+         expect not screen-on\n\
+         echo light\nglance\ntap 40,40 30\nwait 1s\nexpect dim\nwait 5s\n\
+         expect not screen-on\n\
+         echo heavy\nglance\ntap 40,40 90\nexpect not dim\nexpect screen-on\n\
+         echo done\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+    // Each section, from its echo to the next one's: how many times it
+    // played or paused, and skipped.
+    let sections = [
+        ("alone", 0, 0),
+        ("late", 0, 0),
+        ("double", 1, 0),
+        ("hold", 0, 1),
+        ("light", 0, 0),
+        ("heavy", 0, 0),
+        ("done", 0, 0),
+    ];
+    let at = |name: &str| {
+        log.find(&format!("] {name}\n"))
+            .unwrap_or_else(|| panic!("{name} echoes: {log}"))
+    };
+    for pair in sections.windows(2) {
+        let [(name, playpause, next), (following, _, _)] = pair else {
+            unreachable!("windows of two")
+        };
+        let section = &log[at(name)..at(following)];
+        let counts = (
+            section.matches(r#""n":"playpause""#).count(),
+            section.matches(r#""n":"next""#).count(),
+        );
+        assert_eq!(counts, (*playpause, *next), "{name}: {log}");
+    }
 }
 
 /// With a phone connected, a tap, then a touch held (a tap-and-hold),
@@ -438,8 +568,9 @@ fn a_double_tap_plays_or_pauses_without_waking_only_after_a_light_first_tap() {
 /// sides, a quarter from the top and bottom. A long press on its own
 /// there does nothing, not even a buzz, and leaves the screen (and a
 /// glance) as it was; nor does a pair with either touch nearer the edge,
-/// where an arm folded over the watch rests. After a deliberate tap, which
-/// wakes the screen, the hold skips on the clock face (unless the tap was
+/// where an arm folded over the watch rests. On a glance, a first tap of
+/// 60 ms, deliberate from off, still leaves the glance be. After a tap
+/// that wakes the screen, the hold skips on the clock face (unless the tap was
 /// at the edge of a glance: then it stands alone, and a tap-and-hold of
 /// the clock face's own skips). On the awake clock face, a tap-and-hold
 /// skips too, anywhere, bar for 3 s after a touch woke it (maybe the
@@ -469,7 +600,7 @@ fn a_tap_and_hold_skips_and_a_lone_long_press_does_nothing() {
          tap 40,40 30\nlong 40,61\nexpect not buzzing\ntap 40,40 30\nlong 40,19\n\
          expect not buzzing\ntap 40,4 30\nlong 40,40\nexpect not buzzing\n\
          expect not screen-on\n\
-         echo glance\nglance\ntap 40,40 30\npress 40,40\nwait 610ms\nexpect buzzing\n\
+         echo glance\nglance\ntap 40,40 60\npress 40,40\nwait 610ms\nexpect buzzing\n\
          expect dim\nlift\nwait 10s\n\
          echo glance-edge\nglance\nlong 40,40\nexpect not buzzing\n\
          tap 40,40 30\nlong 64,40\nexpect not buzzing\ntap 40,40 30\nlong 40,12\n\
@@ -508,6 +639,60 @@ fn a_tap_and_hold_skips_and_a_lone_long_press_does_nothing() {
         // after it stands alone; a tap-and-hold of the clock face's own,
         // in the middle, then skips.
         ("glance-tap-woke-edge", 0, 1),
+        ("done", 0, 0),
+    ];
+    let at = |name: &str| {
+        log.find(&format!("] {name}\n"))
+            .unwrap_or_else(|| panic!("{name} echoes: {log}"))
+    };
+    for pair in sections.windows(2) {
+        let [(name, playpause, next), (following, _, _)] = pair else {
+            unreachable!("windows of two")
+        };
+        let section = &log[at(name)..at(following)];
+        let counts = (
+            section.matches(r#""n":"playpause""#).count(),
+            section.matches(r#""n":"next""#).count(),
+        );
+        assert_eq!(counts, (*playpause, *next), "{name}: {log}");
+    }
+}
+
+/// The touch controller reports a finger held still as lifted, and back
+/// ~10 ms later (`blip`): the sealed watch's did it every few hundred ms
+/// of a hold, so a tap-and-hold was a tap and several short touches, two
+/// of which made a double tap, playing or pausing instead of skipping.
+/// Through the touch task's recogniser, with the screen off: a blipped
+/// hold after a tap skips, once, and a double tap whose taps blipped
+/// still plays or pauses, once. A blip too late to be the finger coming
+/// back (see `gesture::REJOIN_WINDOW`) ends the touch, as before: here,
+/// a hold cut into taps too short to wake the screen, which play or
+/// pause in pairs.
+#[test]
+fn a_hold_the_touch_controller_blips_still_skips() {
+    let dir = out("blipped-hold");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "connect\nwait 11s\nexpect not screen-on\n\
+         echo hold\npress 40,40\nwait 30ms\nlift\nwait 100ms\npress 40,40\n\
+         wait 200ms\nblip\nwait 150ms\nblip 20\nwait 250ms\nexpect buzzing\n\
+         blip\nwait 1s\nlift\nexpect not screen-on\nwait 2s\n\
+         echo double\npress 40,40\nwait 10ms\nblip\nwait 10ms\nlift\nwait 100ms\n\
+         press 40,40\nwait 10ms\nblip\nwait 10ms\nlift\nwait 50ms\nexpect buzzing\n\
+         expect not screen-on\nwait 2s\n\
+         echo late\npress 40,40\nwait 10ms\nblip 40\nwait 10ms\nblip 40\n\
+         wait 10ms\nblip 40\nwait 10ms\nlift\nwait 2s\necho done\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+    // In each section, how many times it played or paused, and skipped.
+    let sections = [
+        ("hold", 0, 1),
+        ("double", 1, 0),
+        ("late", 2, 0),
         ("done", 0, 0),
     ];
     let at = |name: &str| {
@@ -593,6 +778,40 @@ fn a_smart_alarm_rings_after_another_rings_out_over_its_time() {
         .map(|(at, buzz)| if buzz == "alarm" { at } else { buzz })
         .collect();
     assert_eq!(buzzes, ["06:58:00", "07:01:00", "stop"], "{log}");
+}
+
+/// Smart wake rings early only at a stir in light sleep: a stir out of
+/// other sleep in its window doesn't ring it; one once the sleep is light
+/// does. And with no stir in light sleep, it rings at its time.
+#[test]
+fn smart_wake_waits_for_light_sleep() {
+    let dir = out("smart-light");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "# A Monday.\n\
+         time 2026-11-09 06:00 +01:00\nsmart on 07:00 09:00\nasleep on\n\
+         # A stir in the window, from deep or REM sleep.\n\
+         until 06:35\nmovement 500\nwait 5s\nexpect not buzzing\nmovement 30\n\
+         # Light sleep, but still.\n\
+         light-sleep on\nwait 2m\nexpect not buzzing\n\
+         # A stir now rings it.\n\
+         movement 500\nwait 2s\nexpect buzzing\nbutton\nmovement 30\n\
+         # The next morning: stirring, never light, until its time.\n\
+         light-sleep off\nuntil 06:30\nmovement 500\nuntil 06:59\nexpect not buzzing\n\
+         until 07:00\nwait 2s\nexpect buzzing\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+    let rang: Vec<&str> = log
+        .lines()
+        .filter_map(|line| line.split_once("] buzz: "))
+        .filter(|(_, buzz)| *buzz == "alarm")
+        .map(|(at, _)| &at[at.len() - 8..at.len() - 3])
+        .collect();
+    assert_eq!(rang, ["06:37", "07:00"], "{log}");
 }
 
 /// The phone setting the clock back while a timer runs (host fuzzing's
@@ -949,6 +1168,78 @@ fn activity_fetch_holds_back_the_night() {
             r#"{{"t":"act","ts":{},"stp":50,"mov":0,"hrm":0}}"#,
             (t0 + 299) * 1000
         )
+    );
+}
+
+/// A night let go once the wearer is clearly up (`sleep_hold::settles`):
+/// up from 06:30, walking at 06:35 and 06:40, a fetch at 07:10 still gets
+/// nothing from the night's start on; one at 07:20, past the 46 minutes
+/// awake that settle it at 07:16 (but well before 06:30 plus 135
+/// minutes), gets the whole night and the steps after it.
+#[test]
+fn activity_fetch_sends_the_night_once_up() {
+    let dir = out("activity-fetch-up");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    // 2026-11-11 06:31 local, 05:31 UTC.
+    let t0: i64 = 1_794_202_260;
+    let text = format!(
+        "gb setTime({t0});E.setTimeZone(1.0)\n\
+         last-night 23:00 06:30\n\
+         wait 4m\nsteps 30\nwait 5m\nsteps 30\n\
+         wait 30m\n\
+         echo early fetch\n\
+         gb GB({{\"t\":\"actfetch\",\"ts\":{evening}}})\n\
+         wait 10m\n\
+         echo settled fetch\n\
+         gb GB({{\"t\":\"actfetch\",\"ts\":{early}}})\n",
+        // 21:50 the evening before, as in `activity_fetch_holds_back_the_night`.
+        evening = (t0 - 8 * 60 * 60 - 41 * 60) * 1000,
+        // As Gadgetbridge saves it: a minute before its last fetch.
+        early = (t0 + 38 * 60) * 1000,
+    );
+    std::fs::write(&script, text).expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+    let samples = |part: &str| {
+        part.lines()
+            .filter_map(|line| line.split_once("to the phone: "))
+            .map(|(_, json)| json.to_owned())
+            .filter(|json| json.starts_with(r#"{"t":"act","#))
+            .collect::<Vec<_>>()
+    };
+    let (first, second) = log.split_once("settled fetch").expect("both fetch");
+    // 23:00 local, 22:00 UTC; settled at 07:16 local, the last minute
+    // asleep (06:29) 47 minutes back.
+    let night = (t0 - 7 * 60 * 60 - 31 * 60) / 60;
+    let settled = (t0 + 45 * 60) / 60;
+    assert!(
+        first.contains(&format!("holding back from UTC minute {night}")),
+        "{log}"
+    );
+    assert_eq!(samples(first), Vec::<String>::new(), "{log}");
+    assert!(
+        second.contains(&format!("settled before UTC minute {settled}")),
+        "{log}"
+    );
+    assert!(!second.contains("holding back"), "{log}");
+    let second = samples(second);
+    // 23:00 to 06:30 in 5-minute buckets, then the morning's with steps
+    // (the simulator's history has no others): 06:35 and 06:40.
+    assert_eq!(second.len(), 92, "{log}");
+    assert!(
+        second[..90]
+            .iter()
+            .all(|s| s.ends_with(r#""act":"LIGHT_SLEEP"}"#)),
+        "{log}"
+    );
+    assert_eq!(
+        second[90],
+        format!(
+            r#"{{"t":"act","ts":{},"stp":30,"mov":0,"hrm":0}}"#,
+            (night * 60 + 7 * 60 * 60 + 35 * 60 + 299) * 1000
+        ),
+        "{log}"
     );
 }
 

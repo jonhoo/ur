@@ -835,6 +835,13 @@ impl<'a> Follower<'a> {
                 self.inject(16, x as u8, y as u8, 0)?;
             }
             "lift" => self.inject(17, 0, 0, 0)?,
+            "blip" => {
+                let ms = arg(0).map_or(Ok(10), |ms| {
+                    ms.parse::<u8>()
+                        .map_err(|_| format!("blip: {ms} ms? (at most 255 on a dev kit)"))
+                })?;
+                self.inject(24, ms, 0, 0)?;
+            }
             "notify" => {
                 let n: u8 =
                     arg(0).map_or(Ok(0), |n| n.parse().map_err(|_| format!("notify {n}?")))?;
@@ -1313,7 +1320,10 @@ impl<'a> Follower<'a> {
                 self.app.check_alarms(
                     at,
                     second,
-                    flag(compare::flag::STIRRING),
+                    alarm::Wearer {
+                        stirring: flag(compare::flag::STIRRING),
+                        light: flag(compare::flag::LIGHT),
+                    },
                     flag(compare::flag::ASLEEP),
                 );
                 let ticked = Instant::from_ticks(event.ticked);

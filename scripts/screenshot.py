@@ -48,11 +48,20 @@ it's down already), and `lift` lifts it: these go through the touch
 task as the touch controller's reports would, so a long press is
 recognised while the finger is held (e.g. `--input press:40,40 lift`
 holds it for --wait seconds), and moving it (`press:40,40 press:40,70
-lift --wait 0.3`) makes a swipe.
+lift --wait 0.3`) makes a swipe. `blip` (or `blip:MS`) has the touch
+controller report that finger lifted, and back where it was 10 (or MS)
+ms later, as it does mid-hold: within 30 ms, the same touch.
 `asleep:1,0` makes the watch take the wearer as asleep from then on, as
 if sleep tracking said so (the quiet night starts a second later), and
 `asleep:0,0` leaves it to sleep tracking again (the night then ends as
 on waking, or at once with `button:2,0`).
+`movement:N` makes the watch take the wrist's movement as N from then on
+(`movement:0` for the measured again), e.g. `movement:1000` for a busy
+wrist's heart rate session on a dev kit lying still on a desk (above 150
+is busy, above 1500 too vigorous to measure through). `skin:1,0` makes
+the heart rate sensor take whatever it's on as skin from then on, so a
+dev kit's sessions run their whole length rather than ending at once as
+"not on a wrist" (`skin:0,0` to stop).
 
 `--theme` renders the frame in another theme's colours (e.g. HANDHELD, for
 the day look at night): the canvas holds colour roles, not colours.
@@ -99,6 +108,9 @@ KINDS = {
     "doubletap": 19,
     "find": 20,
     "asleep": 21,
+    "movement": 22,
+    "skin": 23,
+    "blip": 24,
 }
 
 
@@ -139,10 +151,14 @@ def inject(elf: Path, step: str) -> None:
     name, _, where = step.partition(":")
     if name not in KINDS:
         sys.exit(f"unknown input {step!r}")
-    if name in ("battery", "steps"):
-        # Millivolts or steps, little endian, in the two coordinate bytes.
+    if name in ("battery", "steps", "movement"):
+        # Millivolts, steps or movement, little endian, in the two
+        # coordinate bytes.
         value = int(where)
         x, y, rest = value & 0xFF, value >> 8, []
+    elif name == "blip":
+        # How long the finger is away, in milliseconds (0: 10), in x.
+        x, y, rest = int(where) if where else 0, 0, []
     else:
         x, y, *rest = (int(v) for v in where.split(",")) if where else (40, 40)
     # A tap's duration, in milliseconds (0: the default), in the top byte.

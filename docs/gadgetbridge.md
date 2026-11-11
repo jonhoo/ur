@@ -72,12 +72,26 @@ sample, but the watch revises a night's stages until a while after you
 wake (sleep is only recognised after the fact, and stages need the hour
 after). So the watch holds a sleep back until its stages are settled:
 
-- **During the night, and for 2¼ hours after you last slept**, a fetch
-  gets everything up to when you fell asleep, and nothing after it, steps
+- **During the night, and until you're clearly up**, a fetch gets
+  everything up to when you fell asleep, and nothing after it, steps
   included. Waking in the night and falling asleep again keeps the whole
   night waiting.
-- **The first fetch after that** gets the whole night at once, and has
-  Gadgetbridge pass it on to Health Connect straight away.
+- **Clearly up** is awake for 46 minutes since you last slept, with at
+  least two minutes in them of walking or with the watch off your wrist
+  (taken off to charge, say), and not lying still just then. The watch
+  then settles the night for good (it logs `sleep: up, so settled
+  before minute …`): a lie-in after that is a sleep of its own. If you
+  neither walk nor take the watch off, or the sleep was a nap of under
+  45 minutes or so, it waits 2¼ hours after you last slept, as it used
+  to. (A watch off your wrist in the night only counts if it's off for
+  longer than 45 minutes, when the watch splits the night in two
+  anyway.)
+- **The first fetch after that** gets the whole night at once, and those
+  46 minutes, and has Gadgetbridge pass them on to Health Connect
+  straight away. Your steps after them go as they come, unless you sit
+  or lie still for 10 minutes or more (a nap, perhaps): until 2¼ hours
+  after you last slept, fetches stop at such a stillness for up to
+  90 minutes, while the watch may still decide you napped in it.
 - **A nap** is held back the same way.
 - **Sitting still** holds back the last 20-odd minutes (stepless anyway),
   in case you're falling asleep: once you have, the watch dates the sleep
@@ -85,7 +99,7 @@ after). So the watch holds a sleep back until its stages are settled:
 - **Nothing is held back for more than 18 hours**, should the watch think
   you never woke (lying still off the wrist before it notices).
 
-So a night reaches Gadgetbridge about 2¼ hours after you get up, at the
+So a night reaches Gadgetbridge about 47 minutes after you get up, at the
 first fetch after that. The watch keeps what it holds back across being
 switched off and updated, but a crash in the night loses it.
 

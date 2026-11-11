@@ -54,7 +54,13 @@ static UR_CANVAS: AtomicPtr<Canvas> = AtomicPtr::new(core::ptr::null_mut());
 /// Gadgetbridge's "find my watch" line, through the phone's parser, on
 /// unless `x` is 0 (see [`FIND_LINES`]), 21 the wearer asleep from now
 /// on if `x` is 1, or as sleep tracking says again if 0 (see
-/// [`asleep_forced`])) and the next two the canvas x and y.
+/// [`asleep_forced`]), 22 the wrist's movement as `x` + 256 × `y` from
+/// now on instead of the measured (0 for the measured again; see
+/// [`movement`]), 23 the heart rate sensor taking whatever it's on as skin
+/// from now on if `x` is 1, or not if 0 (see [`skin_forced`]), 24 the
+/// simulated finger (of 16) reported lifted, and down again where it was
+/// `x` ms later (10 if 0), as the touch controller does mid-hold (see
+/// [`crate::gesture::REJOIN_WINDOW`])) and the next two the canvas x and y.
 /// Cleared once taken.
 #[cfg(feature = "debug-input")]
 #[unsafe(no_mangle)]
@@ -88,6 +94,41 @@ static BATTERY_MV: AtomicU16 = AtomicU16::new(0);
 /// Whether input 21 said the wearer is asleep.
 #[cfg(feature = "debug-input")]
 static ASLEEP: AtomicBool = AtomicBool::new(false);
+
+/// Whether input 23 said the heart rate sensor is on skin.
+#[cfg(feature = "debug-input")]
+static SKIN: AtomicBool = AtomicBool::new(false);
+
+/// Whether the heart rate sensor should take whatever it's on as skin
+/// (input 23): a dev kit's lies on a desk, or in the air, so its sessions
+/// end within seconds as "not on a wrist". With this, they stay at their
+/// starting level and run their whole length (a desk has no pulse to
+/// read), as a session on a wrist that won't read does: to check what a
+/// long session does (the logging build's longer arm, with input 22's
+/// busy wrist; see `heart_schedule::Length`).
+#[cfg(feature = "debug-input")]
+pub fn skin_forced() -> bool {
+    SKIN.load(Ordering::Relaxed)
+}
+
+/// The movement injected by input 22, or 0.
+#[cfg(feature = "debug-input")]
+static MOVEMENT: AtomicU16 = AtomicU16::new(0);
+
+/// The wrist's movement over the last poll to use instead of the measured
+/// (in `activity::movement`'s units), if one was injected (input 22): for
+/// a busy wrist's heart rate session on a dev kit, which lies still on a
+/// desk (above `heart::CALM`, 150, is busy; above `heart::MOTION_LIMIT`,
+/// 1500, vetoes every window and counts towards the schedule's
+/// `MOVED_POLLS`). Only what goes by that measure sees it: the per-minute
+/// history, and so sleep tracking, keep the measured.
+#[cfg(feature = "debug-input")]
+pub fn movement() -> Option<u16> {
+    match MOVEMENT.load(Ordering::Relaxed) {
+        0 => None,
+        movement => Some(movement),
+    }
+}
 
 /// Whether to take the wearer as asleep, whatever sleep tracking says
 /// (see `activity::asleep`): input 21, for the quiet night on a dev kit,
@@ -195,6 +236,15 @@ pub async fn input_task() {
                 UR_INPUT.store(u32::from_le_bytes([2, x, y, 0]), Ordering::Relaxed);
                 Gesture::Tap
             }
+            // Quicker than two inputs over the probe could be.
+            24 => {
+                if let Some(at) = finger {
+                    crate::touch::SIMULATED.signal(None);
+                    Timer::after_millis(if x == 0 { 10 } else { x.into() }).await;
+                    crate::touch::SIMULATED.signal(Some(at));
+                }
+                continue;
+            }
             16 | 17 => {
                 let scale = crate::canvas::SCALE as u8;
                 finger = (kind == 16).then(|| (x.min(79) * scale, y.min(79) * scale));
@@ -229,6 +279,17 @@ pub async fn input_task() {
             21 => {
                 defmt::warn!("debug: asleep {}", x == 1);
                 ASLEEP.store(x == 1, Ordering::Relaxed);
+                continue;
+            }
+            23 => {
+                defmt::warn!("debug: skin {}", x == 1);
+                SKIN.store(x == 1, Ordering::Relaxed);
+                continue;
+            }
+            22 => {
+                let movement = u16::from_le_bytes([x, y]);
+                defmt::warn!("debug: movement {} from now on (0: measured)", movement);
+                MOVEMENT.store(movement, Ordering::Relaxed);
                 continue;
             }
             15 => {

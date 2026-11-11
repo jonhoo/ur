@@ -15,7 +15,11 @@
 //!   for another 15 s with a brighter LED, once or twice
 //!   ([`heart_schedule::brighter`]); awake, every other
 //!   round of tries (a scheduled session and its retries) starts with a
-//!   brighter LED (see [`Arm`]); both are an experiment, and
+//!   brighter LED (see [`Arm`]); both are an experiment, as is, in the
+//!   logging build only, a busy wrist's session going on to 90 s on half
+//!   the awake rounds (see `heart_schedule::Length`, with the
+//!   accelerometer's samples logged through every awake session, see
+//!   `trace_accel`), and
 //! - while the clock face is showing (see
 //!   [`crate::heart_reading::set_watching`]), continuously,
 //!   since then someone is looking at the number, and
@@ -33,6 +37,11 @@
 //! and the per-minute history Gadgetbridge fetches, through
 //! [`crate::heart_reading`].
 
+#[cfg(feature = "field-log")]
+use core::cell::Cell;
+#[cfg(feature = "field-log")]
+use core::sync::atomic::{AtomicU8, Ordering};
+
 use defmt::{debug, info, trace, warn};
 use embassy_futures::select::select;
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
@@ -44,8 +53,14 @@ use crate::activity;
 use crate::heart_reading::{WAKE, publish, watching};
 pub use crate::heart_reading::{wake, worn};
 use crate::heart_schedule::{self, Arm, Before, Outcome, Schedule, Start};
+#[cfg(feature = "field-log")]
+use crate::heart_schedule::{Length, Lengths};
 use crate::i2c::Device;
 use crate::ppg::{Consensus, Conversions, Ppg, Rejection};
+#[cfg(feature = "field-log")]
+use embassy_sync::blocking_mutex::Mutex;
+#[cfg(feature = "field-log")]
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 // ==============================================================================
 // Scheduling
@@ -479,6 +494,9 @@ pub async fn heart_task(i2c: Device) {
     // until it works (see `retry_off`): a failed try is cheap, at most a
     // timed-out transfer and a controller reset.
     let mut maybe_lit = false;
+    // Which awake rounds go on longer on a busy wrist (see `Length`).
+    #[cfg(feature = "field-log")]
+    let mut lengths = Lengths::new();
 
     loop {
         // Wait until a background session is due and the wrist is still,
@@ -549,11 +567,25 @@ pub async fn heart_task(i2c: Device) {
             }
             Arm::Dim | Arm::Asleep => base,
         };
+        // And, in the logging build, its length (see `Length`).
+        let field = FieldArms {
+            #[cfg(feature = "field-log")]
+            length: match due {
+                Some(_) => lengths.of(round, arm),
+                None => Length::Usual,
+            },
+        };
         if let Some(why) = due {
             let (awake, asleep) = schedule.resting();
+            #[cfg(not(feature = "field-log"))]
             info!(
                 "heart: due ({}); budget {} s, resting {}/{}; round {} {} drive {}",
                 why, budget, awake, asleep, round, arm, drive
+            );
+            #[cfg(feature = "field-log")]
+            info!(
+                "heart: due ({}); budget {} s, resting {}/{}; round {} {} drive {} {}",
+                why, budget, awake, asleep, round, arm, drive, field.length
             );
         }
         // Movement from here on counts towards the next session.
@@ -565,6 +597,12 @@ pub async fn heart_task(i2c: Device) {
 
         let started = Instant::now();
         crate::power::count(crate::power::Count::HeartSessions);
+        // Asleep, the wrist's movement is turning over, which isn't what
+        // the experiment is after: no samples (~50 KB of log a night).
+        #[cfg(feature = "field-log")]
+        if !asleep {
+            ACCEL.store(ACCEL_SESSION, Ordering::Relaxed);
+        }
         // What the session spends of the budget, at 12.5 mA's rate (see
         // `heart_schedule::budget_seconds`): a brighter phase costs more.
         let mut spent = 0;
@@ -577,8 +615,30 @@ pub async fn heart_task(i2c: Device) {
             background.then_some(budget),
             &mut spent,
             &mut peak,
+            field,
         )
         .await;
+        // The accelerometer's next samples still overlap the session.
+        #[cfg(feature = "field-log")]
+        if !asleep {
+            ACCEL.store(ACCEL_TAIL, Ordering::Relaxed);
+        }
+        // A session that recorded on after its reading (see `Recording`)
+        // ended, as far as anything but the budget goes, at that reading,
+        // at the level and light it had then, however it ended.
+        #[cfg(feature = "field-log")]
+        let recorded = RECORDING.lock(Cell::take);
+        #[cfg(feature = "field-log")]
+        let ended_early = recorded.is_some() && !matches!(outcome, Ok(Ended::Measured(_)));
+        #[cfg(feature = "field-log")]
+        let outcome = match recorded {
+            Some(reading) => {
+                level = usize::from(reading.level);
+                peak = reading.skin_peak;
+                Ok(Ended::Measured(reading.bpm))
+            }
+            None => outcome,
+        };
         if matches!(outcome, Ok(Ended::Measured(_))) {
             good_level = level;
         }
@@ -609,6 +669,14 @@ pub async fn heart_task(i2c: Device) {
             Ok(Ended::TooBright) => info!("heart: too much light (after {} s)", led_seconds),
             Err(()) => warn!("heart: lost the sensor mid-session"),
         }
+        #[cfg(feature = "field-log")]
+        if recorded.is_some() {
+            info!(
+                "heart: recorded to {} s{=str}",
+                led_seconds,
+                if ended_early { "; ended early" } else { "" }
+            );
+        }
         // A pulse means skin. No light coming back, or ambient light
         // flooding in, means the sensor isn't against anything. Light
         // without a pulse proves nothing: a desk reflects the LED too (the
@@ -623,7 +691,16 @@ pub async fn heart_task(i2c: Device) {
         // At the lowest drive, `spent` is `led_seconds`, short of the
         // moments around the LED's switching on and off.
         let spent = spent.max(led_seconds);
+        #[cfg(not(feature = "field-log"))]
         schedule.ended(uptime(), spent, outcome, background, before);
+        #[cfg(feature = "field-log")]
+        schedule.ended(
+            recorded.map_or_else(uptime, |reading| reading.at),
+            spent,
+            outcome,
+            background,
+            before,
+        );
 
         // A session only ends while someone's watching if there's no
         // signal to be had (off the wrist, typically); don't start another
@@ -712,6 +789,52 @@ impl Drop for LedMeter<'_> {
     }
 }
 
+/// The experiments a session is in that only the logging build runs: its
+/// `heart_schedule::Length`. Empty in the plain build, whose sessions are
+/// as they were.
+#[derive(Clone, Copy)]
+struct FieldArms {
+    #[cfg(feature = "field-log")]
+    length: Length,
+}
+
+/// The logging build's longer arm: a session that read before 90 s on a
+/// busy wrist, recording on (see `heart_schedule::Length`). Its reading,
+/// the uptime it came at, and the level and skin peak the session had
+/// then: as far as anything but the budget goes, the session ended there.
+#[cfg(feature = "field-log")]
+#[derive(Clone, Copy)]
+struct Recording {
+    bpm: u8,
+    at: u32,
+    level: u8,
+    skin_peak: u32,
+}
+
+/// The session recording on, if it is; taken when it ends. A static
+/// rather than the heart task's state, as `read` needs it too, and so the
+/// plain build's task is as it was.
+#[cfg(feature = "field-log")]
+static RECORDING: Mutex<CriticalSectionRawMutex, Cell<Option<Recording>>> =
+    Mutex::new(Cell::new(None));
+
+/// How long a session on the longer arm may run: 90 s.
+#[cfg(feature = "field-log")]
+const LONGER_LIMIT: Duration =
+    Duration::from_secs(SESSION_LIMIT.as_secs() + heart_schedule::LONGER_FOR as u64);
+
+/// Whether a session that has read is recording on, until `limit` (see
+/// [`Recording`]); never in the plain build.
+fn recording_on(elapsed: Duration, limit: Duration) -> bool {
+    #[cfg(feature = "field-log")]
+    return elapsed < limit && RECORDING.lock(Cell::get).is_some();
+    #[cfg(not(feature = "field-log"))]
+    {
+        let _ = (elapsed, limit);
+        false
+    }
+}
+
 /// Why a session ended.
 enum Ended {
     /// We have a reading (and nobody's watching for more): the last, in
@@ -733,7 +856,10 @@ enum Ended {
 /// [`Arm`]). `budget`: the schedule's LED budget at the start, if the
 /// schedule started it (rather than someone looking at the clock face).
 /// `spent` is set to what the session cost the budget, and `skin_peak` to
-/// its last second's peak, scaled to 12.5 mA ×1.
+/// its last second's peak, scaled to 12.5 mA ×1. `field`: the logging
+/// build's experiments it's in (see [`FieldArms`]).
+// The eighth argument is that, empty in the plain build.
+#[allow(clippy::too_many_arguments)]
 async fn measure(
     hrs: &mut Hrs3300,
     level: &mut usize,
@@ -742,6 +868,7 @@ async fn measure(
     budget: Option<u32>,
     spent: &mut u32,
     skin_peak: &mut u32,
+    #[cfg_attr(not(feature = "field-log"), allow(unused_variables))] field: FieldArms,
 ) -> Result<Ended, ()> {
     // The LED's drive: `LEVELS[*level]`'s, unless the session started
     // brighter or a phase of it has gone brighter (see
@@ -822,7 +949,72 @@ async fn measure(
             second.clear();
             continue;
         }
-        let ended = if watching() {
+        // The logging build's longer arm (see `Length`): a background
+        // session that has run its usual time on a busy wrist without a
+        // reading goes on, at the same drive, with its windows and their
+        // consensus carrying on, if the budget covers that and still keeps
+        // a session's reserve. Busy, not calm throughout, so never where a
+        // brighter phase could start instead; and none after it, so the
+        // arms differ in the extra minute alone.
+        #[cfg(feature = "field-log")]
+        if field.length == Length::Longer
+            && limit == SESSION_LIMIT
+            && elapsed >= limit
+            && measured.is_none()
+            && !watching()
+            && !heart_schedule::calm_throughout(busy, checks)
+            && let Some(budget) = budget
+            && heart_schedule::longer(
+                drive,
+                heart_schedule::LONGER_FOR,
+                budget.saturating_sub(led.spent()),
+            )
+        {
+            info!(
+                "heart: longer after {} s (busy {}/{})",
+                elapsed.as_secs(),
+                busy,
+                checks
+            );
+            limit = LONGER_LIMIT;
+            steps = heart_schedule::BRIGHTER_STEPS;
+        }
+        // And one that read before then, on a busy wrist, records on to
+        // 90 s (see `Recording`), on the same terms.
+        #[cfg(feature = "field-log")]
+        if field.length == Length::Longer
+            && let Some(bpm) = measured
+            && RECORDING.lock(Cell::get).is_none()
+            && (limit == SESSION_LIMIT || limit == LONGER_LIMIT)
+            && elapsed < LONGER_LIMIT
+            && !watching()
+            && !heart_schedule::calm_throughout(busy, checks)
+            && let Some(budget) = budget
+            && heart_schedule::longer(
+                drive,
+                (LONGER_LIMIT - elapsed).as_secs() as u32 + 1,
+                budget.saturating_sub(led.spent()),
+            )
+        {
+            info!(
+                "heart: recording on after a reading at {} s (busy {}/{})",
+                elapsed.as_secs(),
+                busy,
+                checks
+            );
+            RECORDING.lock(|recording| {
+                recording.set(Some(Recording {
+                    bpm,
+                    at: uptime(),
+                    level: *level as u8,
+                    skin_peak: *skin_peak,
+                }))
+            });
+            limit = LONGER_LIMIT;
+            steps = heart_schedule::BRIGHTER_STEPS;
+        }
+        // Someone's watching, or a session that read is recording on.
+        let ended = if watching() || recording_on(elapsed, limit) {
             None
         } else if let Some(bpm) = measured {
             Some(Ended::Measured(bpm))
@@ -868,6 +1060,19 @@ async fn measure(
                 busy = busy.saturating_add(1);
             }
             let mean = sum / count;
+            // A dev kit can be told that its desk is skin (see
+            // `debug::skin_forced`): as far as the level goes, the light
+            // is then always enough, neither stepping up nor ending the
+            // session for no skin. Half the ADC's range is above `WEAK`
+            // and every no-skin threshold, scaled to any drive at the
+            // gains it applies to (at most 6,540, at ×4 and 40 mA). (The
+            // saturation check stays: it goes by the peak.)
+            #[cfg(feature = "debug-input")]
+            let mean = if crate::debug::skin_forced() {
+                mean.max(FULL_SCALE / 2)
+            } else {
+                mean
+            };
             debug!(
                 "heart: level {}, mean {}, peak {}, ambient {}, period {} µs",
                 at(*level, drive),
@@ -1000,6 +1205,20 @@ fn read(
     level: Level,
     conversions: &Conversions,
 ) -> u8 {
+    // Recording on after the session's reading: logged, never published,
+    // and the session's reading stays its first (see `Recording`). Unless
+    // someone has looked at the clock face meanwhile, who's shown it.
+    #[cfg(feature = "field-log")]
+    if !watching()
+        && let Some(first) = RECORDING.lock(Cell::get)
+    {
+        debug!(
+            "heart: record-only {} BPM after {} s",
+            bpm,
+            started.elapsed().as_secs()
+        );
+        return first.bpm;
+    }
     if measured.is_none() {
         info!(
             "heart: {} BPM after {} s (level {}, conversion period {} µs)",
@@ -1013,4 +1232,68 @@ fn read(
     }
     publish(bpm);
     bpm
+}
+
+// ==============================================================================
+// The accelerometer through each session (the logging build)
+// ==============================================================================
+
+/// Whether the accelerometer's samples are wanted in the log: not between
+/// sessions, through a session, or once more after one (whose last
+/// samples are only read then).
+#[cfg(feature = "field-log")]
+static ACCEL: AtomicU8 = AtomicU8::new(ACCEL_IDLE);
+#[cfg(feature = "field-log")]
+const ACCEL_IDLE: u8 = 0;
+#[cfg(feature = "field-log")]
+const ACCEL_SESSION: u8 = 1;
+#[cfg(feature = "field-log")]
+const ACCEL_TAIL: u8 = 2;
+
+/// Logs the accelerometer's samples from one of `activity`'s polls (every
+/// 2 s), if they overlap an awake heart rate session: for replaying the PPG
+/// against the wrist's movement offline, to find a busy wrist's rhythm
+/// (steps, the arm's swing) and test rejecting what the PPG reads at it
+/// (see [`Length`] for why). Here rather than in `activity` for the log's
+/// `ur::heart=trace` (`scripts/release.sh`); only in the logging build.
+///
+/// `accel: [x, y, z, x, y, z, …]`: the poll's samples, oldest first, at
+/// the FIFO's rate (nominally 12.5 Hz, but by the accelerometer's own
+/// clock: 11.94 Hz on the sealed watch, so a replay should measure it from
+/// the lines' times and lengths), the newest a moment before the line's
+/// time, in 1/64 g (±2 g, as the chip measures, is ±128, so each axis
+/// fits a byte), the same as a capture build's `activity: samples` (see
+/// `activity::trace_samples`). That's ~93 bytes a poll (rzCOBS-encoded,
+/// measured on a capture log's samples), ~46 a second of session, against
+/// the ~100 of the PPG's own lines; ~24 samples a line, or fewer when a
+/// read failed or the FIFO was flushed. The movement's fundamental (a
+/// walk's ~1.8 Hz of steps, or ~0.9 Hz of arm swing) is well below the
+/// ~6 Hz this resolves.
+#[cfg(feature = "field-log")]
+pub fn trace_accel(frames: &[[i16; 3]]) {
+    let wanted = match ACCEL.load(Ordering::Relaxed) {
+        ACCEL_IDLE => false,
+        ACCEL_SESSION => true,
+        // The poll after a session: the last it overlaps. (Unless a new
+        // session has started meanwhile, which stays wanted.)
+        _ => {
+            let _ = ACCEL.compare_exchange(
+                ACCEL_TAIL,
+                ACCEL_IDLE,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+            true
+        }
+    };
+    if !wanted {
+        return;
+    }
+    // A FIFO read holds at most 36 frames (`activity::drain_fifo`).
+    let mut raw = [0i8; 3 * 36];
+    let samples = frames.len().min(36);
+    for (out, &axis) in raw.iter_mut().zip(frames[..samples].as_flattened()) {
+        *out = (axis >> 4).clamp(-128, 127) as i8;
+    }
+    trace!("accel: {=[?]}", raw[..3 * samples]);
 }

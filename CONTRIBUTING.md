@@ -215,7 +215,10 @@ its scripts' screenshots are committed, and `cargo test` in `sim/` fails
 if any screen changes: it names each screenshot that differs (and
 writes an image of it before, after, and where, in magenta), each that's
 new, and each no longer taken. Those of `readme-screenshots.txt` are the
-README's own, in `docs/screenshots/`. When a change to what the watch
+README's own, in `docs/screenshots/`; each theme's, in
+`src/themes/<name>/shots/`, are its README's few (`shots.txt`), while
+its every screen (`screens.txt`) is only drawn, as a smoke test, and
+never approved or committed. When a change to what the watch
 shows is meant, look at those images, then approve the new screenshots
 and commit them with it:
 
@@ -649,6 +652,22 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   pulse/DC that doesn't change says the extra light only lit the same
   tissue. A desk day has a few dozen sessions on each arm, so look at a
   couple of days before deciding.
+
+  Logging builds after 0.10.0 run a field experiment for a busy wrist
+  (`heart_schedule::Length`), which the plain build doesn't: an awake
+  background session that reaches 30 s on a busy wrist without a reading
+  goes on to 90 s on half the rounds (crossed with the LED's arms; its
+  `heart: due` line ends `Longer` or `Usual`, and `heart: longer after 30
+  s` marks one going on). On the same rounds, one that reads early on a
+  busy wrist records on to 90 s: `heart: recording on after a reading`,
+  its later readings only logged (`heart: record-only N BPM`, at `debug`,
+  never published, nor counted by the schedule), then `heart: recorded
+  to N s`. And every awake session logs the accelerometer's samples
+  (`accel: [x, y, z, …]`, every 2 s, ~12 Hz, in 1/64 g), to find a walk's
+  cadence and the readings that lock onto it. That's ~46 bytes a second
+  of session, plus the longer sessions' own lines: ~0.4 MB a day more,
+  so the 2 MB holds ~22 hours, not ~26. Fetch the log at least once a
+  day.
 
 Steps come from the accelerometer's own counter, which a log can't
 replay. A capture build, `UR_ACTIVITY_LOG=trace scripts/release.sh --pre

@@ -109,14 +109,16 @@ tap                               # snooze
 - **Inputs:** `button` (`button 2`: a double press), `glance`, `tap`,
   `long`, `up`/`down`/`left`/`right` (at `X,Y`), `double X,Y` (two taps
   0.1 s apart, quicker than two over a dev kit's probe), or a finger:
-  `press X,Y` (again to move it), `lift`.
+  `press X,Y` (again to move it), `lift`, and `blip [MS]`: the touch
+  controller reporting it lifted, and back MS ms later (10 if left out),
+  as it does mid-hold (within 30 ms, the same touch).
 - **The phone:** `gb` (see below), `connect`, `time`, `location`,
   `notify`, `call`, `music`, `find`, `phone-alarms`, `nav`, `unpaired`,
   `passkey`, `update`, `slots full` (both Bluetooth connections in use,
   so the button grid's presses can't go to Home Assistant).
 - **The wearer and the watch:** `battery` (and charging; the percentage
   starts over from it, as after a reboot), `steps`,
-  `heart`, `temperature`, `asleep`, `movement`, `last-night`,
+  `heart`, `temperature`, `asleep`, `movement`, `light-sleep`, `last-night`,
   `demo-day` (a day of steps and heart rates so far), `alarm`, `smart`,
   `timer`, `theme`, and `version` (what the Info screen says the
   version is: the tour and each theme's screenshots pin one, so a
@@ -160,9 +162,12 @@ each script still draws exactly those: `tour.txt`'s in `shots/tour/`,
 `gadgetbridge.txt`'s in `shots/gadgetbridge/`, and
 `readme-screenshots.txt`'s in `../docs/screenshots/`, the README's own,
 so it can't go stale, and each theme's (`../src/themes/<name>/shots.txt`,
-into `shots/` beside it, for the theme's README), for the themes the
-build has: the default one, unless it's built with others
-(`--features themes-all` checks them all). A test fails on a screenshot that differs (with
+into `shots/` beside it, the few the theme's README shows, which must
+be exactly those), for the themes the build has: the default one,
+unless it's built with others (`--features themes-all` checks them
+all). Each theme's `screens.txt`, which goes round every screen, is
+only run (`--no-shots`, writing nothing): it must get to the end,
+without a panic or a failed debug assertion. A test fails on a screenshot that differs (with
 how many pixels, and an image of it before, after, and where it differs,
 in magenta, side by side), on a new one, and on one no longer taken.
 
@@ -464,7 +469,9 @@ log lines go to it, and files download.
 - **Sensors.** Steps, movement, heart rate, sleep and temperature are
   whatever you set: the accelerometer and heart rate processing, the
   sleep classifier, and the wrist-turn detector don't run (`asleep on`
-  says the classifier decided; `glance` that the wrist turned; `heart`
+  says the classifier decided; `light-sleep on` that the stages of the
+  last ten minutes were light, for smart wake; `glance` that the wrist
+  turned; `heart`
   that a measurement just finished, so it shows for half an hour, and
   the watch is taken to be worn). `temperature` is the die's, read once a
   minute as on the watch, and shown as the firmware would: as an

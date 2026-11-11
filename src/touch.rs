@@ -34,9 +34,18 @@
 //! the finger in (a cold one, that day). And one 9.2 s hold "lifted",
 //! then pressed again 20 ms later, with no lift the wearer remembers: a
 //! second `hold_press` mid-hold. So [`HOLD_LIMIT`] wasn't reached there.
+//! The sealed watch does it far more often, and quicker: one day's field
+//! log (0.10.0-rc.6) has holds chopped into pieces of 67–552 ms, each
+//! pressed again 7–12 ms after it lifted, exactly where it was; earlier
+//! ones (0.9.0's pre-releases, 0.10.0-rc.1 and rc.2, before
+//! `LongPressTime` was raised) have the same. So a press that soon after
+//! a lift, on the same spot, continues the touch (see
+//! [`crate::gesture::REJOIN_WINDOW`]), which every lift waits for before
+//! it's reported. Each touch's line in the log says how many times it was
+//! rejoined, if at all, and the first rejoined lift's report is logged as
+//! it happens, to see what the chip says then.
 //! TODO: find what drops the finger (`AutoReset`, 0xFB? the baseline's
-//! update rate?), and whether a re-press that soon after a lift, on the
-//! same spot, should continue the hold rather than start another.
+//! update rate?).
 //!
 //! [`LONG_PRESS`]: crate::gesture::LONG_PRESS
 //! [`HOLD_LIMIT`]: crate::gesture::HOLD_LIMIT
@@ -94,6 +103,10 @@ const PANEL: i32 = 240;
 /// While a finger is down, the chip reports every ~10 ms. If reports stop for
 /// this long without a lift report, assume we missed the lift.
 const LIFT_TIMEOUT: Duration = Duration::from_millis(250);
+/// How soon after a lift we saw the chip's extra lift report comes, at
+/// most (it's ~10 ms; see the lift arms in [`touch_task`]): a lift with no
+/// press later than this is worth logging.
+const LIFT_ECHO: Duration = Duration::from_millis(50);
 /// Far longer than any transfer here takes (a 6-byte report at 250 kHz:
 /// ~0.4 ms). Every transfer has one: one that never ended once held the
 /// shared bus, and with it the accelerometer and heart-rate sensor, for as
@@ -167,17 +180,27 @@ pub async fn touch_task(
     let mut configured = configure(&mut i2c).await;
 
     let mut tracking: Option<Tracking> = None;
+    // What the touch's latest lift report said (see `report_bits` below).
+    let mut lift_bits: Option<[u8; 3]> = None;
+    // When a touch we tracked last lifted, to tell the chip's echo of
+    // that lift from a lift whose press we never saw.
+    let mut last_lift: Option<Instant> = None;
     loop {
         // Every change to `tracking` comes back here before awaiting.
         DOWN.store(tracking.is_some(), Ordering::Relaxed);
         // While a touch is in progress, also wake up when it's been held
         // long enough to be a long press, and if reports dry up, so a
-        // missed lift can't leave us stuck mid-touch. Whether it's the
-        // long press that's due.
+        // missed lift can't leave us stuck mid-touch; or once it's lifted,
+        // when it's over, the finger not having come back. Whether it's
+        // the long press that's due.
         let deadline = async {
             let Some(touch) = &tracking else {
                 return core::future::pending().await;
             };
+            if let Some(over) = touch.over_at() {
+                Timer::at(over).await;
+                return false;
+            }
             let lift = Instant::now() + LIFT_TIMEOUT;
             match touch.long_press_at() {
                 Some(at) if at < lift => {
@@ -210,6 +233,8 @@ pub async fn touch_task(
                 crate::INPUT.send(crate::InputEvent::Touch(event)).await;
                 continue;
             }
+            // Over: reports dried up, or a lift wasn't followed by the
+            // finger coming back.
             Either3::Second(false) => {
                 let touch = tracking.take().expect("only times out while tracking");
                 finish(&touch).await;
@@ -220,10 +245,20 @@ pub async fn touch_task(
                     // Whatever was in progress is moot: the screen is off.
                     // Bar a long press's release, as its lift won't be
                     // seen now: a button grid hold held past the screen's
-                    // timeout ends here, rather than never.
-                    if let Some(release) = tracking.take().and_then(|touch| touch.lost()) {
-                        info!("touch: cut short after {}ms", release.held_ms);
-                        crate::INPUT.send(crate::InputEvent::Touch(release)).await;
+                    // timeout ends here, rather than never. One whose
+                    // finger lifted, waiting to see if it comes back, is
+                    // over as of its lift.
+                    match tracking.take() {
+                        Some(touch) if touch.over_at().is_some() => {
+                            finish(&touch).await;
+                        }
+                        Some(touch) => {
+                            if let Some(release) = touch.lost() {
+                                info!("touch: cut short after {}ms", release.held_ms);
+                                crate::INPUT.send(crate::InputEvent::Touch(release)).await;
+                            }
+                        }
+                        None => {}
                     }
                     sleep(&mut i2c, &mut reset).await;
                     // Nothing to do until it's time to wake.
@@ -238,10 +273,21 @@ pub async fn touch_task(
             }
         };
 
+        // What the report said, for the log, should this be a lift the
+        // finger comes back from: the chip's gesture, the finger count,
+        // and the event (the top two bits of the X high byte). `None` for
+        // a simulated finger.
+        let report_bits: Option<[u8; 3]>;
         let (lifted, x, y) = match simulated {
-            Some(Some((x, y))) => (false, i32::from(x), i32::from(y)),
+            Some(Some((x, y))) => {
+                report_bits = None;
+                (false, i32::from(x), i32::from(y))
+            }
             // Lifted where it last was.
-            Some(None) => (true, 0, 0),
+            Some(None) => {
+                report_bits = None;
+                (true, 0, 0)
+            }
             None => {
                 if !configured {
                     configured = configure(&mut i2c).await;
@@ -258,7 +304,8 @@ pub async fn touch_task(
                     crate::i2c::reset_controller().await;
                     continue;
                 }
-                let [_chip_gesture, fingers, x_hi, x_lo, y_hi, y_lo] = report;
+                let [chip_gesture, fingers, x_hi, x_lo, y_hi, y_lo] = report;
+                report_bits = Some([chip_gesture, fingers, x_hi >> 6]);
                 // Top two bits of the X high byte: 0 = press, 1 = lift, 2 =
                 // contact.
                 let lifted = x_hi >> 6 == 1 || fingers == 0;
@@ -278,26 +325,56 @@ pub async fn touch_task(
         }
 
         match (&mut tracking, lifted) {
-            (None, false) if !on_panel => {}
+            (_, false) if !on_panel => {}
             (None, false) => tracking = Some(Tracking::new((x, y))),
             (Some(touch), false) => {
-                if on_panel {
-                    touch.moved_to((x, y));
+                let rejoined = touch.rejoined;
+                if !touch.pressed((x, y)) {
+                    // Lifted, and this is someone else's: that touch is
+                    // over, and this one starts.
+                    finish(touch).await;
+                    tracking = Some(Tracking::new((x, y)));
+                } else if rejoined == 0 && touch.rejoined == 1 {
+                    // The finger came back, for the first time this
+                    // touch: what did the chip's lift say? (Once a touch,
+                    // to keep the log small.)
+                    info!(
+                        "touch: rejoined a lift of [gesture, fingers, event] {}",
+                        lift_bits
+                    );
                 }
             }
-            (Some(touch), true) => {
+            // Lifted. The touch is over once the finger hasn't come back
+            // for a while (the deadline above), or another touch starts.
+            (Some(touch), true) if touch.over_at().is_none() => {
                 // Lift reports usually carry the final position, but some
                 // report (0, 0); don't let that look like a long swipe.
                 if on_panel && (x, y) != (0, 0) {
                     touch.moved_to((x, y));
                 }
-                finish(touch).await;
-                tracking = None;
+                touch.lift();
+                lift_bits = report_bits;
+                last_lift = Some(Instant::now());
             }
-            // A lift without a press we saw. The chip sends one more report
-            // ~10 ms after each lift (its own gesture detection firing);
-            // treating it as a touch produced a phantom second tap.
-            (None, true) => {}
+            // A lift after a lift, or without a press we saw. The chip
+            // sends one more report ~10 ms after a tap's lift (its own
+            // gesture detection firing, with no finger); treating it as a
+            // touch produced a phantom second tap.
+            (Some(_), true) => {}
+            // Without a press we saw, and not that echo: the chip sensed a
+            // touch whose press report we missed (a busy bus, say), or a
+            // touch too brief for one. A field log (0.10.1-rc.1) had a
+            // tap-and-hold's tap never reach the UI, mid heart session;
+            // this says, next time, whether the chip saw anything.
+            // `lifted` is the event saying lift, or no fingers.
+            (None, true) => {
+                if last_lift.is_none_or(|at| at.elapsed() > LIFT_ECHO) {
+                    info!(
+                        "touch: a lift without its press, [gesture, fingers, event] {}",
+                        report_bits
+                    );
+                }
+            }
         }
     }
 }
@@ -363,6 +440,7 @@ async fn configure(i2c: &mut Device) -> bool {
     }
 }
 
+/// The touch is over: reports it, as it was when the finger lifted.
 async fn finish(touch: &Tracking) {
     // Over, as of now: the UI may act on the event before the loop comes
     // round to say so.
@@ -371,11 +449,20 @@ async fn finish(touch: &Tracking) {
     // A long press was reported while held, and that was the touch's one
     // event, whatever the finger did after: its lift is only a release.
     if touch.held {
-        info!("touch: lifted after {}ms", event.held_ms);
+        info!(
+            "touch: lifted after {}ms, rejoined {}",
+            event.held_ms, touch.rejoined
+        );
     } else {
         info!(
-            "touch: {} from ({},{}) to ({},{}) in {}ms",
-            event.gesture, touch.start.0, touch.start.1, touch.last.0, touch.last.1, event.held_ms
+            "touch: {} from ({},{}) to ({},{}) in {}ms, rejoined {}",
+            event.gesture,
+            touch.start.0,
+            touch.start.1,
+            touch.last.0,
+            touch.last.1,
+            event.held_ms,
+            touch.rejoined
         );
     }
     crate::INPUT.send(crate::InputEvent::Touch(event)).await;

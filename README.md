@@ -32,8 +32,9 @@ on top:
   it, and stays on while you hold a finger on it.
 - **Sleep stages and smart wake:** light, deep, and REM sleep, from
   movement and heart rate. Smart wake rings in the half hour before your
-  time, as soon as you stir from light sleep, and alarms build up from
-  faint taps.
+  time when you stir after ten minutes of light sleep (not deep or REM),
+  or at your time if that doesn't come, and alarms build up from faint
+  taps.
 - **Adaptive heart rate:** every 2 to 20 minutes, more often after you
   move, while you sleep, or while it's high. Each try starts once your
   wrist is still, or two minutes on if it never is, and keeps going for
@@ -126,8 +127,9 @@ steps, heart rate and sleep on to [Health Connect] if you like (its
 "Sync after device sync"): after the first sync since the watch started,
 after the one that brings a night, then after a sync at most every 2
 hours, which ends with a short "End : Fetching sports details" message.
-A night reaches Gadgetbridge in one piece, about 2¼ hours after you get
-up, once its sleep stages are settled ([details](docs/gadgetbridge.md#what-gadgetbridge-gets)).
+A night reaches Gadgetbridge in one piece, once its sleep stages are
+settled: about 47 minutes after you get up and walk about (or take the
+watch off), or 2¼ hours if you don't ([details](docs/gadgetbridge.md#what-gadgetbridge-gets)).
 For the themes
 to follow your sun rather than Oslo's, the phone has to share its
 location: see [C03](#c03-the-watch-never-gets-a-location-from-the-phone).
@@ -176,8 +178,10 @@ bar on an edge means there's more that way.
   sides, clear of a folded arm). With the screen off or on a glance, the
   hold always in the middle, nothing at the edge, and nothing in a quiet
   night; tap lightly first to leave the screen off: a firm first tap
-  wakes it, and the second touch then does the same. Without a phone
-  connected, a double tap wakes a dark screen instead.
+  wakes it, and the second touch then does the same. On a glance, only
+  a heavy first tap (75 ms or more) wakes it at once; a lighter firm tap
+  waits half a second for a second touch, and wakes it if none comes.
+  Without a phone connected, a double tap wakes a dark screen instead.
 - **A call:** tap ANSWER or DECLINE, or press the button to silence it.
 - **A ringing alarm:** tap to snooze for 9 minutes; press the button to
   stop it.

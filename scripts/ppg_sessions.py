@@ -21,6 +21,15 @@ flags carried over. A segment after a level change within a session
 `heart_schedule::Arm`) say their arm, `arm=dim` or `arm=bright`, and
 background sessions after 0.10.0-rc.3 their round of tries, `round=N`
 (numbered from boot, wrapping at 65536), whose sessions share an arm.
+Background sessions in a logging build after 0.10.0 say their length arm
+too (see `heart_schedule::Length`), `length=longer` or `length=usual`: a
+longer one on a busy wrist may run 90 s rather than 30, which its
+segment's samples show; and a longer one that reads on a busy wrist
+records on to 90 s (`heart: recording on`, then `heart: recorded to`),
+its later readings logged as `record-only` but not counted, so its
+segment holds all 90 s, its outcome the first reading. (The same logs'
+`accel:` lines, the accelerometer's samples through each session, aren't
+extracted here.)
 
 Usage: python -I scripts/ppg_sessions.py HEALTH_CONNECT_DB DECODED_LOG OUT
 
@@ -53,8 +62,11 @@ segments, current, period, asleep, drive = [], None, 37500.0, False, 0
 # The segment a brighter phase, or a new level, carries on from, until its
 # samples start, and which of those it is.
 carried, carried_flag = None, None
-# The arm and round of the session in progress, from its `due` line.
-arm, round_ = None, None
+# The arm, round and length of the session in progress, from its `due`
+# line.
+arm, round_, length = None, None, None
+# Whether a session that read is recording on (see above).
+recording = False
 # When the last background session was due: its samples follow within a
 # second or two.
 due_at = float("-inf")
@@ -62,9 +74,10 @@ for line in log:
     up = float(line.split()[0])
     if "heart: due (" in line:
         due_at = up
-        m = re.search(r"; (?:round (\d+) )?(Asleep|Dim|Bright) drive \d", line)
+        m = re.search(r"; (?:round (\d+) )?(Asleep|Dim|Bright) drive \d(?: (Usual|Longer))?", line)
         round_ = m[1] if m else None
         arm = m[2].lower() if m and m[2] != "Asleep" else None
+        length = m[3].lower() if m and m[3] else None
     if "sleep: asleep now" in line:
         asleep = True
     elif "sleep: awake now" in line:
@@ -72,7 +85,15 @@ for line in log:
     # A reading is logged before the session's last part-second of samples
     # (0.9.1 on; earlier logs don't have it), so its segment closes at the
     # next heart line that isn't samples.
-    if current and current.get("read") and "heart: " in line and "heart: samples" not in line:
+    if "heart: recording on" in line:
+        recording = True
+    elif "heart: recorded to" in line:
+        recording = False
+        if current:
+            segments.append(current)
+        current = None
+    if current and current.get("read") and not recording and "heart: " in line \
+            and "heart: samples" not in line:
         segments.append(current)
         current = None
     if m := re.search(r"heart: level .*drive: (\d).* period ([\d.]+)", line):
@@ -83,17 +104,19 @@ for line in log:
                        "asleep": asleep, "background": up - due_at < 3,
                        "drive": drive, "brighter": False, "cont": False,
                        "arm": arm if up - due_at < 3 else None,
-                       "round": round_ if up - due_at < 3 else None}
+                       "round": round_ if up - due_at < 3 else None,
+                       "length": length if up - due_at < 3 else None}
             if carried:
                 current.update(asleep=carried["asleep"], background=carried["background"],
-                               arm=carried["arm"], round=carried["round"])
+                               arm=carried["arm"], round=carried["round"],
+                               length=carried["length"])
                 current[carried_flag] = True
                 carried = None
         current["samples"] += [int(v) for v in m[1].split(", ") if v]
         if mv := re.search(r"movement (\d+)", line):
             current["movement"].append(mv[1])
         current["period"] = period
-        if current.get("read"):
+        if current.get("read") and not recording:
             segments.append(current)
             current = None
     elif current and (m := re.search(r"INFO  heart: (\d+) BPM after", line)):
@@ -125,6 +148,8 @@ with open(sys.argv[3], "w") as out:
             flags.append(f"arm={s['arm']}")
         if s["round"]:
             flags.append(f"round={s['round']}")
+        if s["length"]:
+            flags.append(f"length={s['length']}")
         out.write(f"{s['t']:.0f} {garmin(mid)} {s['period']:.1f} {s['outcome']} "
                   + " ".join(map(str, s["samples"])) + " | " + " ".join(s["movement"])
                   + " | " + " ".join(flags) + "\n")

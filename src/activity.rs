@@ -596,6 +596,10 @@ pub struct History {
     samples: [Sample; HISTORY_MINUTES],
     /// The newest minute with a sample (UTC minutes since 1970).
     newest: Option<i64>,
+    /// The minutes whose kinds are final, as the wearer was clearly up
+    /// after them (see [`sleep_hold::settles`]): neither the classifier
+    /// nor the staging touches them again.
+    settled: sleep_hold::Settled,
 }
 
 impl History {
@@ -608,6 +612,7 @@ impl History {
                 flags: 0,
             }; HISTORY_MINUTES],
             newest: None,
+            settled: sleep_hold::Settled::NONE,
         }
     }
 
@@ -625,6 +630,9 @@ impl History {
                 "activity: clock went back; dropped {} minutes",
                 stale.end - stale.start
             );
+            // What was settled may be among the minutes dropped, or reach
+            // past the newest now: start over, holding back as usual.
+            self.settled = sleep_hold::Settled::NONE;
         }
         for m in stale {
             self.samples[Self::slot(m)] = Sample::default();
@@ -664,7 +672,8 @@ impl History {
 
     /// Re-classifies the recent past's sleep (see [`sleep`]): the last
     /// [`sleep::WINDOW`] minutes, with [`sleep::CONTEXT`] more before them
-    /// for context.
+    /// for context; but never a settled minute (see
+    /// [`sleep_hold::Settled::rewritten`]).
     fn classify_sleep(&mut self) {
         const SPAN: usize = sleep::WINDOW + sleep::CONTEXT;
         let Some(newest) = self.newest else {
@@ -682,8 +691,34 @@ impl History {
         }
         let mut kinds = [sleep::Kind::Unknown; SPAN];
         sleep::classify(before, &evidence, &mut kinds);
-        for (i, kind) in kinds.iter().enumerate().skip(sleep::CONTEXT) {
+        let rewritten = (self.settled.rewritten(newest) - start) as usize;
+        for (i, kind) in kinds.iter().enumerate().skip(rewritten) {
             self.samples[Self::slot(start + i as i64)].set_sleep(*kind);
+        }
+    }
+
+    /// Settles the night if the wearer is clearly up (see
+    /// [`sleep_hold::settles`]): everything before the newest minute.
+    /// Returns that minute and the last minute asleep, if it did.
+    fn settle(&mut self) -> Option<(i64, i64)> {
+        let newest = self.newest?;
+        let sample = |minute: i64| self.sample(newest, minute);
+        let last = sleep_hold::settles(
+            newest,
+            self.settled,
+            |minute| sample(minute).sleep(),
+            |minute| sample(minute).evidence(),
+        )?;
+        self.settled = sleep_hold::Settled::before(newest);
+        Some((newest, last))
+    }
+
+    /// Minute `minute`'s sample, if the history (up to `newest`) holds it.
+    fn sample(&self, newest: i64, minute: i64) -> Sample {
+        if minute > newest || newest - minute >= HISTORY_MINUTES as i64 {
+            Sample::default()
+        } else {
+            self.samples[Self::slot(minute)]
         }
     }
 
@@ -702,7 +737,7 @@ impl History {
     /// staged (see [`stages`]) while it's recent: while it reaches into the
     /// window that [`History::classify_sleep`] just rewrote as light. Once
     /// it's older, its sleep and its stages' inputs are final, and so are
-    /// its stages.
+    /// its stages; as they are once it's settled.
     fn last_sleep(&mut self) -> Option<Sleep> {
         let newest = self.newest?;
         let oldest = newest - HISTORY_MINUTES as i64 + 1;
@@ -710,7 +745,7 @@ impl History {
             self.samples[Self::slot(oldest + i as i64)].sleep()
         })?;
         let (start, end) = (oldest + start as i64, oldest + end as i64);
-        if newest < end + sleep::WINDOW as i64 {
+        if self.settled.restaged(newest, start, end) {
             stages::stage(self, start, end);
         }
         let stages =
@@ -778,6 +813,15 @@ pub fn asleep() -> bool {
 
 static ASLEEP: AtomicBool = AtomicBool::new(false);
 
+/// Whether the minutes before this one were light sleep, or awake (see
+/// [`stages::light`]), as of the last classification: what a smart alarm
+/// waits for to ring early.
+pub fn light() -> bool {
+    LIGHT.load(Ordering::Relaxed)
+}
+
+static LIGHT: AtomicBool = AtomicBool::new(false);
+
 /// The most recent sleep in the last 24 hours, for the UI; updated every
 /// minute.
 pub fn last_sleep() -> Option<Sleep> {
@@ -792,15 +836,10 @@ pub fn gadgetbridge_hold() -> Option<sleep_hold::Hold> {
     HISTORY.lock(|history| {
         let history = history.borrow();
         let newest = history.newest?;
-        let sample = |minute: i64| {
-            if minute > newest || newest - minute >= HISTORY_MINUTES as i64 {
-                Sample::default()
-            } else {
-                history.samples[History::slot(minute)]
-            }
-        };
+        let sample = |minute: i64| history.sample(newest, minute);
         sleep_hold::hold(
             newest,
+            history.settled,
             |minute| sample(minute).sleep(),
             |minute| sample(minute).evidence(),
         )
@@ -1255,6 +1294,9 @@ pub async fn activity_task(i2c: Device) {
                 previous = Some(now);
             }
             trace_samples(&frames, moved * 8 / u64::from(samples.max(1)));
+            // In the logging build, through each heart rate session.
+            #[cfg(feature = "field-log")]
+            crate::heart::trace_accel(&frames);
             (moved, samples)
         };
         let Ok(count) = bma.steps().await else {
@@ -1299,6 +1341,11 @@ pub async fn activity_task(i2c: Device) {
         add_steps_today(new_steps);
         // Counts (1024 per g) to Bangle.js units (8192 per g).
         let recent = (moved * 8 / u64::from(samples.max(1))).min(u64::from(u16::MAX)) as u16;
+        // A dev kit lies still on a desk: it can be told to take the wrist
+        // as moving (for the heart rate's busy sessions), as far as
+        // everything that goes by this measure is concerned.
+        #[cfg(feature = "debug-input")]
+        let recent = crate::debug::movement().unwrap_or(recent);
         MOVEMENT.store(recent, Ordering::Relaxed);
         if new_steps > 0 || recent > crate::heart::MOTION_LIMIT {
             ACTIVE_POLLS.update(Ordering::Relaxed, Ordering::Relaxed, |polls| {
@@ -1338,18 +1385,35 @@ pub async fn activity_task(i2c: Device) {
         // Once a minute: revise the recent past's sleep, its stages, and the
         // summary.
         if new_minute {
-            let (summary, changed, asleep) = HISTORY.lock(|history| {
+            let (summary, changed, asleep, light, settled) = HISTORY.lock(|history| {
                 let mut history = history.borrow_mut();
                 history.classify_sleep();
                 let summary = history.last_sleep();
+                // After the staging, so that the night is settled as
+                // staged at its last.
+                let settled = history.settle();
                 (
                     summary,
                     summary != LAST_SLEEP.lock(Cell::get),
                     history.asleep_now(),
+                    // After `last_sleep`, which stages what's new.
+                    stages::light(&*history),
+                    settled,
                 )
             });
             if asleep != ASLEEP.swap(asleep, Ordering::Relaxed) {
                 info!("sleep: {}", if asleep { "asleep now" } else { "awake now" });
+            }
+            // So a field log says why a smart alarm did or didn't ring at
+            // a stir (a few dozen lines a night).
+            if light != LIGHT.swap(light, Ordering::Relaxed) {
+                info!("sleep: {}", if light { "light" } else { "not light" });
+            }
+            if let Some((before, last)) = settled {
+                info!(
+                    "sleep: up, so settled before minute {} (last asleep {})",
+                    before, last
+                );
             }
             if changed && let Some(sleep) = summary {
                 info!(
