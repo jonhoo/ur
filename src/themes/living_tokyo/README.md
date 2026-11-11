@@ -42,49 +42,26 @@ cargo build --release --no-default-features --features theme-retro,theme-living_
 (Then package it as [AUTHORING-THEMES.md](../../../AUTHORING-THEMES.md#on-a-watch)
 says.)
 
-## The clock face
-
-| A second on | A low battery, no phone, no heart rate | Notifications unseen | Charging |
-|---|---|---|---|
-| <img src="shots/night-clock-blink.png" width="120" alt="A second on: the beacon on the antenna is out"> | <img src="shots/night-clock-low.png" width="120" alt="A low battery: the moon is an empty red outline; the struck-out Bluetooth rune after the date; no heart rate sign"> | <img src="shots/night-clock-unseen.png" width="120" alt="Notifications unseen: MAIL on the billboard, on the right-hand roof"> | <img src="shots/night-clock-charging.png" width="120" alt="Charging: the moon is green"> |
-
-## Every screen
+## Last night and LOOK
 
 | Screen | At night (LIVING TOKYO) |
 |---|---|
-| The clock face | <img src="shots/night-clock.png" width="120" alt="The clock face, at night, in LIVING TOKYO"> |
-| Today | <img src="shots/night-today.png" width="120" alt="Today, at night, in LIVING TOKYO"> |
 | Last night | <img src="shots/night-last-night.png" width="120" alt="Last night, at night, in LIVING TOKYO"> |
-| Alarms | <img src="shots/night-alarms.png" width="120" alt="Alarms, at night, in LIVING TOKYO"> |
-| The alarm editor | <img src="shots/night-editor.png" width="120" alt="The alarm editor, at night, in LIVING TOKYO"> |
-| The phone's alarms | <img src="shots/night-phone-alarms.png" width="120" alt="The phone's alarms, at night, in LIVING TOKYO"> |
-| The look's settings | <img src="shots/night-look-settings.png" width="120" alt="The look's settings, at night, in LIVING TOKYO"> |
-| The button grid's settings | <img src="shots/night-grid-settings.png" width="120" alt="The button grid's settings, at night, in LIVING TOKYO"> |
-| Home Assistant's key, as a QR code | <img src="shots/night-bthome-qr.png" width="120" alt="Home Assistant's key, as a QR code, at night, in LIVING TOKYO"> |
-| Home Assistant's key, as text | <img src="shots/night-bthome-key.png" width="120" alt="Home Assistant's key, as text, at night, in LIVING TOKYO"> |
-| Info | <img src="shots/night-info.png" width="120" alt="Info, at night, in LIVING TOKYO"> |
-| Storage mode's prompt | <img src="shots/night-storage-prompt.png" width="120" alt="Storage mode's prompt, at night, in LIVING TOKYO"> |
-| A notification's banner | <img src="shots/night-banner.png" width="120" alt="A notification's banner, at night, in LIVING TOKYO"> |
-| A notification, in the history | <img src="shots/night-notification.png" width="120" alt="A notification, in the history, at night, in LIVING TOKYO"> |
-| The button grid | <img src="shots/night-grid.png" width="120" alt="The button grid, at night, in LIVING TOKYO"> |
-| Music | <img src="shots/night-music.png" width="120" alt="Music, at night, in LIVING TOKYO"> |
-| Air | <img src="shots/night-air.png" width="120" alt="Air, at night, in LIVING TOKYO"> |
-| A call | <img src="shots/night-call.png" width="120" alt="A call, at night, in LIVING TOKYO"> |
-| Find my watch | <img src="shots/night-find.png" width="120" alt="Find my watch, at night, in LIVING TOKYO"> |
-| Pairing | <img src="shots/night-pairing.png" width="120" alt="Pairing, at night, in LIVING TOKYO"> |
-| An update | <img src="shots/night-update.png" width="120" alt="An update, at night, in LIVING TOKYO"> |
-| An alarm ringing | <img src="shots/night-ringing.png" width="120" alt="An alarm ringing, at night, in LIVING TOKYO"> |
-| Switching off | <img src="shots/night-off.png" width="120" alt="Switching off into storage mode, at night, in LIVING TOKYO"> |
+| LOOK, in Settings | <img src="shots/night-look-settings.png" width="120" alt="LOOK's settings, at night, in LIVING TOKYO"> |
 
 ## The dim look
 
-| A glance | Directions, on a glance | A notification, with the screen off | The quiet night | The button grid, in the quiet night |
-|---|---|---|---|---|
-| <img src="shots/dim-glance.png" width="120" alt="A glance: the hours above the minutes, big, white on black"> | <img src="shots/dim-route-glance.png" width="120" alt="A glance while the phone navigates: the time, small and red, over an arrow turning left, 150 M, and the street"> | <img src="shots/dim-notification.png" width="120" alt="A notification that arrived with the screen off: the app in red, and who it's from, big, in white"> | <img src="shots/dim-quiet-night.png" width="120" alt="The clock face in the quiet night: the city in white, grey and red on black"> | <img src="shots/dim-grid.png" width="120" alt="The button grid in the quiet night: grey keycaps outlined in red"> |
+| A glance | A notification, with the screen off |
+|---|---|
+| <img src="shots/dim-glance.png" width="120" alt="A glance: the hours above the minutes, big, white on black"> | <img src="shots/dim-notification.png" width="120" alt="A notification that arrived with the screen off: the app in red, and who it's from, big, in white"> |
 
 These are `shots.txt`'s, drawn in a build with every theme (where
 FORCE is a choice), which the simulator's tests check (see
 [AUTHORING-THEMES.md](../../../AUTHORING-THEMES.md#the-readme-and-its-screenshots)).
+Every other screen, and the clock face in the states it shows
+(notifications unseen, a low battery, charging, a second's blink), is
+`screens.txt`'s, which they only run, to check that each draws; to look
+at them all, run it with `--out` (see its first lines).
 
 ## Credits
 
