@@ -53,6 +53,8 @@ use crate::system_off::Reason;
 use crate::ui::{Editing, Status};
 
 pub mod helpers;
+#[cfg(feature = "theme-living_tokyo")]
+pub mod living_tokyo;
 #[cfg(feature = "theme-retro")]
 pub mod retro;
 
@@ -466,6 +468,7 @@ macro_rules! themes {
 
 themes! {$
     retro: Retro if "theme-retro";
+    living_tokyo: LivingTokyo if "theme-living_tokyo";
 }
 
 impl Theme for Scheme {

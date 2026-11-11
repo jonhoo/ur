@@ -34,6 +34,8 @@ expect clock
 shot night-clock.png
 shot clock-arcade.png
 shot clock-terminal.png terminal
+shot clock-tokyo-night.png "tokyo night"
+shot clock-tokyo-storm.png "tokyo storm"
 
 # Left of the clock: the past.
 right
@@ -193,6 +195,7 @@ expect clock
 shot day-clock.png
 shot clock-handheld.png
 shot clock-parchment.png parchment
+shot clock-tokyo-day.png "tokyo day"
 
 right
 wait 1s
