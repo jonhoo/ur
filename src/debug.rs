@@ -54,7 +54,10 @@ static UR_CANVAS: AtomicPtr<Canvas> = AtomicPtr::new(core::ptr::null_mut());
 /// Gadgetbridge's "find my watch" line, through the phone's parser, on
 /// unless `x` is 0 (see [`FIND_LINES`]), 21 the wearer asleep from now
 /// on if `x` is 1, or as sleep tracking says again if 0 (see
-/// [`asleep_forced`])) and the next two the canvas x and y.
+/// [`asleep_forced`]), 22 the simulated finger (of 16) reported lifted,
+/// and down again where it was `x` ms later (10 if 0), as the touch
+/// controller does mid-hold (see [`crate::gesture::REJOIN_WINDOW`])) and
+/// the next two the canvas x and y.
 /// Cleared once taken.
 #[cfg(feature = "debug-input")]
 #[unsafe(no_mangle)]
@@ -194,6 +197,15 @@ pub async fn input_task() {
             19 => {
                 UR_INPUT.store(u32::from_le_bytes([2, x, y, 0]), Ordering::Relaxed);
                 Gesture::Tap
+            }
+            // Quicker than two inputs over the probe could be.
+            22 => {
+                if let Some(at) = finger {
+                    crate::touch::SIMULATED.signal(None);
+                    Timer::after_millis(if x == 0 { 10 } else { x.into() }).await;
+                    crate::touch::SIMULATED.signal(Some(at));
+                }
+                continue;
             }
             16 | 17 => {
                 let scale = crate::canvas::SCALE as u8;
