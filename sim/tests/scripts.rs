@@ -386,10 +386,12 @@ fn a_deliberate_tap_wakes_the_screen_at_once() {
     let script = dir.join("script.txt");
     std::fs::create_dir_all(&dir).expect("the target dir is writable");
     // A light one (a brush) doesn't; a deliberate one does, at once, even
-    // with a phone connected, where a second would be the next track.
+    // with a phone connected, where a second would be the next track. (Two
+    // seconds apart: a second tap sooner would be a retry, which wakes the
+    // screen however light.)
     std::fs::write(
         &script,
-        "connect\nwait 11s\nexpect not screen-on\ntap 40,40 20\nwait 1s\n\
+        "connect\nwait 11s\nexpect not screen-on\ntap 40,40 20\nwait 2s\n\
          expect not screen-on\ntap 40,40\nexpect screen-on\n",
     )
     .expect("the target dir is writable");
@@ -501,6 +503,13 @@ fn a_hold_held_on_is_a_long_press() {
 /// wakes it at once, and the second plays or pauses on the clock face,
 /// as it would have with the screen off. The awake clock face's own
 /// double tap plays or pauses too.
+///
+/// (A script's `wait` starts once the input before it has been handled,
+/// drawing and all: waking the screen from a glance takes the panel
+/// ~0.23 s, so the heavy tap's second comes 50 ms after that, still
+/// within `wake::DOUBLE_TAP_MS` of the first's report. A finger's timing
+/// runs from the tap instead, and a second tap during the drawing is
+/// handled, and timed, once it's done; see `wake::after`.)
 #[test]
 fn a_double_tap_plays_or_pauses_without_waking_only_after_a_light_first_tap() {
     let dir = out("double-tap");
@@ -516,7 +525,7 @@ fn a_double_tap_plays_or_pauses_without_waking_only_after_a_light_first_tap() {
          expect buzzing\n\
          wait 6s\nglance\ntap 40,40 60\nexpect dim\nwait 150ms\ntap 40,40 50\n\
          expect dim\nexpect buzzing\n\
-         wait 6s\nglance\ntap 40,40 90\nexpect not dim\nwait 150ms\ntap 40,40 50\n\
+         wait 6s\nglance\ntap 40,40 90\nexpect not dim\nwait 50ms\ntap 40,40 50\n\
          expect not dim\nexpect buzzing\n\
          echo clock\nwait 2s\ntap 40,40 50\nwait 150ms\ntap 40,40 50\nexpect buzzing\n",
     )
@@ -530,9 +539,79 @@ fn a_double_tap_plays_or_pauses_without_waking_only_after_a_light_first_tap() {
     assert_eq!(clock.matches(r#""n":"next""#).count(), 0, "{log}");
 }
 
+/// With a phone connected, a second tap that starts too late after a
+/// light first tap's lift for a double tap (`wake::DOUBLE_TAP_MS`, 0.3 s),
+/// but within `wake::RETRY_TAP_MS` (1.5 s), is a retry: the wearer tapping
+/// again, as the first did nothing they could see. It wakes the screen,
+/// however light, from off or a glance, and doesn't play or pause; a
+/// quick one still does, leaving the screen off. Later still, it's a
+/// first tap again; at the edge, it does nothing; and without a phone, a
+/// retry wakes the screen too. A hold that slow after a tap doesn't skip
+/// (nor wake the screen); one in time does.
+#[test]
+fn a_slow_second_tap_wakes_the_screen_rather_than_playing_or_pausing() {
+    let dir = out("retry");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "connect\nwait 11s\n\
+         echo quick\ntap 40,40 30\nwait 150ms\ntap 40,40 30\nexpect not screen-on\n\
+         expect buzzing\nwait 2s\n\
+         echo slow\ntap 40,40 30\nwait 450ms\ntap 40,40 30\nexpect screen-on\n\
+         expect not buzzing\nwait 11s\nexpect not screen-on\n\
+         echo retry\ntap 40,40 20\nwait 1s\ntap 52,60 20\nexpect screen-on\nwait 11s\n\
+         echo late\ntap 40,40 20\nwait 1600ms\ntap 40,40 20\nexpect not screen-on\n\
+         wait 2s\n\
+         echo edge\ntap 40,40 20\nwait 600ms\ntap 40,4 20\nexpect not screen-on\n\
+         wait 2s\n\
+         echo slow-hold\ntap 40,40 30\nwait 450ms\npress 40,40\nwait 700ms\n\
+         expect not buzzing\nlift\nexpect not screen-on\nwait 2s\n\
+         echo hold\ntap 40,40 30\nwait 200ms\npress 40,40\nwait 610ms\n\
+         expect buzzing\nlift\nexpect not screen-on\nwait 2s\n\
+         echo glance\nglance\ntap 40,40 30\nwait 600ms\nexpect dim\ntap 40,40 30\n\
+         expect screen-on\nexpect not dim\nwait 11s\nexpect not screen-on\n\
+         echo no-phone\ndisconnect\nwait 1s\ntap 40,40 20\nwait 600ms\n\
+         expect not screen-on\ntap 40,40 20\nexpect screen-on\n\
+         echo done\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+    // Each section, from its echo to the next one's: how many times it
+    // played or paused, and skipped.
+    let sections = [
+        ("quick", 1, 0),
+        ("slow", 0, 0),
+        ("retry", 0, 0),
+        ("late", 0, 0),
+        ("edge", 0, 0),
+        ("slow-hold", 0, 0),
+        ("hold", 0, 1),
+        ("glance", 0, 0),
+        ("no-phone", 0, 0),
+        ("done", 0, 0),
+    ];
+    let at = |name: &str| {
+        log.find(&format!("] {name}\n"))
+            .unwrap_or_else(|| panic!("{name} echoes: {log}"))
+    };
+    for pair in sections.windows(2) {
+        let [(name, playpause, next), (following, _, _)] = pair else {
+            unreachable!("windows of two")
+        };
+        let section = &log[at(name)..at(following)];
+        let counts = (
+            section.matches(r#""n":"playpause""#).count(),
+            section.matches(r#""n":"next""#).count(),
+        );
+        assert_eq!(counts, (*playpause, *next), "{name}: {log}");
+    }
+}
+
 /// On a glance, with a phone connected, a deliberate tap that isn't
 /// heavy (40–74 ms) waits to wake the screen until no second touch can
-/// follow it: alone, it wakes the screen half a second on, even past the
+/// follow it: alone, it wakes the screen 0.3 s on, even past the
 /// glance's own time (the tick that would end the glance, aligned here
 /// by `until`, comes while it waits); with a second tap, it plays or pauses, and with a
 /// hold, skips, the glance staying either way. A lighter tap alone does
@@ -545,13 +624,13 @@ fn a_deliberate_tap_on_a_glance_wakes_the_screen_unless_a_second_follows() {
     std::fs::write(
         &script,
         "time 2026-11-09 12:00:00 +01:00\nconnect\nwait 11s\n\
-         echo alone\nglance\ntap 40,40 60\nexpect dim\nwait 450ms\nexpect dim\n\
+         echo alone\nglance\ntap 40,40 60\nexpect dim\nwait 250ms\nexpect dim\n\
          wait 100ms\nexpect not dim\nexpect screen-on\nwait 11s\nexpect not screen-on\n\
-         until 12:01\necho late\nglance\nwait 4500ms\ntap 40,40 60\nwait 350ms\n\
-         expect dim\nwait 350ms\nexpect not dim\nexpect screen-on\nwait 11s\n\
+         until 12:01\necho late\nglance\nwait 4600ms\ntap 40,40 60\nwait 250ms\n\
+         expect dim\nwait 100ms\nexpect not dim\nexpect screen-on\nwait 11s\n\
          echo double\nglance\ntap 40,40 60\nwait 150ms\ntap 40,40 50\nexpect dim\n\
          expect buzzing\nwait 1s\nexpect dim\nwait 6s\nexpect not screen-on\n\
-         echo hold\nglance\ntap 40,40 60\nwait 300ms\npress 40,40\nwait 610ms\n\
+         echo hold\nglance\ntap 40,40 60\nwait 200ms\npress 40,40\nwait 610ms\n\
          expect buzzing\nexpect dim\nlift\nwait 1s\nexpect dim\nwait 6s\n\
          expect not screen-on\n\
          echo light\nglance\ntap 40,40 30\nwait 1s\nexpect dim\nwait 5s\n\

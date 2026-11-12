@@ -71,7 +71,7 @@ pub const HOLD_LIMIT: Duration = Duration::from_secs(60);
 ///
 /// It costs every lift those 30 ms before its tap or swipe is acted on:
 /// not something to see, and a double tap's two taps are both late by
-/// the same, so the time between them (see `wake::follows`) is the
+/// the same, so the time between them (see `wake::after`) is the
 /// same.
 pub const REJOIN_WINDOW: Duration = Duration::from_millis(30);
 /// How near, in panel pixels, where a touch lifted a press within

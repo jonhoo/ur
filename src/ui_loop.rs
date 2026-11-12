@@ -855,7 +855,7 @@ impl UiLoop {
             Wake::Input(event) => {
                 info!("input: {}", event);
                 // What woke the screen, if this does: not every input does
-                // (a single tap, say; see `wake::follows`).
+                // (a single tap, say; see `wake::after`).
                 let wake = match event {
                     InputEvent::Button => power::Count::WakeButton,
                     InputEvent::Touch(_) => power::Count::WakeTouch,

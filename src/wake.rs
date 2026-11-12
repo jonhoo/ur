@@ -7,12 +7,15 @@
 //! - A deliberate tap (see [`deliberate`]) wakes the screen: at once with
 //!   the screen off; on a glance, at once only if heavy, and otherwise
 //!   once no second touch can follow it (see below).
-//! - Without a phone, a double tap (two taps within [`DOUBLE_TAP_MS`])
-//!   wakes it too.
+//! - A second tap too slow for a double tap's (see below), but within
+//!   [`RETRY_TAP_MS`] of the first, wakes it too, however light, and does
+//!   nothing else: a retry, the wearer tapping again as the first did
+//!   nothing they could see (see [`after`]). Without a phone, a double
+//!   tap wakes it as well.
 //! - While a phone is connected, two touches play, pause, or skip, without
 //!   waking it: a double tap plays or pauses, and a tap, then a touch held
 //!   (a tap-and-hold), skips to the next track (see [`second`], and
-//!   [`follows`] for how soon the second must come). The touch task
+//!   [`after`] for how soon the second must start). The touch task
 //!   reports the hold while the finger is still down, once it's been still
 //!   for long enough, and the buzz then tells the wearer it took (see
 //!   [`crate::gesture`]).
@@ -45,8 +48,8 @@
 //! does from off. A deliberate tap short of that waits
 //! ([`Action::WakeLater`]): if a second touch follows, the pair plays,
 //! pauses, or skips, as after a light first tap; if none does, the
-//! screen wakes then (see [`wake_later_due`]), half a second after the
-//! tap. It used to wake the screen at once, as from off, but then a
+//! screen wakes then (see [`wake_later_due`]), [`DOUBLE_TAP_MS`] after
+//! the tap. It used to wake the screen at once, as from off, but then a
 //! media gesture on a glance woke the screen whenever its first tap was
 //! firm, which to the wearer looked arbitrary: in 0.10.1-rc.1's field
 //! log, their media first taps on a glance were 36–76 ms, and those of
@@ -55,11 +58,31 @@
 //! gestures, were mostly 47–67 ms too. So the wearer chose where heavy
 //! starts, 75 ms, and a lighter tap that woke a glance still does, a
 //! moment later; the wait costs little there, as the glance already
-//! shows the time.
+//! shows the time. (It used to be half a second, as long as a pair's
+//! second then had: in 0.11.0's field log, the wearer tapped a glance
+//! again 0.62 s after such a tap, just after it woke the screen, having
+//! seen nothing happen.)
+//!
+//! How soon the second tap starts tells a double tap from a retry. A
+//! double tap is quick: in the field logs (180 hours of them), the
+//! wearer's, from off, on a glance, and on the clock face, started
+//! their second tap 16–185 ms after the first lifted, and their
+//! tap-and-holds' holds 0–78 ms after. Where a first tap left the screen
+//! dark, or a glance waiting to wake (see above), and the wearer tapped
+//! again, the second came 566–1277 ms after it; no pair at all started
+//! its second between 185 and 566 ms. So a pair's
+//! second touch must start within [`DOUBLE_TAP_MS`], 300 ms, of the
+//! first's lift, and a tap later than that, up to [`RETRY_TAP_MS`],
+//! 1.5 s, is a retry, which wakes the screen. A second tap used to need
+//! only be reported within half a second of the first's (so start up to
+//! ~450 ms after its lift) to play or pause, retry or not, and one later
+//! did nothing unless deliberate on its own: most of those retries were,
+//! held 47–76 ms, but some were as light as the first (28–37 ms).
 //!
 //! Guards against brushes, from the field logs (see [`deliberate`]):
 //!
-//! - Nothing happens on one touch alone, bar a deliberate tap's wake. A
+//! - Nothing happens on one touch alone, bar a deliberate tap's wake (a
+//!   retry is the second of two light ones; see [`after`]). A
 //!   long press with the screen off or on a glance used to play or pause,
 //!   and an arm folded over the watch, resting against it, kept doing so
 //!   (see [`centred`]); now it takes a tap first, which a resting arm
@@ -139,10 +162,14 @@ pub const DELIBERATE_TAP_MS: u16 = 40;
 /// apart, so its taps last 37, 47, 57, 67, 76, 86 ms, and so on: this is
 /// 76 ms or more.
 pub const GLANCE_WAKE_TAP_MS: u16 = 75;
-/// How soon after a tap's lift, in milliseconds, the next touch must come
-/// for the two to be a pair (see [`follows`]): a double tap, or a
+/// How soon after a tap's lift, in milliseconds, the next touch must
+/// start for the two to be a pair (see [`after`]): a double tap, or a
 /// tap-and-hold; on the awake clock face too.
-pub const DOUBLE_TAP_MS: u32 = 500;
+pub const DOUBLE_TAP_MS: u32 = 300;
+/// How soon after a light tap's lift, in milliseconds, a tap too late to
+/// be its pair's second must start to be a retry, which wakes the screen
+/// (see [`after`]).
+pub const RETRY_TAP_MS: u32 = 1500;
 /// Canvas pixels (24 panel pixels) at the screen's edge where touches,
 /// with the screen off, do nothing.
 pub const TAP_MARGIN: i32 = 8;
@@ -215,41 +242,72 @@ pub fn centred(x: i32, y: i32) -> bool {
     within(x, LONG_PRESS_MARGIN_X) && within(y, LONG_PRESS_MARGIN_Y)
 }
 
-/// Whether a touch of `kind`, reported `since_ms` after a tap lifted, and
-/// down for `held_ms` by then, comes soon enough after it to be the second
-/// of a pair: within [`DOUBLE_TAP_MS`].
+/// How a touch comes after a tap that may be the first of a pair (one
+/// [`Action::FirstTap`] said may; see [`after`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum After {
+    /// No such tap, or too long before to matter.
+    Nothing,
+    /// Soon enough to be the pair's second: a double tap's, or a
+    /// tap-and-hold's hold.
+    Pair,
+    /// A tap too late for that, but soon enough to be the wearer tapping
+    /// again, as the first did nothing they could see.
+    Retry,
+}
+
+/// How a touch of `kind`, reported `since_ms` after a tap lifted, and
+/// down for `held_ms` by then, comes after it: the pair's second if it
+/// started within [`DOUBLE_TAP_MS`] of the lift, and, if a tap that
+/// started later, but within [`RETRY_TAP_MS`], a retry.
 ///
-/// For a tap, from the first's lift to the second's, as for a double tap
-/// on the awake clock face (and as it always was): so the second must
-/// start within half a second, less its own length (the wearer's from
-/// off, in 0.9.0-m3.1's field log: 37–57 ms, 126–156 ms after the
-/// first).
+/// Counted from the first tap's lift to the second touch's start, so the
+/// second's own length doesn't matter. A tap's is short, but a hold is
+/// only reported once it's been down [`LONG_PRESS`] (0.6 s), which would
+/// leave no time at all if counted as a tap's lift is; as for the button
+/// grid's holds, which also count from where the finger landed (see
+/// `crate::buttons`). (A tap used to count from lift to lift, within
+/// half a second.)
 ///
-/// For a hold, from the first's lift to the hold's start: it's only
-/// reported once it's been down [`LONG_PRESS`] (0.6 s), which would leave
-/// no time at all if counted as a tap's lift is. Counting from its start
-/// gives it the window a tap gets, plus the few tens of milliseconds a
-/// second tap is down; as for the button grid's holds, which also count
-/// from where the finger landed (see `crate::buttons`).
+/// The windows are the field logs' (see the module docs): the wearer's
+/// double taps and tap-and-holds started their second touch at most
+/// 185 ms after the first's lift, their retries at least 566 ms after,
+/// and up to 1277 ms (a slower one wakes the screen only if deliberate
+/// on its own, as before). So 300 ms, about the geometric middle of 185
+/// and 566, for a pair, and 1.5 s for a retry. Only a tap is a retry: a
+/// hold after a light tap, too late to skip, does nothing, as a long
+/// press on its own does.
+///
+/// Both touches are timed as the UI handles them, which a wake holds up
+/// while it draws. So a pair whose first tap woke the screen (from off,
+/// or heavy on a glance) has a quick second tap timed from when the
+/// drawing is done: in 0.11.0's field log, both such seconds were handled
+/// ~195 ms after the first tap, and the simulator's panel takes ~0.23 s
+/// to wake from a glance. That's still within the window, if with less to
+/// spare than a pair in the dark has.
+///
+/// TODO: time touches as the touch task reports them, should a wake's
+/// drawing ever take near [`DOUBLE_TAP_MS`] (a heavier theme, say).
 ///
 /// The hold itself is the touch task's long press, at 0.6 s, buzzing
 /// then, rather than a shorter hold of its own: the wearer already knows
 /// it (from the clock face, the alarms, and the button grid), and the
-/// buzz says when to let go. A tap-and-hold so takes a little over a
-/// second, start to buzz. A second tap held 0.6 s or more is a hold, not a
-/// tap; the field logs' deliberate taps last at most 135 ms.
+/// buzz says when to let go. A tap-and-hold so takes a little under a
+/// second, start to buzz. A second tap held 0.6 s or more is a hold, not
+/// a tap; the field logs' deliberate taps last at most 135 ms.
 ///
 /// [`LONG_PRESS`]: crate::gesture::LONG_PRESS
-pub fn follows(kind: Kind, since_ms: u32, held_ms: u16) -> bool {
-    let gap = match kind {
-        Kind::LongPress => since_ms.saturating_sub(held_ms.into()),
-        Kind::Tap | Kind::Swipe => since_ms,
-    };
-    gap <= DOUBLE_TAP_MS
+pub fn after(kind: Kind, since_ms: u32, held_ms: u16) -> After {
+    let gap = since_ms.saturating_sub(held_ms.into());
+    match kind {
+        _ if gap <= DOUBLE_TAP_MS => After::Pair,
+        Kind::Tap if gap <= RETRY_TAP_MS => After::Retry,
+        _ => After::Nothing,
+    }
 }
 
 /// The media gesture a touch of `kind`, starting at (`x`, `y`) in canvas
-/// pixels, makes as the second of a pair (see [`follows`]), with the
+/// pixels, makes as the second of a pair (see [`after`]), with the
 /// screen off, on a glance, or on the clock face its first tap woke: a tap
 /// plays or pauses (a double tap), and a hold, in the middle
 /// ([`centred`]), skips to the next track (a tap-and-hold). `None` for
@@ -270,9 +328,9 @@ pub fn second(kind: Kind, x: i32, y: i32) -> Option<Action> {
 
 /// Whether a long press on the awake clock face, starting at (`x`, `y`)
 /// in canvas pixels, skips to the next track, as a tap-and-hold's hold
-/// (it [`follows`] a tap; on its own, it does nothing). `touch_woke`: a
-/// touch woke the screen (from off, or a glance) under
-/// [`CENTRE_AFTER_TOUCH_WAKE_MS`] ago.
+/// (it comes after a tap as a pair's second, [`After::Pair`]; on its
+/// own, it does nothing). `touch_woke`: a touch woke the screen (from
+/// off, or a glance) under [`CENTRE_AFTER_TOUCH_WAKE_MS`] ago.
 ///
 /// Anywhere, normally: something woke the screen to get there, so it's
 /// likelier meant than with the screen off. But a folded arm's touch can
@@ -309,30 +367,43 @@ pub fn deliberate(kind: Kind, x: i32, y: i32, held_ms: u16) -> bool {
 }
 
 /// What a touch does with the screen off: of `kind`, starting at (`x`,
-/// `y`) in canvas pixels, after `held_ms`. `recent_tap`: it [`follows`] a
-/// tap that may be the first of a pair (one [`Action::FirstTap`] said
-/// may). `phone`: a phone is connected, whose media to control. `quiet`:
-/// it's the quiet night.
+/// `y`) in canvas pixels, after `held_ms`, and coming `after` a tap that
+/// may be the first of a pair, if one. `phone`: a phone is connected,
+/// whose media to control. `quiet`: it's the quiet night.
+///
+/// A retry wakes the screen as a deliberate tap does, however light, so
+/// with a phone it may be the first of a media gesture finished on the
+/// clock face it woke to; it does nothing else. Its guards are a double
+/// tap's: both taps away from the edge (the first, or it wouldn't have
+/// been remembered), and nothing in the quiet night. In the field logs'
+/// 180 hours, two light taps there, the second 0.3–1.5 s after the
+/// first, came three times: on a glance, the wearer then tapping on;
+/// with the screen likely on already; and once amid a folded arm's run of
+/// touches at the edge (0.10.0-rc.1), which would have lit the screen.
+/// Asking more of them would turn away the wearer's own retries, which
+/// landed up to 58 canvas pixels from the first tap, and 66 down.
 pub fn screen_off(
     kind: Kind,
     x: i32,
     y: i32,
     held_ms: u16,
-    recent_tap: bool,
+    after: After,
     phone: bool,
     quiet: bool,
 ) -> Action {
     if quiet || !inside(x, y) {
         return Action::Ignore;
     }
-    if recent_tap {
+    match (after, kind) {
         // With a phone, a media gesture's second touch; without one, a
         // double tap is a way to wake the screen.
-        match (phone, second(kind, x, y)) {
+        (After::Pair, _) => match (phone, second(kind, x, y)) {
             (true, Some(action)) => return action,
             (false, _) if kind == Kind::Tap => return Action::Wake { first_tap: false },
             _ => {}
-        }
+        },
+        (After::Retry, Kind::Tap) => return Action::Wake { first_tap: phone },
+        _ => {}
     }
     match kind {
         Kind::Tap if deliberate(kind, x, y, held_ms) => Action::Wake { first_tap: phone },
@@ -344,14 +415,16 @@ pub fn screen_off(
 /// What a touch does on a glance, while a phone is connected (otherwise,
 /// and in the quiet night, any touch there wakes the screen properly): of
 /// `kind`, starting at (`x`, `y`) in canvas pixels, after `held_ms`.
-/// `recent_tap`: as for [`screen_off`]. `waking`: the tap before was a
+/// `after`: as for [`screen_off`]. `waking`: the tap before was a
 /// deliberate one whose wake waits for this ([`Action::WakeLater`]).
 ///
 /// A tap's pair plays, pauses, or skips (see [`second`]), and the glance
 /// goes on, unless the first tap was heavy ([`GLANCE_WAKE_TAP_MS`]),
 /// which wakes the screen at once. A deliberate tap ([`deliberate`])
 /// short of that waits, and anything after it but its pair's second wakes
-/// the screen, as the tap would have on its own. A long press on its own
+/// the screen, as the tap would have on its own. A retry (away from the
+/// edge) wakes the screen at once, as a heavy tap does, the wearer having
+/// seen their first tap do nothing. A long press on its own
 /// is ignored, as with the screen off, and so is a light tap at the edge.
 /// A swipe wakes the screen properly. Unlike with the screen off, a
 /// deliberate tap at the edge wakes it too, at once: the wearer is
@@ -362,8 +435,10 @@ pub fn screen_off(
 /// there 9 ms later would have skipped on the clock face (it played or
 /// paused, as a long press did then). Another of its holds, at the top
 /// edge with the screen off, followed a 9 ms tap there by 361 ms.
-pub fn glance(kind: Kind, x: i32, y: i32, held_ms: u16, recent_tap: bool, waking: bool) -> Action {
-    if recent_tap && let Some(action) = second(kind, x, y) {
+pub fn glance(kind: Kind, x: i32, y: i32, held_ms: u16, after: After, waking: bool) -> Action {
+    if after == After::Pair
+        && let Some(action) = second(kind, x, y)
+    {
         return action;
     }
     if waking {
@@ -375,6 +450,7 @@ pub fn glance(kind: Kind, x: i32, y: i32, held_ms: u16, recent_tap: bool, waking
         Kind::Tap if held_ms >= DELIBERATE_TAP_MS && !inside(x, y) => {
             Action::Wake { first_tap: false }
         }
+        Kind::Tap if after == After::Retry && inside(x, y) => Action::Wake { first_tap: true },
         Kind::Tap if held_ms >= GLANCE_WAKE_TAP_MS => Action::Wake { first_tap: true },
         Kind::Tap if held_ms >= DELIBERATE_TAP_MS => Action::WakeLater,
         Kind::Tap if inside(x, y) => Action::FirstTap,
@@ -384,17 +460,18 @@ pub fn glance(kind: Kind, x: i32, y: i32, held_ms: u16, recent_tap: bool, waking
 
 /// Whether a deliberate tap on a glance, whose wake waits
 /// ([`Action::WakeLater`]), wakes the screen now, `since_ms` after it was
-/// reported: once no second touch can follow it ([`follows`]).
+/// reported: once no second touch can follow it (see [`after`]).
 /// `finger_down`: a finger is on the screen.
 ///
-/// A second touch must start within [`DOUBLE_TAP_MS`]: a tap lifts within
-/// it too, and a hold is reported later, once held for [`LONG_PRESS`]. So
-/// past it, with no finger down, nothing can follow; but a finger that's
-/// down may be a tap not yet lifted, or a hold not yet reported, and the
-/// wait is for that touch, whose report decides. That's 0.5 s for a tap
-/// on its own, as long as the double tap that may follow it may take; a
-/// tap-and-hold's hold, starting in time, holds the wake off until it
-/// skips, a little over a second from the tap.
+/// A second touch must start within [`DOUBLE_TAP_MS`], and is reported
+/// once it lifts, or, for a hold, once held [`LONG_PRESS`]. So past it,
+/// with no finger down, nothing can follow; but a finger that's down may
+/// be a tap not yet lifted, or a hold not yet reported, and the wait is
+/// for that touch, whose report decides. That's 0.3 s for a tap on its
+/// own; a double tap's second tap, or a tap-and-hold's hold, starting in
+/// time, holds the wake off until it's reported (the hold's skipping a
+/// little under a second from the tap). A retry can't come while it
+/// waits: a touch starting within the wait would be the pair's second.
 ///
 /// [`LONG_PRESS`]: crate::gesture::LONG_PRESS
 pub fn wake_later_due(since_ms: u32, finger_down: bool) -> bool {

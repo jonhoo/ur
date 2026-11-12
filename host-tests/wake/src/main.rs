@@ -17,6 +17,35 @@ mod tests {
     /// The middle of the screen, in canvas pixels.
     const MID: (i32, i32) = (40, 40);
 
+    /// A pair's second (`true`), or a touch on its own.
+    fn pair(recent_tap: bool) -> After {
+        if recent_tap {
+            After::Pair
+        } else {
+            After::Nothing
+        }
+    }
+
+    // The module's own, with a pair's second or a touch on its own, as
+    // most tests here try.
+    fn screen_off(
+        kind: Kind,
+        x: i32,
+        y: i32,
+        held_ms: u16,
+        recent_tap: bool,
+        phone: bool,
+        quiet: bool,
+    ) -> Action {
+        super::wake::screen_off(kind, x, y, held_ms, pair(recent_tap), phone, quiet)
+    }
+    fn glance(kind: Kind, x: i32, y: i32, held_ms: u16, recent_tap: bool, waking: bool) -> Action {
+        super::wake::glance(kind, x, y, held_ms, pair(recent_tap), waking)
+    }
+    fn follows(kind: Kind, since_ms: u32, held_ms: u16) -> bool {
+        after(kind, since_ms, held_ms) == After::Pair
+    }
+
     fn off(kind: Kind, (x, y): (i32, i32), held_ms: u16, recent_tap: bool, phone: bool) -> Action {
         screen_off(kind, x, y, held_ms, recent_tap, phone, false)
     }
@@ -70,23 +99,162 @@ mod tests {
         assert_eq!(off(Kind::LongPress, MID, 600, true, false), Action::Ignore);
     }
 
-    /// The second touch of a pair must come within half a second of the
-    /// first tap's lift: a tap's lift, or a hold's start (it's reported
-    /// 0.6 s after that, still down).
+    /// The second touch of a pair must start within 0.3 s of the first
+    /// tap's lift, a tap or a hold alike (a tap is reported as it lifts, a
+    /// hold 0.6 s after it started, still down); a tap starting later, up
+    /// to 1.5 s, is a retry, and a hold then nothing.
     #[test]
-    fn a_pair_s_second_touch_comes_within_half_a_second() {
-        assert_eq!(DOUBLE_TAP_MS, 500);
-        assert!(follows(Kind::Tap, 500, 50));
-        assert!(!follows(Kind::Tap, 501, 50));
-        assert!(follows(Kind::LongPress, 1100, 600));
-        assert!(!follows(Kind::LongPress, 1101, 600));
+    fn a_pair_s_second_touch_starts_within_0_3_s_and_a_retry_within_1_5() {
+        assert_eq!((DOUBLE_TAP_MS, RETRY_TAP_MS), (300, 1500));
+        assert_eq!(after(Kind::Tap, 350, 50), After::Pair);
+        assert_eq!(after(Kind::Tap, 351, 50), After::Retry);
+        assert_eq!(after(Kind::Tap, 1550, 50), After::Retry);
+        assert_eq!(after(Kind::Tap, 1551, 50), After::Nothing);
+        assert_eq!(after(Kind::LongPress, 900, 600), After::Pair);
+        assert_eq!(after(Kind::LongPress, 901, 600), After::Nothing);
+        assert_eq!(after(Kind::LongPress, 2000, 600), After::Nothing);
+        // A swipe is never a retry (nor does a pair's do anything).
+        assert_eq!(after(Kind::Swipe, 1000, 100), After::Nothing);
         // At once, too: the touch task can't report a touch before the one
         // before it lifted, but the sums mustn't go wrong if it did.
-        assert!(follows(Kind::LongPress, 600, 600));
-        assert!(follows(Kind::LongPress, 0, 600));
+        assert_eq!(after(Kind::LongPress, 600, 600), After::Pair);
+        assert_eq!(after(Kind::LongPress, 0, 600), After::Pair);
+        assert_eq!(after(Kind::Tap, 0, 50), After::Pair);
         // The wearer's double taps from off (0.9.0-m3.1's field log):
         // second taps of 37–57 ms, 126–156 ms after the first.
         assert!(follows(Kind::Tap, 156, 57));
+    }
+
+    /// The field logs' pairs, as (first tap's lift to second touch's
+    /// report, second's length) in ms: the wearer's double taps and
+    /// tap-and-holds, from off, on a glance, and on the clock face, whose
+    /// second touch started 16–185 ms after the first's lift, all pairs;
+    /// and their retries, where a first tap left the screen dark, or a
+    /// glance waiting to wake, and the second started 566–1277 ms after,
+    /// all retries. None started in between.
+    #[test]
+    fn the_field_logs_double_taps_are_pairs_and_their_retries_retries() {
+        let pairs = [
+            (63, 47),   // 16 ms after the lift, on a glance (0.11.0)
+            (88, 38),   // 50 ms, from off (0.11.0)
+            (146, 47),  // 99 ms, on a glance and the clock face (0.11.0)
+            (154, 27),  // 127 ms, from off
+            (185, 57),  // 128 ms, on the clock face (0.11.0)
+            (195, 47),  // 148 ms, from off (0.11.0)
+            (189, 27),  // 162 ms, on a glance
+            (194, 9),   // 185 ms, on the clock face
+            (668, 600), // tap-and-holds: 68 ms, on a glance (0.10.1-rc.1)
+            (678, 600), // 78 ms, on the clock face (0.11.0)
+        ];
+        for (since_ms, held_ms) in pairs {
+            let kind = if held_ms >= 600 {
+                Kind::LongPress
+            } else {
+                Kind::Tap
+            };
+            assert_eq!(after(kind, since_ms, held_ms), After::Pair, "{since_ms}");
+        }
+        let retries = [
+            (613, 47),  // 566 ms after the lift, from off
+            (632, 57),  // 575 ms, from off
+            (661, 47),  // 614 ms, from off
+            (695, 76),  // 619 ms, on a glance (0.11.0; see below)
+            (691, 57),  // 634 ms, on a glance (0.11.0)
+            (720, 37),  // 683 ms, on a glance
+            (818, 67),  // 751 ms, from off
+            (923, 57),  // 866 ms, from off
+            (983, 28),  // 955 ms, from off, amid a folded arm's touches
+            (1353, 76), // 1277 ms, from off
+        ];
+        for (since_ms, held_ms) in retries {
+            assert_eq!(
+                after(Kind::Tap, since_ms, held_ms),
+                After::Retry,
+                "{since_ms}"
+            );
+        }
+    }
+
+    /// A retry wakes the screen, however light, as a deliberate tap would
+    /// (with a phone, it may be the first of a media gesture on the clock
+    /// face it wakes to), and does nothing else; a slower tap is on its
+    /// own again. Without a phone too, as a double tap does there.
+    #[test]
+    fn a_retry_wakes_the_screen_and_does_nothing_else() {
+        for phone in [false, true] {
+            for held_ms in [9, 28, 39, 57] {
+                assert_eq!(
+                    super::wake::screen_off(Kind::Tap, 40, 40, held_ms, After::Retry, phone, false),
+                    Action::Wake { first_tap: phone }
+                );
+            }
+            // Too late for a retry, a light tap is the first of a pair again.
+            assert_eq!(
+                super::wake::screen_off(Kind::Tap, 40, 40, 28, After::Nothing, phone, false),
+                Action::FirstTap
+            );
+        }
+    }
+
+    /// A retry's guards are a double tap's: away from the edge, and not in
+    /// the quiet night; nor is a hold, or a swipe, too late for a pair a
+    /// retry.
+    #[test]
+    fn a_retry_at_the_edge_or_in_the_quiet_night_does_nothing() {
+        for at in [(3, 40), (40, 2), (77, 40), (40, 76)] {
+            assert_eq!(
+                super::wake::screen_off(Kind::Tap, at.0, at.1, 28, After::Retry, true, false),
+                Action::Ignore
+            );
+            assert_eq!(
+                super::wake::glance(Kind::Tap, at.0, at.1, 28, After::Retry, false),
+                Action::Ignore
+            );
+        }
+        assert_eq!(
+            super::wake::screen_off(Kind::Tap, 40, 40, 28, After::Retry, true, true),
+            Action::Ignore
+        );
+        assert!(after(Kind::LongPress, 1100, 600) != After::Retry);
+        assert_eq!(off(Kind::LongPress, MID, 600, false, true), Action::Ignore);
+    }
+
+    /// On a glance, a retry wakes the screen at once, as a heavy tap does,
+    /// rather than wait as a deliberate tap does, or do nothing as a light
+    /// one does. 0.11.0's field log: a 47 ms tap on a glance, whose wake
+    /// waited half a second then; 0.62 s after its lift, just after the
+    /// screen woke, the wearer tapped again (76 ms). Now the wait ends
+    /// sooner, and a second tap like it, had the first been light, wakes
+    /// the screen.
+    #[test]
+    fn a_retry_on_a_glance_wakes_the_screen_at_once() {
+        for held_ms in [18, 37, 57, 76] {
+            assert_eq!(
+                super::wake::glance(Kind::Tap, 46, 66, held_ms, After::Retry, false),
+                Action::Wake { first_tap: true }
+            );
+        }
+        assert_eq!(
+            glance(Kind::Tap, 18, 36, 47, false, false),
+            Action::WakeLater
+        );
+        assert!(wake_later_due(DOUBLE_TAP_MS + 1, false));
+        assert_eq!(after(Kind::Tap, 695, 76), After::Retry);
+    }
+
+    /// The touches that made a slow second tap play or pause, before: one
+    /// starting 300–450 ms after the first's lift, reported within half a
+    /// second of it. Now a retry, with the screen off or on a glance, so
+    /// it wakes the screen; on the awake clock face, it does nothing.
+    #[test]
+    fn a_slow_double_tap_wakes_rather_than_plays_or_pauses() {
+        for (since_ms, held_ms) in [(400, 50), (500, 50), (480, 28)] {
+            assert_eq!(after(Kind::Tap, since_ms, held_ms), After::Retry);
+            assert_eq!(
+                super::wake::screen_off(Kind::Tap, 40, 40, held_ms, After::Retry, true, false),
+                Action::Wake { first_tap: true }
+            );
+        }
     }
 
     /// What makes a touch a pair's second, wherever the screen is: a tap
@@ -302,12 +470,13 @@ mod tests {
     /// 0.10.0-rc.1's field log: the folded arm's taps followed by a hold
     /// within half a second, each at the top edge. With the screen off, a
     /// 9 ms tap at (34, 4), then a hold at (31, 4) starting 361 ms after
-    /// its lift; on a glance, a 254 ms tap at (29, 3), which woke the
-    /// screen, then a hold at (34, 3), 9 ms after. Neither skips: the edge
-    /// is out of bounds for both touches.
+    /// its lift (now too late to be its pair's anyway); on a glance, a
+    /// 254 ms tap at (29, 3), which woke the screen, then a hold at (34,
+    /// 3), 9 ms after. Neither skips: the edge is out of bounds for both
+    /// touches.
     #[test]
     fn the_field_logs_folded_arm_tap_and_holds_do_nothing() {
-        assert!(follows(Kind::LongPress, 961, 600));
+        assert_eq!(after(Kind::LongPress, 961, 600), After::Nothing);
         assert_eq!(off(Kind::Tap, (34, 4), 9, false, true), Action::Ignore);
         assert_eq!(
             off(Kind::LongPress, (31, 4), 600, true, true),
@@ -552,19 +721,21 @@ mod tests {
 
     /// The wait for a deliberate tap's wake on a glance: over once a
     /// second touch would no longer follow it, unless a finger is down,
-    /// which may be one.
+    /// which may be one. A touch starting then (reported once it lifts, or
+    /// once held 0.6 s) would follow it while the wait lasts, and not
+    /// after.
     #[test]
     fn a_glance_wakes_once_no_second_touch_can_follow() {
         for since_ms in [0, 120, DOUBLE_TAP_MS] {
             assert!(!wake_later_due(since_ms, false));
-            assert!(follows(Kind::Tap, since_ms, 37));
+            assert!(follows(Kind::Tap, since_ms + 37, 37));
             assert!(follows(Kind::LongPress, since_ms + 600, 600));
         }
-        for since_ms in [DOUBLE_TAP_MS + 1, 1_100, u32::MAX] {
+        for since_ms in [DOUBLE_TAP_MS + 1, 1_100, u32::MAX - 600] {
             assert!(wake_later_due(since_ms, false));
             assert!(!wake_later_due(since_ms, true));
-            assert!(!follows(Kind::Tap, since_ms, 37));
-            assert!(!follows(Kind::LongPress, since_ms.saturating_add(600), 600));
+            assert!(!follows(Kind::Tap, since_ms + 37, 37));
+            assert!(!follows(Kind::LongPress, since_ms + 600, 600));
         }
     }
 
@@ -649,6 +820,14 @@ mod proofs {
         }
     }
 
+    fn any_after() -> After {
+        match kani::any::<u8>() % 3 {
+            0 => After::Nothing,
+            1 => After::Pair,
+            _ => After::Retry,
+        }
+    }
+
     fn media(action: Action) -> bool {
         matches!(action, Action::PlayPause | Action::Next)
     }
@@ -672,20 +851,32 @@ mod proofs {
         assert_eq!(awake_long_press(x, y, true), centred(x, y));
     }
 
-    /// For every touch: a tap follows another if reported within half a
-    /// second of its lift, and a hold if it started within that (it's
-    /// reported later, having been held), however long it's been down.
-    /// Sooner always follows too.
+    /// For every touch: it's a pair's second if it started within 0.3 s
+    /// of the tap's lift (a tap or a hold alike, reported once lifted or
+    /// held, however long it's been down), and a retry if a tap that
+    /// started later, within 1.5 s. Sooner is never less of either: a
+    /// pair's second stays one, and a retry is at least a retry.
     #[kani::proof]
-    fn a_pair_is_two_touches_half_a_second_apart() {
-        let (since, held): (u32, u16) = kani::any();
-        assert_eq!(follows(Kind::Tap, since, held), since <= 500);
+    fn a_pair_is_two_touches_0_3_s_apart_and_a_retry_1_5_s() {
+        let (kind, since, held): (Kind, u32, u16) = (any_kind(), kani::any(), kani::any());
         let started = i64::from(since) - i64::from(held);
-        assert_eq!(follows(Kind::LongPress, since, held), started <= 500);
+        let expected = if started <= 300 {
+            After::Pair
+        } else if kind == Kind::Tap && started <= 1500 {
+            After::Retry
+        } else {
+            After::Nothing
+        };
+        assert_eq!(after(kind, since, held), expected);
 
-        let (kind, sooner) = (any_kind(), kani::any());
+        let rank = |after: After| match after {
+            After::Nothing => 0,
+            After::Retry => 1,
+            After::Pair => 2,
+        };
+        let sooner = kani::any();
         kani::assume(sooner <= since);
-        assert!(!follows(kind, since, held) || follows(kind, sooner, held));
+        assert!(rank(after(kind, sooner, held)) >= rank(after(kind, since, held)));
     }
 
     /// For every touch with the screen off:
@@ -693,6 +884,9 @@ mod proofs {
     /// - In the quiet night, at the edge, or swiping, it does nothing.
     /// - On its own (no tap just before), it wakes the screen if it's a
     ///   deliberate tap, and is otherwise at most the first of a pair.
+    /// - A retry wakes the screen if it's a tap (inside, outside the quiet
+    ///   night), as a deliberate tap would, however light, and does
+    ///   nothing else.
     /// - Only a pair plays, pauses or skips, and only with a phone: a tap
     ///   plays or pauses, and a hold in the middle skips.
     /// - A hold never wakes the screen, and a wake's tap is the first of
@@ -701,26 +895,38 @@ mod proofs {
     fn a_dark_screen_ignores_what_it_should() {
         let (kind, held) = (any_kind(), kani::any());
         let (x, y): (i32, i32) = kani::any();
-        let (recent_tap, phone, quiet): (bool, bool, bool) = kani::any();
-        let action = screen_off(kind, x, y, held, recent_tap, phone, quiet);
+        let (phone, quiet): (bool, bool) = kani::any();
+        let after = any_after();
+        let action = screen_off(kind, x, y, held, after, phone, quiet);
 
         if quiet || !inside(x, y) || kind == Kind::Swipe {
             assert_eq!(action, Action::Ignore);
         }
-        if !recent_tap {
+        if after == After::Nothing {
             let wakes = action == (Action::Wake { first_tap: phone });
             assert_eq!(wakes, !quiet && deliberate(kind, x, y, held));
             assert!(wakes || action == Action::FirstTap || action == Action::Ignore);
             assert!(action != Action::FirstTap || kind == Kind::Tap);
         }
+        if after == After::Retry {
+            let wakes = kind == Kind::Tap && !quiet && inside(x, y);
+            let expected = if wakes {
+                Action::Wake { first_tap: phone }
+            } else {
+                Action::Ignore
+            };
+            assert_eq!(action, expected);
+        }
         if media(action) {
-            assert!(recent_tap && phone);
+            assert!(after == After::Pair && phone);
         }
         match action {
             Action::PlayPause => assert!(kind == Kind::Tap),
             Action::Next => assert!(kind == Kind::LongPress && centred(x, y)),
             Action::Wake { first_tap } => assert!(kind == Kind::Tap && (phone || !first_tap)),
-            Action::FirstTap => assert!(kind == Kind::Tap && held < DELIBERATE_TAP_MS),
+            Action::FirstTap => {
+                assert!(kind == Kind::Tap && held < DELIBERATE_TAP_MS && after == After::Nothing)
+            }
             Action::WakeLater => unreachable!("only a glance waits to wake"),
             Action::Ignore => {}
         }
@@ -737,20 +943,25 @@ mod proofs {
     ///   edge is never the first of a media gesture.
     /// - After a deliberate tap, whose wake waits, anything but a media
     ///   gesture's second wakes the screen.
+    /// - A retry, if a tap inside, wakes the screen at once, as from off.
     #[kani::proof]
     fn a_glance_takes_the_gestures_a_dark_screen_does() {
         let (kind, held) = (any_kind(), kani::any());
         let (x, y): (i32, i32) = kani::any();
-        let (recent_tap, waking): (bool, bool) = kani::any();
-        let action = glance(kind, x, y, held, recent_tap, waking);
-        let off = screen_off(kind, x, y, held, recent_tap, true, false);
+        let waking: bool = kani::any();
+        let after = any_after();
+        let action = glance(kind, x, y, held, after, waking);
+        let off = screen_off(kind, x, y, held, after, true, false);
 
-        assert!(!media(action) || recent_tap);
+        assert!(!media(action) || after == After::Pair);
         assert_eq!(media(action), media(off));
         assert!(!media(action) || action == off);
         if waking {
             assert!(media(action) || action == Action::Wake { first_tap: false });
-        } else if !recent_tap {
+        } else if after == After::Retry && kind == Kind::Tap && inside(x, y) {
+            assert_eq!(action, off);
+            assert_eq!(action, Action::Wake { first_tap: true });
+        } else if after == After::Nothing {
             match kind {
                 Kind::Swipe => assert_eq!(action, Action::Wake { first_tap: false }),
                 Kind::LongPress => assert_eq!(action, Action::Ignore),
@@ -779,19 +990,22 @@ mod proofs {
     }
 
     /// For every wait on a deliberate tap's wake: once it's over, a touch
-    /// reported then no longer follows the tap, whatever it is; and with
-    /// no finger down, it's over once that's so.
+    /// starting then (reported once it lifts, or is held long enough) is
+    /// no pair's second, whatever it is; and with no finger down, it's
+    /// over once that's so.
     #[kani::proof]
     fn a_glance_wakes_once_nothing_can_follow() {
         let (since, held, finger_down): (u32, u16, bool) = kani::any();
         let kind = any_kind();
+        let Some(reported) = since.checked_add(held.into()) else {
+            return;
+        };
+        let second = after(kind, reported, held) == After::Pair;
         if wake_later_due(since, finger_down) {
             assert!(!finger_down);
-            // A tap reported now, or a hold that started now.
-            assert!(!follows(Kind::Tap, since, held));
-            assert!(!follows(kind, since, 0));
+            assert!(!second);
         } else if !finger_down {
-            assert!(follows(Kind::Tap, since, held));
+            assert!(second);
         }
     }
 
