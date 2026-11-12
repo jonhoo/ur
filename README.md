@@ -181,15 +181,18 @@ bar on an edge means there's more that way.
 **Touch and button:**
 
 - **Wake** the screen with the button, or a firm tap away from the edge
-  (brushes don't count). During a quiet night, only the button wakes it.
+  (brushes don't count). If a light tap didn't wake it, tap again: a
+  second tap within 1.5 seconds wakes it, however light. During a quiet
+  night, only the button wakes it.
 - **The button** goes back to the clock, or off from it. It also
   stops "find my watch" (as does a touch), and a double press ends a
   quiet night.
 - **Long-press** (the watch buzzes once it's taken, at 0.6 s) switches
   an alarm or timer on or off, and on Info, offers storage mode.
-- **Media:** double-tap to play or pause, and tap, then tap and hold
-  (until the buzz, 0.6 s), for the next track, the hold within half a
-  second of the tap. A long press alone does nothing. On the clock face,
+- **Media:** double-tap quickly to play or pause, and tap, then tap and
+  hold (until the buzz, 0.6 s), for the next track, the second touch
+  within 0.3 s of the first tap's lift; a slower second tap wakes a
+  dark screen instead. A long press alone does nothing. On the clock face,
   anywhere (for 3 s after a touch woke it, the hold only in the middle:
   a quarter of the screen away from the top and bottom, a fifth from the
   sides, clear of a folded arm). With the screen off or on a glance, the
@@ -197,7 +200,7 @@ bar on an edge means there's more that way.
   night; tap lightly first to leave the screen off: a firm first tap
   wakes it, and the second touch then does the same. On a glance, only
   a heavy first tap (75 ms or more) wakes it at once; a lighter firm tap
-  waits half a second for a second touch, and wakes it if none comes.
+  waits 0.3 s for a second touch, and wakes it if none comes.
   Without a phone connected, a double tap wakes a dark screen instead.
 - **A call:** tap ANSWER or DECLINE, or press the button to silence it.
 - **A ringing alarm:** tap to snooze for 9 minutes; press the button to
