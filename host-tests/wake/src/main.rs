@@ -128,7 +128,7 @@ mod tests {
     /// The field logs' pairs, as (first tap's lift to second touch's
     /// report, second's length) in ms: the wearer's double taps and
     /// tap-and-holds, from off, on a glance, and on the clock face, whose
-    /// second touch started 16–185 ms after the first's lift, all pairs;
+    /// second touch started 16–166 ms after the first's lift, all pairs;
     /// and their retries, where a first tap left the screen dark, or a
     /// glance waiting to wake, and the second started 566–1277 ms after,
     /// all retries. None started in between.
@@ -138,11 +138,11 @@ mod tests {
             (63, 47),   // 16 ms after the lift, on a glance (0.11.0)
             (88, 38),   // 50 ms, from off (0.11.0)
             (146, 47),  // 99 ms, on a glance and the clock face (0.11.0)
-            (154, 27),  // 127 ms, from off
+            (146, 27),  // 119 ms, on a glance
+            (155, 27),  // 128 ms, from off
             (185, 57),  // 128 ms, on the clock face (0.11.0)
-            (195, 47),  // 148 ms, from off (0.11.0)
-            (189, 27),  // 162 ms, on a glance
-            (194, 9),   // 185 ms, on the clock face
+            (194, 47),  // 147 ms, from off (0.11.0)
+            (175, 9),   // 166 ms, on the clock face
             (668, 600), // tap-and-holds: 68 ms, on a glance (0.10.1-rc.1)
             (678, 600), // 78 ms, on the clock face (0.11.0)
         ];
@@ -159,7 +159,8 @@ mod tests {
             (632, 57),  // 575 ms, from off
             (661, 47),  // 614 ms, from off
             (695, 76),  // 619 ms, on a glance (0.11.0; see below)
-            (691, 57),  // 634 ms, on a glance (0.11.0)
+            (652, 57),  // 595 ms, on a glance (0.11.0)
+            (671, 37),  // 634 ms, on a glance
             (720, 37),  // 683 ms, on a glance
             (818, 67),  // 751 ms, from off
             (923, 57),  // 866 ms, from off

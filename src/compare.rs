@@ -219,7 +219,9 @@ pub struct Event {
     /// The instant the App was handed, in ticks: a tick's `check_alarms`,
     /// an input's `on_input`.
     pub at: u64,
-    /// A tick's `on_tick` instant (a moment after `at`).
+    /// A tick's `on_tick` instant (a moment after `at`); a touch's
+    /// [`Touch::start_ms`](crate::gesture::Touch::start_ms), as is (the
+    /// UI's pairs of taps go by it, not by `at`).
     pub ticked: u64,
     /// A tick's local second for `check_alarms`, or [`NONE_I64`].
     pub local_second: i64,
@@ -741,6 +743,7 @@ pub fn input(input: &InputEvent, at: Instant) {
             x: touch.x as u8,
             y: touch.y as u8,
             held_ms: touch.held_ms,
+            ticked: u64::from(touch.start_ms),
             ..event(kind::TOUCH, at)
         },
         InputEvent::Phone(message) => Event {

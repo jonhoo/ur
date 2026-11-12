@@ -505,11 +505,12 @@ fn a_hold_held_on_is_a_long_press() {
 /// double tap plays or pauses too.
 ///
 /// (A script's `wait` starts once the input before it has been handled,
-/// drawing and all: waking the screen from a glance takes the panel
-/// ~0.23 s, so the heavy tap's second comes 50 ms after that, still
-/// within `wake::DOUBLE_TAP_MS` of the first's report. A finger's timing
-/// runs from the tap instead, and a second tap during the drawing is
-/// handled, and timed, once it's done; see `wake::after`.)
+/// drawing and all, and its next tap is timed as lifting then: waking
+/// the screen from a glance takes the panel ~0.23 s, so the heavy tap's
+/// second comes 50 ms after that, still within `wake::DOUBLE_TAP_MS` of
+/// the first's lift. A finger's timing runs from the tap instead, and
+/// the touch task times each touch as it happens, however long the UI
+/// takes to get to it: see `a_quick_second_tap_during_a_wake_s_drawing_still_pairs`.)
 #[test]
 fn a_double_tap_plays_or_pauses_without_waking_only_after_a_light_first_tap() {
     let dir = out("double-tap");
@@ -607,6 +608,41 @@ fn a_slow_second_tap_wakes_the_screen_rather_than_playing_or_pausing() {
         );
         assert_eq!(counts, (*playpause, *next), "{name}: {log}");
     }
+}
+
+/// Taps are timed as the touch task saw them, not as the UI got round to
+/// them, which it does only once it has drawn what came before (`tap
+/// X,Y MS LATE`: an event LATE ms after the lift). After a heavy tap
+/// wakes the screen from a glance, a second tap that lifted 150 ms after
+/// the first, but is handled only once a slow wake has drawn (0.43 s on),
+/// still plays or pauses. A first tap that lifted while a glance drew,
+/// handled 150 ms late, then a second 0.3 s after it's handled (0.45 s
+/// after the lift), is a retry, which wakes the screen, not a pair.
+#[test]
+fn a_quick_second_tap_during_a_wake_s_drawing_still_pairs() {
+    let dir = out("late-taps");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "connect\nwait 11s\n\
+         echo slow-wake\nglance\ntap 40,40 90\nexpect not dim\nwait 200ms\n\
+         tap 40,40 50 280\nexpect buzzing\nwait 11s\nexpect not screen-on\n\
+         echo late-first\nglance\ntap 40,40 30 150\nwait 300ms\nexpect dim\n\
+         tap 40,40 30\nexpect screen-on\nexpect not dim\n\
+         echo done\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+    let at = |name: &str| {
+        log.find(&format!("] {name}\n"))
+            .unwrap_or_else(|| panic!("{name} echoes: {log}"))
+    };
+    let slow_wake = &log[at("slow-wake")..at("late-first")];
+    let late_first = &log[at("late-first")..at("done")];
+    assert_eq!(slow_wake.matches(r#""n":"playpause""#).count(), 1, "{log}");
+    assert_eq!(late_first.matches(r#""n":"playpause""#).count(), 0, "{log}");
 }
 
 /// On a glance, with a phone connected, a deliberate tap that isn't

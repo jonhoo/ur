@@ -28,8 +28,10 @@ use crate::{InputEvent, alarm, debug};
 pub const HELP: &str = "\
 Inputs (X,Y in canvas pixels, 0-79; 40,40 if left out):
   button [2] | glance        (2: a double press, 0.2 s apart)
-  tap [X,Y [MS]] | long [X,Y] | up|down|left|right [X,Y]
-                            a recognised gesture (a tap held MS ms, not 80)
+  tap [X,Y [MS [LATE]]] | long [X,Y] | up|down|left|right [X,Y]
+                            a recognised gesture (a tap held MS ms, not 80;
+                            its event LATE ms after it lifted, as while the
+                            UI draws)
   double X,Y                two taps 0.1 s apart (a double tap on the grid)
   press X,Y | lift          a finger down (or moved), and up: through the
                             touch task's recogniser, so holding it still
@@ -193,25 +195,21 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
                 (Gesture::Tap, Some(ms)) => number(ms)?,
                 _ => 80,
             };
-            watch.input(InputEvent::Touch(Touch {
-                gesture,
-                x,
-                y,
-                held_ms,
-            }));
+            let mut touch = Touch::ended_now(gesture, x, y, held_ms);
+            // `tap X,Y MS LATE`: the finger lifted LATE ms ago, but the
+            // UI is only now handling it, as when it was drawing (a wake,
+            // say) then; the touch task timed it as it happened.
+            if let (Gesture::Tap, Some(late)) = (gesture, arg(2)) {
+                let late: u32 = number(late)?;
+                touch.start_ms = touch.start_ms.wrapping_sub(late);
+            }
+            watch.input(InputEvent::Touch(touch));
         }
         // Two taps 0.1 s apart, as the dev kit's input 19 (too quick for
         // two over the probe): a double tap, for the button grid.
         "double" => {
             let (x, y) = point(need(0, "X,Y")?)?;
-            let tap = || {
-                InputEvent::Touch(Touch {
-                    gesture: Gesture::Tap,
-                    x,
-                    y,
-                    held_ms: 80,
-                })
-            };
+            let tap = || InputEvent::Touch(Touch::ended_now(Gesture::Tap, x, y, 80));
             watch.input(tap());
             watch.advance(Duration::from_millis(100));
             watch.input(tap());

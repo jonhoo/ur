@@ -107,6 +107,43 @@ pub struct Touch {
     /// `Duration`: its 8 bytes, 8-aligned, grew every queued input event,
     /// and static RAM has no room to spare.
     pub held_ms: u16,
+    /// When the finger landed, in milliseconds since boot (wrapping, every
+    /// 49 days; not an `Instant`, for the same reason as `held_ms`), as
+    /// the touch task saw it. The UI may handle the event a while later
+    /// (while it draws a wake, say), so times between touches go by this
+    /// (see [`Touch::end_ms`], and `wake::after`).
+    pub start_ms: u32,
+}
+
+impl Touch {
+    /// A touch that ended just now, having been held `held_ms`, timed as
+    /// the touch task would have: one injected rather than recognised (the
+    /// dev kit's debug input, the simulator's scripts and keys).
+    // Unused in a build without debug input.
+    #[allow(dead_code)]
+    pub fn ended_now(gesture: Gesture, x: i32, y: i32, held_ms: u16) -> Touch {
+        Touch {
+            gesture,
+            x,
+            y,
+            held_ms,
+            start_ms: millis(Instant::now()).wrapping_sub(held_ms.into()),
+        }
+    }
+
+    /// When the touch ended, as far as its event goes, in the same
+    /// milliseconds as [`Touch::start_ms`]: a tap's or swipe's lift (not
+    /// the [`REJOIN_WINDOW`] waited after it), a long press's report while
+    /// held, or a release's lift.
+    pub fn end_ms(&self) -> u32 {
+        self.start_ms.wrapping_add(self.held_ms.into())
+    }
+}
+
+/// [`Touch::start_ms`] for a touch that started at `at`.
+pub fn millis(at: Instant) -> u32 {
+    // Wrapping, by design: only differences between them count.
+    at.as_millis() as u32
 }
 
 /// The touch in progress: where and when it started, and the latest
@@ -266,6 +303,7 @@ impl Tracking {
             x: self.start.0 / scale,
             y: self.start.1 / scale,
             held_ms: self.down().as_millis().min(u64::from(u16::MAX)) as u16,
+            start_ms: millis(self.since),
         }
     }
 }

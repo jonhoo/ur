@@ -64,15 +64,15 @@
 //! seen nothing happen.)
 //!
 //! How soon the second tap starts tells a double tap from a retry. A
-//! double tap is quick: in the field logs (180 hours of them), the
-//! wearer's, from off, on a glance, and on the clock face, started
-//! their second tap 16–185 ms after the first lifted, and their
-//! tap-and-holds' holds 0–78 ms after. Where a first tap left the screen
-//! dark, or a glance waiting to wake (see above), and the wearer tapped
-//! again, the second came 566–1277 ms after it; no pair at all started
-//! its second between 185 and 566 ms. So a pair's
-//! second touch must start within [`DOUBLE_TAP_MS`], 300 ms, of the
-//! first's lift, and a tap later than that, up to [`RETRY_TAP_MS`],
+//! double tap is quick: in the field logs (180 hours of them, timed by
+//! the touch task's lines), the wearer's, from off, on a glance, and on
+//! the clock face, started their second tap 16–166 ms after the first
+//! lifted, and their tap-and-holds' holds 0–78 ms after. Where a first
+//! tap left the screen dark, or a glance waiting to wake (see above),
+//! and the wearer tapped again, the second came 566–1277 ms after it;
+//! no pair at all started its second between 166 and 566 ms. So a
+//! pair's second touch must start within [`DOUBLE_TAP_MS`], 300 ms, of
+//! the first's lift, and a tap later than that, up to [`RETRY_TAP_MS`],
 //! 1.5 s, is a retry, which wakes the screen. A second tap used to need
 //! only be reported within half a second of the first's (so start up to
 //! ~450 ms after its lift) to play or pause, retry or not, and one later
@@ -271,23 +271,25 @@ pub enum After {
 ///
 /// The windows are the field logs' (see the module docs): the wearer's
 /// double taps and tap-and-holds started their second touch at most
-/// 185 ms after the first's lift, their retries at least 566 ms after,
+/// 166 ms after the first's lift, their retries at least 566 ms after,
 /// and up to 1277 ms (a slower one wakes the screen only if deliberate
-/// on its own, as before). So 300 ms, about the geometric middle of 185
+/// on its own, as before). So 300 ms, about the geometric middle of 166
 /// and 566, for a pair, and 1.5 s for a retry. Only a tap is a retry: a
 /// hold after a light tap, too late to skip, does nothing, as a long
 /// press on its own does.
 ///
-/// Both touches are timed as the UI handles them, which a wake holds up
-/// while it draws. So a pair whose first tap woke the screen (from off,
-/// or heavy on a glance) has a quick second tap timed from when the
-/// drawing is done: in 0.11.0's field log, both such seconds were handled
-/// ~195 ms after the first tap, and the simulator's panel takes ~0.23 s
-/// to wake from a glance. That's still within the window, if with less to
-/// spare than a pair in the dark has.
-///
-/// TODO: time touches as the touch task reports them, should a wake's
-/// drawing ever take near [`DOUBLE_TAP_MS`] (a heavier theme, say).
+/// Both touches are timed as the touch task saw them (the first tap's
+/// lift, the second touch's start; see `crate::touch::Touch::start_ms`),
+/// not as the UI handles them: a wake holds the UI up while it draws
+/// (the simulator's panel takes ~0.23 s to wake from a glance), and a
+/// second tap that lifts meanwhile waits. Timed as handled, a quick
+/// second tap after a tap that woke the screen would count from when the
+/// drawing was done, and a wake drawing for 0.3 s or more (a heavier
+/// theme, the charge screen) would turn it into a retry; and a first tap
+/// handled late (lifting as a glance drew) would make a retry look
+/// quicker, like a pair. (In the field logs, the UI handled a touch up
+/// to 47 ms later than the touch task timed it, so the windows above
+/// stand either way.)
 ///
 /// The hold itself is the touch task's long press, at 0.6 s, buzzing
 /// then, rather than a shorter hold of its own: the wearer already knows

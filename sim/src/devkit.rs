@@ -589,10 +589,15 @@ impl DevKit {
         while StdInstant::now() < deadline {
             let before = self.head()?;
             let newest = match before.written.checked_sub(1) {
-                Some(last) => self
-                    .events(last, before.written)?
-                    .first()
-                    .map(|event| event.at.max(event.ticked)),
+                Some(last) => {
+                    self.events(last, before.written)?
+                        .first()
+                        .map(|event| match event.kind {
+                            // A touch's `ticked` is its start, in milliseconds.
+                            kind::TICK => event.at.max(event.ticked),
+                            _ => event.at,
+                        })
+                }
                 None => None,
             };
             // A pass can read the same instant as the event before it: the
@@ -1362,6 +1367,9 @@ impl<'a> Follower<'a> {
                 x: i32::from(event.x),
                 y: i32::from(event.y),
                 held_ms: event.held_ms,
+                // The dev kit's clock, as `at` is: the follower's is set
+                // to match it.
+                start_ms: event.ticked as u32,
             })),
             kind::PHONE => Some(InputEvent::Phone(self.phone(event)?)),
             kind::STATE => {

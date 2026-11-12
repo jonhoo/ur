@@ -1490,6 +1490,11 @@ impl App {
         if let Some(until) = self.glance_until {
             let media = self.connected && !self.night.quiet();
             let waking = core::mem::take(&mut self.glance_wake);
+            // When a tap here lifted, for a second touch to be timed from.
+            let tapped = match event {
+                InputEvent::Touch(touch) => ended(touch, now),
+                _ => now,
+            };
             let action = match event {
                 InputEvent::Touch(touch) if media => wake::glance(
                     wake_kind(touch.gesture),
@@ -1514,13 +1519,13 @@ impl App {
                 }
                 // A light tap: the glance stays, in case a second follows.
                 Action::FirstTap => {
-                    self.last_tap = Some(now);
+                    self.last_tap = Some(tapped);
                     return;
                 }
                 // A deliberate but not heavy tap: the glance stays for now
                 // too, and the screen wakes if no second follows.
                 Action::WakeLater => {
-                    self.last_tap = Some(now);
+                    self.last_tap = Some(tapped);
                     self.glance_wake = true;
                     return;
                 }
@@ -1534,7 +1539,7 @@ impl App {
                         self.centre_until = now + CENTRE_AFTER_TOUCH_WAKE;
                     }
                     self.woke_tap = wake == Action::Wake { first_tap: true };
-                    self.last_tap = self.woke_tap.then_some(now);
+                    self.last_tap = self.woke_tap.then_some(tapped);
                     self.woke_on_charger();
                     return;
                 }
@@ -1581,14 +1586,14 @@ impl App {
             ) {
                 Action::Ignore => return,
                 Action::FirstTap => {
-                    self.last_tap = Some(now);
+                    self.last_tap = Some(ended(touch, now));
                     return;
                 }
                 // Waking, below; while a phone is connected, the tap may
                 // also be the first of a media gesture finished on the
                 // clock face it wakes to, as on a glance.
                 Action::Wake { first_tap: true } => {
-                    wake_tap = Some(now);
+                    wake_tap = Some(ended(touch, now));
                     None
                 }
                 // (Only a glance waits to wake, never the screen off; were
@@ -1839,7 +1844,7 @@ impl App {
                 }
                 (Gesture::Tap, Screen::Clock) if !notification_shown => match first_tap {
                     Some(_) => self.media(MusicCommand::PlayPause),
-                    None => self.last_tap = Some(now),
+                    None => self.last_tap = Some(ended(touch, now)),
                 },
                 _ => {}
             },
@@ -2924,15 +2929,31 @@ fn send(message: Outgoing) {
     let _ = ble::OUTBOX.try_send(message);
 }
 
-/// How `touch`, reported `now`, comes after a tap that lifted at `tap`,
+/// How `touch`, handled `now`, comes after a tap that lifted at `tap`,
 /// if one may be the first of a pair (see [`wake::after`]): as its
-/// second, a retry, or neither.
+/// second, a retry, or neither. Both as the touch task timed them (see
+/// [`ended`]).
 fn after(tap: Option<Instant>, touch: crate::touch::Touch, now: Instant) -> wake::After {
-    let Some(since) = tap.and_then(|tap| now.checked_duration_since(tap)) else {
+    let Some(since) = tap.and_then(|tap| ended(touch, now).checked_duration_since(tap)) else {
         return wake::After::Nothing;
     };
     let since_ms = u32::try_from(since.as_millis()).unwrap_or(u32::MAX);
     wake::after(wake_kind(touch.gesture), since_ms, touch.held_ms)
+}
+
+/// When `touch` ended (see [`crate::touch::Touch::end_ms`]), as the touch
+/// task timed it, though handled `now`: its event may have waited while
+/// the UI drew (a wake's first frame takes ~0.2 s), and a pair's second
+/// tap must be timed from its own lift, not from when the UI got to it.
+fn ended(touch: crate::touch::Touch, now: Instant) -> Instant {
+    let ago = crate::gesture::millis(now).wrapping_sub(touch.end_ms());
+    // An event waits a frame or two, not a minute: anything that looks
+    // older (or from the future, so wrapped round) is taken as now.
+    if ago > 60_000 {
+        return now;
+    }
+    now.checked_sub(Duration::from_millis(ago.into()))
+        .unwrap_or(now)
 }
 
 /// A touch's kind, as the screen off and a glance see it (see [`wake`]).

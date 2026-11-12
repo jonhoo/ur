@@ -394,18 +394,14 @@ pub async fn input_task() {
             7 => Gesture::SwipeRight,
             _ => continue,
         };
-        let touch = Touch {
-            gesture,
-            x: i32::from(x),
-            y: i32::from(y),
-            // A finger's typical tap (and a long press's, for that), or
-            // as asked.
-            held_ms: match (gesture, held_ms) {
-                (Gesture::LongPress, _) => 800,
-                (_, 0) => 80,
-                (_, held_ms) => u16::from(held_ms),
-            },
+        // A finger's typical tap (and a long press's, for that), or as
+        // asked.
+        let held_ms = match (gesture, held_ms) {
+            (Gesture::LongPress, _) => 800,
+            (_, 0) => 80,
+            (_, held_ms) => u16::from(held_ms),
         };
+        let touch = Touch::ended_now(gesture, i32::from(x), i32::from(y), held_ms);
         INPUT.send(InputEvent::Touch(touch)).await;
     }
 }

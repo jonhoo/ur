@@ -169,16 +169,12 @@ pub fn run(mut watch: Watch, options: &Options) -> Result<(), String> {
         }
         for key in keys {
             let gesture = |gesture| {
-                InputEvent::Touch(Touch {
-                    gesture,
-                    x: 40,
-                    y: 40,
-                    held_ms: if gesture == Gesture::LongPress {
-                        800
-                    } else {
-                        80
-                    },
-                })
+                let held_ms = if gesture == Gesture::LongPress {
+                    800
+                } else {
+                    80
+                };
+                InputEvent::Touch(Touch::ended_now(gesture, 40, 40, held_ms))
             };
             match key {
                 Key::Space | Key::Enter | Key::B => watch.input(InputEvent::Button),
