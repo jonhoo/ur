@@ -1,8 +1,8 @@
-//! Clients that connect but never pair: how often the wearer hears about
-//! them, and how long they may stay. Hardware-free, for its host tests
-//! (`host-tests/unpaired`); [`crate::ui`] asks [`Banners`] before showing
-//! the "NOT PAIRED" or "PAIRING LOST" banner, and [`crate::ble`] keeps a
-//! [`Stay`] for each connection.
+//! Clients that connect but never pair: whether and how often the wearer
+//! hears about them, and how long they may stay. Hardware-free, for its
+//! host tests (`host-tests/unpaired`); [`crate::ble`] keeps a [`Judge`]
+//! and a [`Stay`] for each connection, and [`crate::ui`] asks [`Banners`]
+//! before showing the "NOT PAIRED" or "PAIRING LOST" banner.
 //!
 //! Anyone in range can connect to the watch: it advertises, connectably,
 //! all the time, and only pairing (with the passkey the watch shows) gets
@@ -16,6 +16,45 @@
 //! - **It takes a slot.** The watch has two connections (`ble::CONNECTIONS`):
 //!   the phone and one more, for an updater or a computer fetching the field
 //!   log. A stranger holding one keeps those out; two keep the phone out.
+//!
+//! ## Whether to tell
+//!
+//! A link that isn't encrypted 10 s in ([`SECURITY_GRACE_MS`]) may just be
+//! dying: at the edge of range, a phone can connect and get nothing more
+//! through before the link times out. The watch's own phone did that, as
+//! its wearer walked away from it, and got PAIRING LOST for it:
+//!
+//! ```text
+//! 23371.311 ble: connected
+//! 23381.311 ble: link not encrypted: PairingLost      (10 s, nothing heard)
+//! 23381.344 ble: disconnected: Connection Timeout
+//! 23384.713 ble: connected                            (and encrypted at once)
+//! ```
+//!
+//! So [`Judge`] tells only of a link that's shown it's alive, and stayed
+//! up long enough to prove it wasn't dying:
+//!
+//! - **It heard the client** ([`Heard`]): a stranger may show it by
+//!   anything at all, even answering our request for longer packets; a
+//!   bonded phone only by its host talking (an ATT request, or SMP), as a
+//!   phone that still had its bond would have encrypted by then. A link
+//!   that's silent stays unjudged, and is cut off by [`Stay`] all the same.
+//! - **The link outlived its supervision timeout** past the grace, and
+//!   past hearing the client: the controller ends a link that hears
+//!   nothing for that long, so one still up then was alive after the
+//!   grace. It also gives a phone whose link stumbled the time to encrypt.
+//! - Or **the client said so itself**: a pairing failed, or used no
+//!   passkey ([`Judge::failed`]). The client sent that just now, so it's
+//!   told at once, before it may leave.
+//!
+//! The banner comes ~16 s after connecting rather than 10, and never after
+//! the cut-off: one judged later than that is judged at the cut-off.
+//!
+//! A bonded phone that never talks gets no banner. A phone that forgot its
+//! side of the bond (the real PAIRING LOST, FAQ C02) talks: it sends a
+//! pairing (which shows the passkey, and is told if it fails), or its app
+//! goes ahead unencrypted (Gadgetbridge discovers services and subscribes,
+//! and is refused).
 //!
 //! ## The banner
 //!
@@ -71,6 +110,160 @@
 //! told apart for long: their private addresses change every ~15 min, and
 //! only a bond resolves them; and a refusal would also catch the wearer's
 //! own phone whose user was slow to consent.)
+
+use core::num::NonZeroU32;
+
+/// How long a new connection has to become encrypted before the wearer may
+/// hear it isn't (see [`Judge`]). A bonded phone encrypts within a second
+/// of our Security Request; a new one shows the passkey by then.
+pub const SECURITY_GRACE_MS: u64 = 10_000;
+
+/// How long past its supervision timeout a link must stay up to count as
+/// alive (see [`Judge`]): the controller's word that it timed out takes a
+/// moment to reach `ble`, and the seconds kept here are rounded.
+pub const HOLD_MARGIN_MS: u64 = 1000;
+
+/// What the client was heard sending (see [`Judge::heard`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Heard {
+    /// A link-layer procedure that took its answer: our request for longer
+    /// packets, new connection parameters, a PHY change.
+    Link,
+    /// A message from its host: an ATT request (refused or not), or SMP (a
+    /// pairing, or encryption with a bond).
+    Host,
+}
+
+/// Where a connection stands on telling the wearer it isn't paired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Told {
+    /// Not yet: still to be judged.
+    No,
+    /// Nothing to tell: the link is authenticated, or a pairing was under
+    /// way when it was judged (its failure tells instead).
+    Settled,
+    /// Told, once and for all for this connection.
+    Yes,
+}
+
+/// Whether to tell the wearer a connection isn't paired, and when (see
+/// the [module docs](self)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Judge {
+    /// The second (since boot) the connection began, rounded down.
+    connected: u32,
+    /// Whether the client is one we have a bond with (as the host knows
+    /// from its address at once): it's told as PAIRING LOST, and only its
+    /// host talking counts as hearing it.
+    bonded: bool,
+    /// The second by which the client was first heard in a way that
+    /// counts, rounded up (so never 0).
+    heard: Option<NonZeroU32>,
+    told: Told,
+}
+
+impl Judge {
+    /// A connection that begins at `now_ms`, with a client we have a bond
+    /// with or not.
+    pub fn new(now_ms: u64, bonded: bool) -> Self {
+        Self {
+            connected: seconds(now_ms),
+            bonded,
+            heard: None,
+            told: Told::No,
+        }
+    }
+
+    /// Whether the client is one we have a bond with: PAIRING LOST rather
+    /// than NOT PAIRED.
+    pub fn bonded(&self) -> bool {
+        self.bonded
+    }
+
+    /// Whether the wearer has been told about this connection.
+    pub fn told(&self) -> bool {
+        self.told == Told::Yes
+    }
+
+    /// The client sent `what` at `now_ms`.
+    pub fn heard(&mut self, what: Heard, now_ms: u64) {
+        // A phone that still has its bond answers the link layer like any
+        // other, then encrypts; so for one we have a bond with, only its
+        // host talking (unencrypted) says it may have lost its side.
+        if self.bonded && what == Heard::Link {
+            return;
+        }
+        if self.heard.is_none() {
+            self.heard = NonZeroU32::new(seconds(now_ms).saturating_add(1));
+        }
+    }
+
+    /// The link is authenticated: nothing to tell, unless a pairing on it
+    /// fails later ([`Self::failed`]).
+    pub fn settled(&mut self) {
+        if self.told == Told::No {
+            self.told = Told::Settled;
+        }
+    }
+
+    /// When to [`Self::check`] (in milliseconds since boot): once the grace
+    /// is over and the client was heard, and the link has outlived its
+    /// `supervision_timeout_ms` since; at the cut-off (`cut_off_at`, from
+    /// [`Stay::cut_off_at`]) at the latest. `None` if it's judged already,
+    /// or the client hasn't been heard.
+    pub fn due_at(&self, supervision_timeout_ms: u64, cut_off_at: Option<u64>) -> Option<u64> {
+        if self.told != Told::No {
+            return None;
+        }
+        let heard = u64::from(self.heard?.get()) * 1000;
+        // Rounded up, as `connected` was rounded down: never early.
+        let grace_over = (u64::from(self.connected) + 1) * 1000 + SECURITY_GRACE_MS;
+        let at = grace_over.max(heard) + supervision_timeout_ms + HOLD_MARGIN_MS;
+        Some(cut_off_at.map_or(at, |cut_off| at.min(cut_off)))
+    }
+
+    /// Whether to tell the wearer now, at `now_ms`, given the link's
+    /// supervision timeout and cut-off (as for [`Self::due_at`]), whether
+    /// it's `authenticated`, and whether a `pairing` is under way (showing
+    /// its passkey). Says so once only.
+    pub fn check(
+        &mut self,
+        now_ms: u64,
+        supervision_timeout_ms: u64,
+        cut_off_at: Option<u64>,
+        authenticated: bool,
+        pairing: bool,
+    ) -> bool {
+        let due = self
+            .due_at(supervision_timeout_ms, cut_off_at)
+            .is_some_and(|at| at <= now_ms);
+        if !due {
+            return false;
+        }
+        // A pairing under way gets as long as it needs: its failure tells
+        // the wearer instead. Encrypted without the passkey ("just works",
+        // from a client that can't show or type one) is no better than not
+        // at all: our services need `authenticated`.
+        if authenticated || pairing {
+            self.told = Told::Settled;
+            return false;
+        }
+        self.told = Told::Yes;
+        true
+    }
+
+    /// A pairing on the link failed, or ended without the passkey: whether
+    /// to tell the wearer, at once, given whether the link is
+    /// `authenticated` all the same (a phone pairing afresh over a link
+    /// encrypted with its bond). Once only, like [`Self::check`].
+    pub fn failed(&mut self, authenticated: bool) -> bool {
+        if self.told == Told::Yes || authenticated {
+            return false;
+        }
+        self.told = Told::Yes;
+        true
+    }
+}
 
 /// How long between two banners of the same kind. With [`Stay`], a client
 /// that won't pair stays [`GRACE_MS`] and comes back moments later: a

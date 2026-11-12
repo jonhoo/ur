@@ -412,7 +412,9 @@ Pair, and type the 6-digit passkey the watch shows.
 
 The watch disconnects a device that hasn't started pairing within 40
 seconds, so it can't hold a connection the phone needs, and says "NOT
-PAIRED" at most every five minutes, however often the device comes back.
+PAIRED" at most every five minutes, however often the device comes back,
+and only once the connection has lasted about 15 seconds (not for one
+that drops at the edge of range).
 Info's PHONE row shows it whenever one is connected. If it isn't yours
 (a phone that paired with the watch under InfiniTime, say), forget the
 watch on that device to stop it.
@@ -421,7 +423,9 @@ watch on that device to stop it.
 
 The watch remembers pairing with this phone, but the phone has forgotten
 it, for instance after the watch was removed from Android's Bluetooth
-settings. Remove the watch from both Android's Bluetooth settings and
+settings: the phone talked to the watch without its pairing, or its new
+pairing failed. (A phone whose connection drops as it goes out of range
+isn't told this.) Remove the watch from both Android's Bluetooth settings and
 Gadgetbridge, then add it again in Gadgetbridge and type the passkey.
 
 ### C03: The watch never gets a location from the phone

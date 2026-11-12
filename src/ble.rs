@@ -12,10 +12,10 @@
 //! SMP Security Request). A bonded phone then encrypts at once; a new one
 //! pairs (Android prompts for the passkey, and gives up after 30 s). Bonds
 //! are kept in flash so the phone needn't pair again. A client that stays
-//! unencrypted gets a banner on the watch pointing at the README's FAQ (see
-//! `not_paired`; at most every few minutes), and is disconnected once it
-//! can no longer pair, so it doesn't hold a connection slot (see
-//! [`crate::unpaired`]).
+//! unencrypted, over a link that's alive rather than dying, gets a banner
+//! on the watch pointing at the README's FAQ (see `not_paired`; at most
+//! every few minutes), and is disconnected once it can no longer pair, so
+//! it doesn't hold a connection slot (see [`crate::unpaired`]).
 //!
 //! Pairing is also what an attacker in range would go for, so: a pairing
 //! that didn't use the passkey ("just works") leaves no bond behind; one
@@ -58,7 +58,7 @@ use crate::geo::{self, GpsPolicy, Location};
 use crate::link::{self, Link, Verdict};
 use crate::packet_pool::Pool;
 use crate::phone::{PhoneEvent, Unpaired};
-use crate::unpaired::Stay;
+use crate::unpaired::{Heard, Judge, Stay};
 use crate::{activity, clock, dfu, gb_buckets, storage};
 
 /// The advertised and GAP device name. Gadgetbridge's Bangle.js support
@@ -447,7 +447,13 @@ pub async fn host_task(controller: Controller, address: [u8; 6]) {
                     }
                 }
             };
-            info!("ble: connected");
+            // With the supervision timeout the client chose: how long a
+            // link that's gone quiet lingers, and so how long `unpaired`
+            // waits before telling the wearer it isn't paired.
+            info!(
+                "ble: connected (timeout {} ms)",
+                conn.raw().params().supervision_timeout.as_millis()
+            );
             if let Err(e) = conn.raw().set_bondable(true) {
                 warn!("ble: enabling bonding failed: {}", e);
             }
@@ -826,13 +832,11 @@ async fn serve(
     // `slowed`: Android picks latency 7 on its own, seconds into a
     // connection.
     let mut listening = false;
-    // Whether the link's security is still to be judged (see
-    // `not_paired`), at `last_traffic + SECURITY_GRACE`: while it is,
-    // `last_traffic` stays at the connection's start. (It only matters once
-    // the phone is here, which takes an encrypted link.) That saves an
-    // `Instant` in this future, which is in RAM twice (once per slot), and
-    // RAM is that scarce.
-    let mut security = Security::Pending;
+    // Whether (and when) to tell the wearer the link isn't paired: only
+    // once the client has shown it's alive, and the link has outlived its
+    // supervision timeout since (see `unpaired`), so a phone whose link
+    // died at the edge of range isn't told PAIRING LOST.
+    let mut judge = Judge::new(Instant::now().as_millis(), conn.raw().is_bonded_peer());
     // Whether a pairing has shown its passkey and not yet ended (one the
     // client cuts short by leaving counts as failed), and how long the
     // client may stay without authenticating the link (see `unpaired`).
@@ -854,12 +858,12 @@ async fn serve(
         // The GPS, security, cut-off, and update deadlines share a branch
         // (`select4` has only four); which one passed is sorted out below.
         let deadline = async {
-            let security_deadline =
-                (security == Security::Pending).then_some(last_traffic + SECURITY_GRACE);
-            let uart_deadline = uart.due().map(Instant::from_millis);
-            let cut_off = stay
-                .cut_off_at(authenticated(conn))
+            let cut_off_ms = stay.cut_off_at(authenticated(conn));
+            let security_deadline = judge
+                .due_at(supervision_timeout_ms(conn), cut_off_ms)
                 .map(Instant::from_millis);
+            let uart_deadline = uart.due().map(Instant::from_millis);
+            let cut_off = cut_off_ms.map(Instant::from_millis);
             let deadlines = gps_deadline.into_iter().chain(security_deadline);
             match deadlines
                 .chain(uart_deadline)
@@ -907,16 +911,16 @@ async fn serve(
             }
             Either4::Third(()) => {
                 let now = Instant::now();
-                if security == Security::Pending && last_traffic + SECURITY_GRACE <= now {
-                    security = Security::Settled;
-                    // A pairing under way (the passkey showing) gets as
-                    // long as it needs: its failure tells the user instead.
-                    // Encrypted without the passkey ("just works", from a
-                    // client that can't show or type one) is no better:
-                    // our services need `authenticated`.
-                    if !authenticated(conn) && PASSKEY.lock(Cell::get).is_none() {
-                        not_paired(conn, &mut security);
-                    }
+                // Before the cut-off below, which may be due at the same
+                // moment: a client judged then is told, then cut off.
+                if judge.check(
+                    now.as_millis(),
+                    supervision_timeout_ms(conn),
+                    stay.cut_off_at(authenticated(conn)),
+                    authenticated(conn),
+                    stay.pairing(),
+                ) {
+                    not_paired(judge.bonded());
                 }
                 // A client that never paired (or whose pairing stalled)
                 // can't use anything of ours, and holds a slot the phone
@@ -942,9 +946,8 @@ async fn serve(
         match event {
             GattConnectionEvent::Disconnected { reason } => break reason,
             GattConnectionEvent::Gatt { event } => {
-                if security != Security::Pending {
-                    last_traffic = Instant::now();
-                }
+                last_traffic = Instant::now();
+                judge.heard(Heard::Host, last_traffic.as_millis());
                 let mut actions: Vec<Action, 4> = Vec::new();
                 // DFU writes are acted on after replying (flash work is
                 // async; this callback isn't), so keep a copy: which
@@ -1113,6 +1116,7 @@ async fn serve(
                     continue;
                 }
                 info!("ble: pairing; showing passkey");
+                judge.heard(Heard::Host, Instant::now().as_millis());
                 stay.pairing_started(Instant::now().as_millis());
                 make_room_for_bond(stack, conn);
                 show_passkey(Some(passkey.value()));
@@ -1128,7 +1132,12 @@ async fn serve(
                 );
                 show_passkey(None);
                 stay.pairing_ended(Instant::now().as_millis());
+                // Also how trouble-host reports a bonded phone encrypting
+                // with its bond, as it does at every reconnection: with no
+                // new bond, so `bonded: false`.
+                judge.heard(Heard::Host, Instant::now().as_millis());
                 if security_level == SecurityLevel::EncryptedAuthenticated {
+                    judge.settled();
                     PAIRING_FAILURES.lock(|cell| cell.set((0, Instant::now())));
                     uart.authenticated(Instant::now().as_millis());
                     if bond.is_some() {
@@ -1147,7 +1156,9 @@ async fn serve(
                         let _ = stack.remove_bond_information(bond.identity);
                     }
                     pairing_failed(stack).await;
-                    not_paired(conn, &mut security);
+                    if judge.failed(authenticated(conn)) {
+                        not_paired(judge.bonded());
+                    }
                 }
             }
             GattConnectionEvent::PairingFailed(e) => {
@@ -1155,20 +1166,26 @@ async fn serve(
                 show_passkey(None);
                 stay.pairing_ended(Instant::now().as_millis());
                 pairing_failed(stack).await;
-                not_paired(conn, &mut security);
+                // The client's own doing (it sent Pairing Failed, or tried
+                // a key that didn't work), so it's alive: told at once.
+                // (Neither the SMP timeout nor a disconnection ends up
+                // here: trouble-host reports neither as a failure.)
+                if judge.failed(authenticated(conn)) {
+                    not_paired(judge.bonded());
+                }
             }
             GattConnectionEvent::BondLost => {
                 // The phone forgot us (e.g. "forget device"); it will pair
                 // afresh, and the new bond replaces the stale one.
                 warn!("ble: phone no longer has our bond");
+                judge.heard(Heard::Host, Instant::now().as_millis());
             }
             GattConnectionEvent::Encrypted { security_level, .. } => {
                 info!("ble: link encrypted ({})", security_level);
+                judge.heard(Heard::Host, Instant::now().as_millis());
                 if security_level == SecurityLevel::EncryptedAuthenticated {
                     uart.authenticated(Instant::now().as_millis());
-                    if security == Security::Pending {
-                        security = Security::Settled;
-                    }
+                    judge.settled();
                 }
             }
             // What the phone actually gave us: the single biggest factor in
@@ -1184,6 +1201,7 @@ async fn serve(
                     peripheral_latency,
                     supervision_timeout.as_millis()
                 );
+                judge.heard(Heard::Link, Instant::now().as_millis());
             }
             // What the client made of our `LeSetDataLength`: the
             // longest packets each way.
@@ -1196,6 +1214,10 @@ async fn serve(
                     "ble: packets up to {} B out, {} B in",
                     max_tx_octets, max_rx_octets
                 );
+                judge.heard(Heard::Link, Instant::now().as_millis());
+            }
+            GattConnectionEvent::PhyUpdated { .. } => {
+                judge.heard(Heard::Link, Instant::now().as_millis());
             }
             _ => {}
         }
@@ -1204,50 +1226,32 @@ async fn serve(
     if stay.pairing() {
         pairing_failed(stack).await;
     }
-    if security == Security::Told {
+    if judge.told() {
         UNPAIRED.lock(|cell| cell.set(None));
     }
     info!("ble: disconnected: {}", reason);
 }
 
-/// Where a connection stands on [`not_paired`].
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Security {
-    /// Waiting for the link to become encrypted.
-    Pending,
-    /// Encrypted, or a pairing is under way: nothing to say (unless the
-    /// pairing fails).
-    Settled,
-    /// The user has been told.
-    Told,
-}
-
-/// How long a new connection has to become encrypted before we tell the
-/// user it isn't (see [`not_paired`]). A bonded phone encrypts within a
-/// second of our Security Request; a new one shows the passkey by then.
-const SECURITY_GRACE: Duration = Duration::from_secs(10);
-
-/// Tells the user, once per connection, that a client is connected but
-/// the link isn't encrypted with a passkey bond (it ignored our Security
-/// Request, or pairing failed), so it can't use anything of ours. A banner
-/// points at the README's FAQ for the steps (see [`Unpaired`]), and the
-/// Info screen's phone row says so for as long as the connection lasts.
+/// Tells the user that a client is connected but the link isn't
+/// encrypted with a passkey bond (it ignored our Security Request, or
+/// pairing failed), so it can't use anything of ours: once per connection,
+/// when its [`Judge`] says so (only once the client has shown it's alive,
+/// so not for a link that's merely dying). A banner points at the README's
+/// FAQ for the steps (see [`Unpaired`]), and the Info screen's phone row
+/// says so for as long as the connection lasts.
 ///
 /// Two cases, told apart by whether the client's address matches one of
 /// our bonds (its identity address, or a private address that one of the
 /// bonds' identity resolving keys resolves), which the host knows from the
-/// moment it connects:
+/// moment it connects (`bonded`):
 ///
 /// - It doesn't: a phone that never paired, e.g. one set up before ur
 ///   required pairing. It has to pair.
 /// - It does, yet didn't encrypt with the bond: the phone has forgotten its
 ///   side (as a sealed watch's phone once had: Android had no bond, the
 ///   watch still did). It has to forget the watch too, and pair again.
-fn not_paired(conn: &GattConnection<'_, '_, Pool>, security: &mut Security) {
-    if core::mem::replace(security, Security::Told) == Security::Told {
-        return;
-    }
-    let why = if conn.raw().is_bonded_peer() {
+fn not_paired(bonded: bool) {
+    let why = if bonded {
         Unpaired::PairingLost
     } else {
         Unpaired::NotPaired
@@ -1256,6 +1260,13 @@ fn not_paired(conn: &GattConnection<'_, '_, Pool>, security: &mut Security) {
     UNPAIRED.lock(|cell| cell.set(Some(why)));
     // Not awaited-for space: see `show_passkey`.
     let _ = crate::INPUT.try_send(crate::InputEvent::Phone(PhoneEvent::Unpaired(why)));
+}
+
+/// The link's supervision timeout, for [`Judge`]: how long the controller
+/// keeps a link that hears nothing. As the client set it when connecting,
+/// or since.
+fn supervision_timeout_ms(conn: &GattConnection<'_, '_, Pool>) -> u64 {
+    conn.raw().params().supervision_timeout.as_millis()
 }
 
 /// Whether the link is encrypted with a passkey bond: what all our
