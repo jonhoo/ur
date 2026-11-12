@@ -325,7 +325,7 @@ Each draws its screen from scratch: clear the canvas first, then draw.
 | Method | The screen |
 |---|---|
 | `clock` | The clock face (`Face`: the status, the next alarm, media, unseen notifications, whether it's in the dim look); on the charger (`status.battery.power_present`) the heart rate isn't measured, which it should say rather than show an old reading (Retro: a grey heart, OFF) |
-| `glance` | A glance: the time, the next turn while the phone navigates, or on the charger the charge (`status.battery`) and the time to full (`charge`; `helpers::to_full` words it), and what a media gesture just did; always in the dim look |
+| `glance` | A glance: the time, the next turn while the phone navigates, or on the charger the charge (`status.battery`) and the time to full (`charge`; `helpers::to_full` words it), and what a media gesture just did; in the dim look, bar the charge's, which is also the charge screen, woken on the charger, in the scheme's palette (so its colours must read in every scheme, light ones too) |
 | `today`, `last_night` | The day's steps and heart rate by the hour; last night's sleep |
 | `alarms`, `phone_alarms` | The alarms, smart wake and timers; the phone's alarms, read-only |
 | `notification` | A notification with the whole screen: a page of the history, or one that arrived with the screen off (in the dim look) |
@@ -484,7 +484,8 @@ Then a few screenshots:
 - the dim look: a glance, a notification that came with the screen
   off, and a glance on the charger. Once, if its dim look is the same in every scheme (as Retro's
   is, and a copy of Retro's); a side each if not;
-- on the charger, the clock face and the full charge's screen.
+- on the charger, the charge screen (the glance's, in the scheme's palette), the clock face and
+  the full charge's screen.
 
 Those are all: every committed screenshot is a Git LFS object, and so
 is every approval of one, so a theme shows how it looks, not every

@@ -74,12 +74,20 @@ expect dim
 shot dim-notification.png
 wait 6s
 
-# On the charger: setting it there wakes the screen to the clock, which
-# says the heart rate is OFF (it isn't measured there), and a glance (one
-# shows by itself every 5 minutes there) shows how long the charge has to
-# go. Once the charger says it's done, the full charge's screen takes over
-# (with a buzz) for a few seconds.
+# On the charger: setting it there (or the button, or a tap) wakes the
+# screen to the charge screen, how long the charge has to go, as a glance
+# there shows it, but in the scheme's colours; the button goes on to the
+# clock, which says the heart rate is OFF (it isn't measured there). A
+# glance (one shows by itself every 5 minutes there) shows the charge
+# screen dimly. Once the charger says it's done, the full charge's screen
+# takes over (with a buzz) for a few seconds.
 battery 4000 charging
+wait 1s
+expect charging
+expect not dim
+shot charging.png
+shot charging-handheld.png handheld
+button
 wait 1s
 expect clock
 shot clock-charging.png

@@ -44,13 +44,16 @@ yellow, and deep and REM sleep its cyan and magenta.
 
 ## On the charger
 
-No heart rate is measured there: the heart goes grey, and says OFF.
-Once the charge is done, the battery's bolt takes the screen for a few
-seconds, big, with FULL, and a buzz.
+Woken there, the screen shows the glance on the charger in the scheme's
+colours; a press or a touch goes on to the clock face. No heart rate is
+measured there: the heart goes grey, and says OFF. Once the charge is
+done, the battery's bolt takes the screen for a few seconds, big, with
+FULL, and a buzz.
 
 | On the charger | At night (ARCADE) | By day (HANDHELD) |
 |---|---|---|
-| Charging | <img src="shots/clock-charging.png" width="120" alt="The clock face on the charger, in ARCADE: the battery charging, with its red bolt; the heart grey, with OFF in grey beside it"> | <img src="shots/clock-charging-handheld.png" width="120" alt="The same in HANDHELD: the heart in olive ink rather than its red, with OFF"> |
+| Woken there | <img src="shots/charging.png" width="120" alt="Woken on the charger, in ARCADE: the time at the top in grey; the battery, three times the clock face's, with its red bolt and 66%; then FULL IN, and 1:12, big, in white"> | <img src="shots/charging-handheld.png" width="120" alt="The same in HANDHELD: dark green ink on the pale green screen, the bolt in its red"> |
+| The clock face | <img src="shots/clock-charging.png" width="120" alt="The clock face on the charger, in ARCADE: the battery charging, with its red bolt; the heart grey, with OFF in grey beside it"> | <img src="shots/clock-charging-handheld.png" width="120" alt="The same in HANDHELD: the heart in olive ink rather than its red, with OFF"> |
 | Full | <img src="shots/charged.png" width="120" alt="Fully charged, in ARCADE: a big red lightning bolt with a drop shadow, and FULL under it in white"> | <img src="shots/charged-handheld.png" width="120" alt="The same in HANDHELD: the bolt in olive ink rather than red, FULL in its darkest green"> |
 
 ## The dim look

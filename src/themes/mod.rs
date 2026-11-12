@@ -111,8 +111,10 @@ pub trait Theme: Sync {
     /// The clock face, the screen the watch comes back to.
     fn clock(&self, canvas: &mut Canvas, face: &Face);
     /// A glance (see `crate::glance`): the time, bigger, and nothing else;
-    /// or the next turn, while the phone navigates. Always in the dim
-    /// look.
+    /// or the next turn, while the phone navigates; or the charge, on the
+    /// charger. In the dim look; bar the charge's, which is also the
+    /// charge screen, woken on the charger, in the scheme's palette (see
+    /// `ui::App::woke_on_charger`).
     fn glance(&self, canvas: &mut Canvas, glance: &Glance);
     /// Today: the steps and heart rate, by the hour.
     fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>);

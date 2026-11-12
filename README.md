@@ -149,10 +149,12 @@ reads 100% only once charging is done, so it doesn't drop when the
 watch comes off; 0% is where it switches itself off.
 
 **On the charger,** the screen lights up as soon as the watch makes
-contact (dimly in a quiet night), so you see at once that it charges.
-Every 5 minutes there, outside a quiet night and not over anything on
-screen, a dim glance shows the charge and how long until full (FULL IN
-0:40, a rough guess that errs long). Once the charge is done, the watch
+contact (dimly in a quiet night), with the charge and how long until
+full (FULL IN 0:40, a rough guess that errs long), so you see at once
+that it charges. The button or a tap there shows the same; the next
+press or touch goes on to the clock face. Every 5 minutes there, outside
+a quiet night and not over anything on screen, it shows by itself,
+dimly and silently, for 10 seconds. Once the charge is done, the watch
 buzzes twice and shows FULL, big, for a few seconds (the button puts it
 away), so you know it can come off: once a charge, after any alarm,
 call or update on screen has finished; in a quiet night it waits, dark

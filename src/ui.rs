@@ -104,9 +104,14 @@
 //!   deliberate one, the second touch does the same on the clock face it
 //!   woke to. See [`crate::wake`] for the guards against brushes.
 //! - Setting the watch on its charger (see [`crate::battery::PlugIn`]):
-//!   wake to the clock, as the button does, so its battery shows the
-//!   watch charges; from a glance too. A screen already on only stays
-//!   on as long again, whatever has it (see [`App::on_charger`]).
+//!   wake, as the button does, so the wearer sees the watch charges; from
+//!   a glance too. A screen already on only stays on as long again,
+//!   whatever has it (see [`App::on_charger`]).
+//! - On the charger, whatever wakes the screen (setting it there, the
+//!   button, a tap, from off or a glance) wakes it to the charge screen:
+//!   the charge glance's charge and time to full, lit as usual. The next
+//!   press or touch goes on to the clock face, and does nothing else (see
+//!   [`App::woke_on_charger`]).
 //! - The charge finishing there, having charged the watch (see
 //!   [`crate::battery::FullCharge`]): two taps of the motor, and the
 //!   theme's full charge screen, lit as usual, for [`BANNER_TIME`]; the
@@ -124,9 +129,10 @@
 //!   [`GLANCE_TIME`]. While the phone navigates, the next turn instead,
 //!   with the time smaller above it. On the charger, the charge and the
 //!   time to full, with the time smaller above them; and one shows by
-//!   itself every few minutes there, until full, outside the quiet night
-//!   (see [`crate::battery::ChargeGlances`]). A tap or press during it (one is
-//!   enough: the wearer is looking) wakes the screen properly. While a
+//!   itself every few minutes there, until full, outside the quiet night,
+//!   for [`CHARGE_GLANCE_TIME`] (see [`crate::battery::ChargeGlances`]).
+//!   A tap or press during it (one is enough: the wearer is looking)
+//!   wakes the screen properly. While a
 //!   phone is connected, outside the quiet night, the screen off's media
 //!   gestures work during a glance too, and the glance stays (with what it
 //!   did in a corner, for a moment): a double tap plays or pauses, and a
@@ -266,6 +272,13 @@ use crate::wake::{self, Action};
 const SCREEN_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a glance shows the time.
 const GLANCE_TIME: Duration = Duration::from_secs(5);
+/// How long a charge glance (see [`App::charge_glance`]) shows: as long as
+/// a button's wake, twice a wrist's glance. A wrist glance comes with the
+/// wearer already looking, and ends as they look away; one on the cradle
+/// comes by itself, to a watch across the room, and is first noticed by
+/// its light, then walked or leant over to: on the dev kit's cradle
+/// check (2026-11-12), 5 s went before the screen could be read.
+const CHARGE_GLANCE_TIME: Duration = SCREEN_TIMEOUT;
 /// How long after a touch woke the screen the clock face's tap-and-hold
 /// must hold in the middle (see [`wake::awake_long_press`]).
 const CENTRE_AFTER_TOUCH_WAKE: Duration =
@@ -635,6 +648,13 @@ pub struct App {
     /// The full charge's screen: waiting to show, or showing (see
     /// [`App::on_charged`]).
     charged: Charged,
+    /// Whether the charger's power is present, as of the last pass (see
+    /// [`App::set_charger`]).
+    on_charger: bool,
+    /// Whether the charge screen covers the clock face: the screen was
+    /// woken on the charger, and nothing since (see
+    /// [`App::woke_on_charger`]).
+    charge_screen: bool,
 }
 
 /// The full charge's screen (see [`App::on_charged`]).
@@ -715,6 +735,8 @@ impl App {
             ha_presses: heapless::Vec::new(),
             holding: false,
             charged: Charged::None,
+            on_charger: false,
+            charge_screen: false,
         }
     }
 
@@ -779,6 +801,25 @@ impl App {
             debug_assert!(!self.brief_wake, "the full charge in a notification's wake");
         }
         debug_assert!(self.ringing.is_none() || self.editing.is_none());
+        // The charge screen covers the clock face, lit, only on the
+        // charger: a wake there sets it, any wake by input ends a glance
+        // first, the first input on it ends it, and so do the power
+        // going, the full charge's screen, and the screen going off. A
+        // glance never starts with the screen on, and leaving the clock
+        // face takes an input.
+        if self.charge_screen {
+            debug_assert!(self.awake, "the charge screen in the dark");
+            debug_assert!(self.on_charger, "the charge screen off the charger");
+            debug_assert!(
+                self.screen == Screen::Clock,
+                "the charge screen off the clock"
+            );
+            debug_assert!(!self.glancing(), "the charge screen on a glance");
+            debug_assert!(
+                !self.showing_charged(),
+                "the charge screen under the full one"
+            );
+        }
         // The editor is only open with the screen on, over Alarms, where
         // it opens: the screen going off closes it (`screen_off`), and
         // nothing moves to another screen under it, as it takes every
@@ -886,6 +927,7 @@ impl App {
             && !self.glancing()
             && !self.brief_wake
             && !self.showing_charged()
+            && !self.showing_charge()
             && self.call.is_none()
             && self.ringing.is_none()
             && self.finding.is_none()
@@ -895,6 +937,13 @@ impl App {
     /// [`App::on_charged`]). Public for the simulator's `expect`.
     pub fn showing_charged(&self) -> bool {
         matches!(self.charged, Charged::Showing { .. })
+    }
+
+    /// Whether the charge screen is showing (see
+    /// [`App::woke_on_charger`]): not under what takes the screen over it.
+    /// Public for the simulator's `expect`.
+    pub fn showing_charge(&self) -> bool {
+        self.charge_screen && !self.ringing_any() && !self.takeover
     }
 
     pub fn set_daytime(&mut self, daytime: bool) {
@@ -1157,9 +1206,12 @@ impl App {
     }
 
     /// The charger's power just arrived (see `battery::PlugIn`): the
-    /// screen wakes to the clock face, as for the button, so the wearer
-    /// sees at once, by its battery, that the watch sits right on the
-    /// cradle. Returns whether it woke the screen.
+    /// screen wakes, as for the button, to the charge screen (see
+    /// [`App::woke_on_charger`]), so the wearer sees at once that the
+    /// watch sits right on the cradle, and how long it will take. Rather
+    /// than the clock face, whose small bolt (and the heart rate's OFF)
+    /// said only the first, and which is a press away. Returns whether it
+    /// woke the screen.
     ///
     /// Not an input: nothing else happens, and the wearer needn't know
     /// the watch's state to set it down. With the screen off, or on a
@@ -1184,15 +1236,44 @@ impl App {
         self.woke_tap = false;
         self.awake = true;
         self.screen = Screen::Clock;
+        // On the charger (the pass tells `set_charger` so only after
+        // this), and woken there: the charge screen, which says more than
+        // the clock face's small bolt.
+        self.on_charger = true;
+        self.woke_on_charger();
         true
+    }
+
+    /// The screen was just woken, to the clock, by the wearer (the button,
+    /// a tap, from off or a glance) or by setting the watch on its
+    /// charger: on the charger, the charge screen covers the clock face,
+    /// the charge glance's drawing (the charge, and how long it has to
+    /// go) at the usual brightness, as that's what a look at a watch on
+    /// its cradle is for. The first input on it, the button or any touch,
+    /// goes on to the clock face, and does nothing else (bar finishing a
+    /// media gesture begun in the dark: see `input`), so the watch is as
+    /// usable on the cradle as off it, one press or touch on. That's how
+    /// the full charge's screen, and a notification shown in the dark,
+    /// give way to the clock face: one rule for what covers it. A swipe
+    /// that navigated at once would save a touch, but from a screen that
+    /// isn't on the map, where it went would be a guess.
+    ///
+    /// Whatever takes the screen (a call, a ringing alarm, "find my
+    /// watch", pairing, an update) shows over it, as `render` stacks them,
+    /// and it shows again after them, as the screen beneath. The full
+    /// charge's screen, which says more, ends it. A notification's banner
+    /// shows over it, as over any screen.
+    fn woke_on_charger(&mut self) {
+        self.charge_screen = self.on_charger;
     }
 
     /// A glance on the charger is due (see `battery::ChargeGlances`): one
     /// shows, with the charge and the time to full, as a glance at the
-    /// wrist would, if the screen is off, outside the quiet night. Returns
+    /// wrist would, but for [`CHARGE_GLANCE_TIME`], if the screen is off,
+    /// outside the quiet night. Silent, as every glance is. Returns
     /// whether it showed.
     pub fn charge_glance(&mut self, now: Instant) -> bool {
-        !self.night.quiet() && self.glance(now)
+        !self.night.quiet() && self.glance(now, CHARGE_GLANCE_TIME)
     }
 
     /// The watch just became fully charged on its cradle (see
@@ -1258,6 +1339,9 @@ impl App {
         self.glance_until = None;
         self.glance_wake = false;
         self.brief_wake = false;
+        // It says more than the charge screen, which it ends: beneath it
+        // is the clock face.
+        self.charge_screen = false;
         self.charged = Charged::Showing {
             until: now + BANNER_TIME,
             woke: dark,
@@ -1274,9 +1358,14 @@ impl App {
     /// say; one showing ends, to the clock face's usual time (or what was
     /// beneath it), as the wearer has the watch in hand.
     pub fn set_charger(&mut self, power_present: bool, now: Instant) {
+        self.on_charger = power_present;
         if power_present {
             return;
         }
+        // Off it, the charge screen has nothing to say: the clock face
+        // shows, for the rest of the screen's time (the wearer has the
+        // watch in hand, and will likely touch it).
+        self.charge_screen = false;
         match self.charged {
             Charged::None => {}
             Charged::Waiting { .. } => {
@@ -1290,15 +1379,15 @@ impl App {
         }
     }
 
-    /// Starts a glance (see the module docs), if the screen is off.
-    /// Returns whether it did.
-    fn glance(&mut self, now: Instant) -> bool {
+    /// Starts a glance (see the module docs), for `time`, if the screen
+    /// is off. Returns whether it did.
+    fn glance(&mut self, now: Instant, time: Duration) -> bool {
         if self.awake {
             return false;
         }
         self.awake = true;
         self.screen = Screen::Clock;
-        self.glance_until = Some(now + GLANCE_TIME);
+        self.glance_until = Some(now + time);
         true
     }
 
@@ -1318,7 +1407,7 @@ impl App {
             // (an arm swing can look the same), so it doesn't hold the
             // screen on.
             InputEvent::Glance => {
-                self.glance(now);
+                self.glance(now, GLANCE_TIME);
                 return;
             }
             // A long press's finger lifting: only a button grid hold's
@@ -1368,6 +1457,7 @@ impl App {
                 if !self.awake {
                     self.awake = true;
                     self.screen = Screen::Clock;
+                    self.woke_on_charger();
                 }
                 return;
             }
@@ -1436,6 +1526,7 @@ impl App {
                     }
                     self.woke_tap = wake == Action::Wake { first_tap: true };
                     self.last_tap = self.woke_tap.then_some(now);
+                    self.woke_on_charger();
                     return;
                 }
             };
@@ -1554,6 +1645,7 @@ impl App {
             if let InputEvent::Touch(_) = event {
                 self.centre_until = now + CENTRE_AFTER_TOUCH_WAKE;
             }
+            self.woke_on_charger();
             return;
         }
         // A long press on the awake screen, still held: the screen stays
@@ -1622,6 +1714,19 @@ impl App {
             return;
         }
 
+        // The charge screen: the button or a touch only goes on to the
+        // clock face beneath, for the screen's usual time (see
+        // `woke_on_charger`). Bar the second touch of a media gesture whose
+        // first woke the screen from off: that would have played, paused,
+        // or skipped on the clock face, and does so here too, so the
+        // gesture works the same on the cradle.
+        if self.charge_screen && matches!(event, InputEvent::Button | InputEvent::Touch(_)) {
+            self.charge_screen = false;
+            if let Some(command) = woken {
+                self.media(command);
+            }
+            return;
+        }
         match event {
             InputEvent::Phone(_) | InputEvent::Glance => unreachable!("handled above"),
             // Only ever a reason to wake up, handled above.
@@ -1847,6 +1952,7 @@ impl App {
         self.centre_until = tap + CENTRE_AFTER_TOUCH_WAKE;
         self.woke_tap = true;
         self.last_tap = Some(tap);
+        self.woke_on_charger();
     }
 
     /// Sends a grid press wherever the setting says, and shows it went.
@@ -2047,6 +2153,7 @@ impl App {
     fn screen_off(&mut self) {
         self.awake = false;
         self.editing = None;
+        self.charge_screen = false;
         // As does the full charge's screen, if anything ever puts the
         // screen out under it (see `check`).
         if self.showing_charged() {
@@ -2681,6 +2788,21 @@ impl App {
             theme.clock(canvas, &face);
         };
         match self.screen {
+            // Woken on the charger: the charge glance's drawing, in the
+            // usual look (see `woke_on_charger`); banners and handles go
+            // over it, as over the clock face.
+            Screen::Clock
+                if self.charge_screen
+                    && let Some(charge) = status.battery.to_full(status.uptime_secs as u32) =>
+            {
+                let glance = themes::Glance {
+                    status,
+                    route: None,
+                    media: None,
+                    charge: Some(charge),
+                };
+                theme.glance(canvas, &glance);
+            }
             Screen::Clock => {
                 // While media plays, a note; just after a media gesture,
                 // what it did.

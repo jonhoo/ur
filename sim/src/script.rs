@@ -109,9 +109,12 @@ Output:
                              is held at most DURATION (2s) in it, so
                              `wait`s and `until`s don't drag
   expect [not] STATE         fail unless: screen-on, dim, quiet-night,
-                             buzzing, off (switched off), clock (the
-                             clock face, for someone to read), or charged
-                             (the full charge's screen)
+                             buzzing, buzzed (asked to buzz at all since
+                             the last check of it), off (switched off),
+                             clock (the clock face, for someone to read),
+                             charging (the charge screen, woken on the
+                             charger), or charged (the full charge's
+                             screen)
   expect steps N             fail unless today's steps are N, on the clock
                              face and the Today screen alike
   expect theme NAME          fail unless the colour scheme the UI picks is
@@ -609,9 +612,11 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
                 "dim" => watch.app.dim(),
                 "quiet-night" => watch.app.quiet_night(),
                 "buzzing" => watch.buzzing(),
+                "buzzed" => std::mem::take(&mut watch.buzzed),
                 "off" => watch.off.is_some(),
                 "clock" => watch.app.showing_clock(),
                 "charged" => watch.app.showing_charged(),
+                "charging" => watch.app.showing_charge(),
                 other => return Err(format!("expect: {other}? (try `help`)")),
             };
             if actual == negated {

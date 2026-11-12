@@ -294,6 +294,7 @@ button
 # The alarm ends the night.
 until 07:00
 expect buzzing
+expect buzzed
 expect not quiet-night
 wait 1s
 shot 18-alarm.png
@@ -304,27 +305,52 @@ expect not buzzing
 wait 1s
 shot 19-morning.png
 
-# Set on the charger, the screen wakes to the clock face, charging; the
-# contact wobbling straight after doesn't light it again. Every 5 minutes
-# there, a dim glance says how long it has to go.
+# Set on the charger, the screen wakes to the charge screen: how long it
+# has to go, lit as usual. The button goes on to the clock face, and then
+# puts the screen out, as ever. The contact wobbling straight after
+# doesn't light it again. The button wakes it to the charge screen too,
+# and a touch there goes on to the clock face.
 wait 11s
 expect not screen-on
 battery 3990 charging
 expect screen-on
+expect charging
+expect not dim
+button
 expect clock
 button
 expect not screen-on
 battery 3990 unplugged
 battery 3990 charging
 expect not screen-on
-wait 5m
-wait 1s
+button
+expect charging
+tap
+expect clock
+wait 11s
+expect not screen-on
+# Every 5 minutes there, a dim glance says how long it has to go, for as
+# long as a button's wake (a wrist's glance is half that), and silently:
+# nothing since the alarm above has buzzed.
+wait 290s
 expect screen-on
 expect dim
-wait 6s
+wait 7s
+expect screen-on
+expect dim
+wait 4s
 expect not screen-on
+expect not buzzed
+# A tap on a glance there (this one the wrist's) lights the charge screen
+# properly; taken off the charger, it gives way to the clock face, having
+# nothing more to say.
+glance
+expect dim
+tap
+wait 1s
+expect charging
+expect not dim
 battery 3990 unplugged
-button
 wait 1s
 expect clock
 
@@ -388,8 +414,15 @@ wait 2m
 expect quiet-night
 button
 wait 1s
-# Still without the phone: the rune is grey here, as the faint ink is
-# red like the slash.
+# On the charger since the battery ran out, the button wakes it to the
+# charge screen, dimly; a touch goes on to the clock face. Still without
+# the phone: the rune is grey here, as the faint ink is red like the
+# slash.
+expect charging
+expect dim
+tap 40,40
+wait 1s
+expect clock
 expect dim
 shot 22b-quiet-no-phone.png
 right
@@ -466,6 +499,7 @@ expect not buzzing
 battery 3990 unplugged
 wait 6s
 battery 3990 charging
+button
 button
 expect not screen-on
 battery 4190 charged

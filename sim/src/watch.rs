@@ -98,6 +98,10 @@ pub struct Watch {
     pub backlight: brightness::Level,
     /// What the motor is playing, and since when.
     pub motor: Option<(Pattern, Instant)>,
+    /// Whether anything asked the motor to buzz since a script last
+    /// checked (`expect buzzed`): a short buzz between two `expect
+    /// buzzing` would otherwise go unseen.
+    pub buzzed: bool,
     /// The finger on the screen (from a script's `press`, or the mouse), as
     /// the touch task tracks it.
     finger: Option<Tracking>,
@@ -151,6 +155,7 @@ impl Watch {
             timer: None,
             backlight: brightness::Level::OFF,
             motor: None,
+            buzzed: false,
             finger: None,
             off: None,
             phone_time: None,
@@ -406,6 +411,7 @@ impl Watch {
         while let Some(pattern) = motor::take_request() {
             self.log(format!("buzz: {}", pattern_name(pattern)));
             self.motor = (pattern != Pattern::STOP).then(|| (pattern, Instant::now()));
+            self.buzzed |= self.motor.is_some();
             // For `--watch` recordings to shake the watch, as the window
             // does: the recorder can't reach the watch.
             crate::record::motor(self.motor);

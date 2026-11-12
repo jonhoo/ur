@@ -57,12 +57,14 @@ says.)
 
 ## On the charger
 
-Once the charge is done, the full charge's screen takes over for a few
-seconds, with a buzz.
+Woken there, the screen shows the glance on the charger in Tokyo
+Night's colours; a press or a touch goes on to the clock face. Once the
+charge is done, the full charge's screen takes over for a few seconds,
+with a buzz.
 
-| On the charger (LIVING TOKYO) | Full |
-|---|---|
-| <img src="shots/clock-charging.png" width="120" alt="The clock face on the charger: the moon waxing, in green; the beacon dark; and the heart rate's sign reading OFF, unlit"> | <img src="shots/charged.png" width="120" alt="Fully charged: the city at night under a big full moon, lightning in yellow and white striking a distant roof, and FULL in magenta neon on a dark sign in front of the buildings"> |
+| Woken on the charger (LIVING TOKYO) | The clock face there | Full |
+|---|---|---|
+| <img src="shots/charging.png" width="120" alt="Woken on the charger: the time at the top in pale lavender; the moon, big, waxing in green among faint stars, with 66% under it; then FULL IN, and 1:12, big, on the night blue"> | <img src="shots/clock-charging.png" width="120" alt="The clock face on the charger: the moon waxing, in green; the beacon dark; and the heart rate's sign reading OFF, unlit"> | <img src="shots/charged.png" width="120" alt="Fully charged: the city at night under a big full moon, lightning in yellow and white striking a distant roof, and FULL in magenta neon on a dark sign in front of the buildings"> |
 
 ## The dim look
 
