@@ -48,9 +48,10 @@ pub const MAGIC: u32 = 0x7572_4350; // "urCP"
 
 /// How many events the ring keeps: a tick a second, plus inputs, so the
 /// reader must look about once a minute. (The probe's bridge sometimes
-/// stalls for many seconds.) 60 rather than 64 pays for [`Export::music`]:
+/// stalls for many seconds.) 60 rather than 64 paid for [`Export::music`],
+/// and 59 once the statics outgrew 60 (by 24 bytes, on 2026-11-12):
 /// this build has little RAM to spare.
-pub const EVENTS: usize = 60;
+pub const EVENTS: usize = 59;
 
 /// The capacity of `PhoneEvent::MusicInfo`'s artist and track (checked
 /// where they're copied: see [`music`]).
