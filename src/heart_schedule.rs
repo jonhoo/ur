@@ -481,6 +481,12 @@ pub enum Charger {
     Arrived,
     /// On it: measure nothing.
     On,
+    /// Set back on it within [`CHARGER_SETTLE`] of being taken off (a
+    /// wobbly cradle's contact): the same charge, not a new arrival, so
+    /// nothing about the schedule changes; measure nothing. Its own
+    /// variant only so that a field log says the power came back, as it
+    /// says each time it went.
+    Back,
     /// Just taken off it: measure nothing for this many seconds more
     /// ([`CHARGER_SETTLE`]).
     Left(u32),
@@ -1003,7 +1009,7 @@ impl Schedule {
             // the same charge: no new arrival.
             (_, true) if settling => {
                 self.power = Power::On;
-                Charger::On
+                Charger::Back
             }
             (_, true) => {
                 self.power = Power::On;

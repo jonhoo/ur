@@ -1171,18 +1171,19 @@ mod tests {
 
     /// A wobbly cradle, making and breaking contact: each break settles
     /// afresh, and contact back within the settling time is the same
-    /// charge, not another arrival (whose log line would come with every
-    /// wobble).
+    /// charge, not another arrival (which would end a round of tries), but
+    /// says it's back, once, so a field log has an "on" for every "off".
     #[test]
     fn a_wobbly_cradle_is_one_charge() {
         let mut schedule = Schedule::new();
         schedule.ended(100, 13, Outcome::Reading(60), true, awake(0));
         assert_eq!(schedule.charger(200, true), Charger::Arrived);
         assert_eq!(schedule.charger(201, false), Charger::Left(CHARGER_SETTLE));
+        assert_eq!(schedule.charger(202, true), Charger::Back);
         assert_eq!(schedule.charger(202, true), Charger::On);
         assert_eq!(schedule.charger(203, false), Charger::Left(CHARGER_SETTLE));
         assert_eq!(schedule.charger(209, false), Charger::Settling(4));
-        assert_eq!(schedule.charger(210, true), Charger::On);
+        assert_eq!(schedule.charger(210, true), Charger::Back);
         assert_eq!(schedule.charger(500, false), Charger::Left(CHARGER_SETTLE));
         assert_eq!(schedule.charger(510, false), Charger::Away);
         assert_eq!(schedule.due(0, false), (500 + MIN_INTERVAL, Why::Rest));
@@ -2066,7 +2067,7 @@ mod proofs {
 
         let charger = schedule.charger(now, present);
         assert!(schedule.consistent() && schedule.as_of() <= now);
-        assert_eq!(present, matches!(charger, Charger::Arrived | Charger::On));
+        assert_eq!(present, matches!(charger, Charger::Arrived | Charger::On | Charger::Back));
         assert_eq!(schedule.budget(now), before.budget(now));
         let (at, why) = schedule.due(active_polls, asleep);
         match charger {
@@ -2081,7 +2082,7 @@ mod proofs {
                 assert!(0 < wait && wait <= CHARGER_SETTLE);
                 assert_eq!((at, why), (was_at, was_why));
             }
-            Charger::Away | Charger::Arrived | Charger::On => {
+            Charger::Away | Charger::Arrived | Charger::On | Charger::Back => {
                 assert_eq!((at, why), (was_at, was_why));
             }
         }

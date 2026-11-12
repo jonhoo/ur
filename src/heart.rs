@@ -533,6 +533,12 @@ pub async fn heart_task(i2c: Device) {
                     Some(RECHECK_SECS)
                 }
                 Charger::On => Some(RECHECK_SECS),
+                // A wobbly cradle's contact back: logged, so that every
+                // "off the charger" has its "on" before it.
+                Charger::Back => {
+                    info!("heart: back on the charger");
+                    Some(RECHECK_SECS)
+                }
                 Charger::Left(wait) => {
                     info!("heart: off the charger");
                     Some(wait)
