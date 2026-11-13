@@ -264,7 +264,7 @@ use crate::palette::Palette;
 use crate::phone::Text;
 pub use crate::phone::{PhoneEvent, Unpaired};
 use crate::route::Route;
-use crate::sleep::{self, Change, Over};
+use crate::sleep::{self, Change, Over, Rest};
 use crate::themes::{
     self, CallButton, EditorButton, EditorField, Handles, MediaAction, RowKind, SettingRow, Theme,
 };
@@ -2481,8 +2481,9 @@ impl App {
             matches!(change, Some(Change::Over(_))),
         );
         match change {
-            Some(Change::Quiet { nap: false }) => defmt::info!("night: quiet"),
-            Some(Change::Quiet { nap: true }) => defmt::info!("night: quiet (nap)"),
+            Some(Change::Quiet(Rest::Night)) => defmt::info!("night: quiet"),
+            Some(Change::Quiet(Rest::Nap)) => defmt::info!("night: quiet (nap)"),
+            Some(Change::Quiet(Rest::Doze)) => defmt::info!("night: quiet (after alarm)"),
             Some(Change::Over(Over::Awake)) => defmt::info!("night: over (awake)"),
             Some(Change::Over(Over::Noon)) => defmt::info!("night: over (noon)"),
             None => {}
@@ -2533,8 +2534,9 @@ impl App {
             // The morning's first alarm (a snooze is still the morning)
             // ends the night, so it rings with the screen bright. Not a
             // timer: that rings in the dim look, and the night goes on.
+            // Before noon, a doze after it ends sooner (see `sleep::Night`).
             if !matches!(kind, alarm::Kind::Timer(_)) {
-                if self.night.end() {
+                if self.night.alarm(sleep::morning(local_second)) {
                     defmt::info!("night: over (alarm)");
                 }
                 // Waking up, even without a quiet night: the small hours

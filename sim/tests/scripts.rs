@@ -871,6 +871,42 @@ fn a_double_press_ends_the_quiet_night() {
     assert!(ok, "{log}");
 }
 
+/// Dozing off again after a morning alarm is quiet, as the night was, but
+/// ends after `sleep::NAP_AWAKE` (7) minutes up, not `QUIET_AWAKE` (22).
+#[test]
+fn a_doze_after_a_morning_alarm_ends_sooner() {
+    let dir = out("alarm-doze");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "time 2026-11-09 06:00 +01:00
+alarm 1 07:00 on
+asleep on
+wait 2m
+         expect quiet-night
+until 07:00
+wait 1s
+expect buzzing
+expect not quiet-night
+         button
+asleep off
+wait 2m
+asleep on
+wait 10m
+expect quiet-night
+         asleep off
+wait 6m
+expect quiet-night
+wait 2m
+expect not quiet-night
+",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+}
+
 /// A call (or a notification) over a ringing alarm leaves it ringing:
 /// the motor goes back to the alarm once the call is over.
 #[test]

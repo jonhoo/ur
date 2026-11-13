@@ -339,7 +339,7 @@ fn nights(asleep: &[bool], alarm: Option<usize>) -> Vec<bool> {
         let noon = t > 0 && sleep::noon_between(local - 60, local);
         night.update(asleep, t as u32 * 60, noon, sleep::nap_hours(Some(local)));
         if alarm == Some(t) {
-            night.end();
+            night.alarm(sleep::morning(Some(local)));
         }
         quiet.push(night.quiet());
     }
@@ -1342,14 +1342,14 @@ mod tests {
     /// starts it.
     #[test]
     fn night_rules() {
-        use sleep::{Change, Night, Over};
+        use sleep::{Change, Night, Over, Rest};
         let gap = sleep::QUIET_AWAKE as u32 * 60;
         let mut night = Night::default();
         assert!(!night.quiet(), "not quiet after a reset");
         assert_eq!(night.update(false, 0, false, false), None);
         assert_eq!(
             night.update(true, 60, false, false),
-            Some(Change::Quiet { nap: false })
+            Some(Change::Quiet(Rest::Night))
         );
         // Up for a while in the night, and back to sleep.
         assert_eq!(night.update(false, 120, false, false), None);
@@ -1364,12 +1364,13 @@ mod tests {
             night.update(false, up + gap, false, false),
             Some(Change::Over(Over::Awake))
         );
-        // Asleep again: a new night, which an alarm ends.
+        // Asleep again: a new night, which an alarm ends (not a morning
+        // one, which would make the next sleep a doze).
         assert_eq!(
             night.update(true, 100_000, false, false),
-            Some(Change::Quiet { nap: false })
+            Some(Change::Quiet(Rest::Night))
         );
-        assert!(night.end());
+        assert!(night.alarm(false));
         assert!(!night.end(), "already over");
         // Still asleep after the alarm: no new night until awake and
         // asleep again.
@@ -1377,7 +1378,7 @@ mod tests {
         assert_eq!(night.update(false, 100_120, false, false), None);
         assert_eq!(
             night.update(true, 100_180, false, false),
-            Some(Change::Quiet { nap: false })
+            Some(Change::Quiet(Rest::Night))
         );
         // Noon ends it, asleep or not.
         assert_eq!(
@@ -1392,12 +1393,12 @@ mod tests {
     /// doesn't inherit that.
     #[test]
     fn naps_end_sooner() {
-        use sleep::{Change, Night, Over};
+        use sleep::{Change, Night, Over, Rest};
         let nap = sleep::NAP_AWAKE as u32 * 60;
         let mut night = Night::default();
         assert_eq!(
             night.update(true, 60, false, true),
-            Some(Change::Quiet { nap: true })
+            Some(Change::Quiet(Rest::Nap))
         );
         assert_eq!(night.update(false, 120, false, true), None);
         assert_eq!(night.update(false, 120 + nap - 60, false, true), None);
@@ -1408,11 +1409,131 @@ mod tests {
         // A night, later: the longer limit.
         assert_eq!(
             night.update(true, 50_000, false, false),
-            Some(Change::Quiet { nap: false })
+            Some(Change::Quiet(Rest::Night))
         );
         assert_eq!(night.update(false, 50_060, false, false), None);
         assert_eq!(night.update(false, 50_060 + nap + 60, false, false), None);
         assert!(night.quiet());
+    }
+
+    /// A doze after a morning alarm is quiet, but ends after
+    /// [`sleep::NAP_AWAKE`] minutes awake, as a nap does; from noon, sleep
+    /// is a nap or a night again. As on the sealed watch on 2026-11-13: the
+    /// smart alarm at 08:29, asleep again at 08:39, awake at 09:04, and the
+    /// night over (at [`sleep::QUIET_AWAKE`]) only at 09:26, not ~09:11.
+    #[test]
+    fn a_doze_after_a_morning_alarm_ends_sooner() {
+        use sleep::{Change, Night, Over, Rest};
+        // Monotonic seconds of a local time on that morning, from a boot
+        // at midnight.
+        let at = |hh: u32, mm: u32, ss: u32| (hh * 60 + mm) * 60 + ss;
+        let local = |hh: u32, mm: u32| Some(20_000 * 24 * 60 * 60 + at(hh, mm, 0) as i64);
+        let mut night = Night::default();
+        assert_eq!(
+            night.update(true, at(1, 0, 0), false, false),
+            Some(Change::Quiet(Rest::Night))
+        );
+        assert!(night.alarm(sleep::morning(local(8, 29))));
+        // Awake after the alarm, and asleep again: a doze.
+        assert_eq!(night.update(false, at(8, 30, 0), false, false), None);
+        assert_eq!(
+            night.update(true, at(8, 39, 30), false, false),
+            Some(Change::Quiet(Rest::Doze))
+        );
+        assert_eq!(night.update(true, at(9, 4, 28), false, true), None);
+        assert_eq!(night.update(false, at(9, 4, 29), false, true), None);
+        // Up: over once awake longer than `NAP_AWAKE` (seven) minutes.
+        let limit = at(9, 4, 28) + sleep::NAP_AWAKE as u32 * 60;
+        assert_eq!(night.update(false, limit, false, true), None);
+        assert!(night.quiet());
+        assert_eq!(
+            night.update(false, limit + 1, false, true),
+            Some(Change::Over(Over::Awake))
+        );
+        // Another doze before noon ends as soon.
+        assert_eq!(
+            night.update(true, at(10, 0, 0), false, true),
+            Some(Change::Quiet(Rest::Doze))
+        );
+        assert_eq!(night.update(false, at(10, 1, 0), false, true), None);
+        assert_eq!(
+            night.update(false, at(10, 9, 0), false, true),
+            Some(Change::Over(Over::Awake))
+        );
+        // Noon ends the morning: an afternoon's sleep is a nap...
+        assert_eq!(night.update(false, at(12, 0, 0), true, true), None);
+        assert_eq!(
+            night.update(true, at(14, 0, 0), false, true),
+            Some(Change::Quiet(Rest::Nap))
+        );
+        assert_eq!(night.update(true, at(14, 30, 0), false, true), None);
+        assert_eq!(night.update(false, at(14, 31, 0), false, true), None);
+        assert_eq!(
+            night.update(false, at(14, 38, 0), false, true),
+            Some(Change::Over(Over::Awake))
+        );
+        // ... and the evening's a night, which waits out `QUIET_AWAKE`.
+        let gap = sleep::QUIET_AWAKE as u32 * 60;
+        assert_eq!(
+            night.update(true, at(23, 0, 0), false, false),
+            Some(Change::Quiet(Rest::Night))
+        );
+        assert_eq!(night.update(true, at(23, 30, 0), false, false), None);
+        assert_eq!(night.update(false, at(23, 31, 0), false, false), None);
+        assert_eq!(night.update(false, at(23, 30, 0) + gap, false, false), None);
+        assert!(night.quiet());
+    }
+
+    /// Only a morning alarm makes a doze of the sleep after it: one in
+    /// the evening (or at an unknown time) leaves the night after it
+    /// whole, and so does ending the night by hand. A morning alarm that
+    /// rings with the night already over still does.
+    #[test]
+    fn only_a_morning_alarm_makes_a_doze() {
+        use sleep::{Change, Night, Rest};
+        const DAY: i64 = 24 * 60 * 60;
+        let local = |hh: i64, mm: i64| Some(20_000 * DAY + (hh * 60 + mm) * 60);
+        assert!(sleep::morning(local(0, 0)));
+        assert!(sleep::morning(local(11, 59)));
+        assert!(!sleep::morning(local(12, 0)));
+        assert!(!sleep::morning(local(21, 0)));
+        assert!(!sleep::morning(None), "unknown time is no morning");
+
+        let fall_asleep_again = |night: &mut Night, now: u32| {
+            night.update(false, now, false, false);
+            night.update(true, now + 60, false, false)
+        };
+        // An alarm at 21:00, ending a night begun at 20:30.
+        let mut night = Night::default();
+        night.update(true, 60, false, false);
+        assert!(night.alarm(sleep::morning(local(21, 0))));
+        assert_eq!(
+            fall_asleep_again(&mut night, 600),
+            Some(Change::Quiet(Rest::Night))
+        );
+        // At an unknown time.
+        let mut night = Night::default();
+        night.update(true, 60, false, false);
+        assert!(night.alarm(sleep::morning(None)));
+        assert_eq!(
+            fall_asleep_again(&mut night, 600),
+            Some(Change::Quiet(Rest::Night))
+        );
+        // By hand, in the morning.
+        let mut night = Night::default();
+        night.update(true, 60, false, false);
+        assert!(night.end());
+        assert_eq!(
+            fall_asleep_again(&mut night, 600),
+            Some(Change::Quiet(Rest::Night))
+        );
+        // A morning alarm, with the wearer already up.
+        let mut night = Night::default();
+        assert!(!night.alarm(sleep::morning(local(7, 0))));
+        assert_eq!(
+            fall_asleep_again(&mut night, 600),
+            Some(Change::Quiet(Rest::Doze))
+        );
     }
 
     #[test]
@@ -1461,7 +1582,7 @@ mod fuzz;
 /// `fuzz` covers that too.
 #[cfg(kani)]
 mod proofs {
-    use super::sleep::{self, Change, Kind, Minute, Night, Over};
+    use super::sleep::{self, Change, Kind, Minute, Night, Over, Rest};
 
     fn any_kind() -> Kind {
         Kind::from_bits(kani::any::<u8>() % 8)
@@ -1540,21 +1661,31 @@ mod proofs {
 
     /// From a boot, through any four updates at times that move on: a
     /// quiet night starts only as the wearer falls asleep (asleep now,
-    /// and not at the update before), as a nap if in nap hours; it ends
+    /// and not at the update before), as a doze if a morning alarm has
+    /// rung since the last noon, else as a nap if in nap hours; it ends
     /// only at noon, or with the wearer awake for longer than its limit
-    /// (a nap's, if it started as one), and then it does end; `end` ends
-    /// it at once, saying whether there was one; and after any end, it
-    /// stays over while the wearer stays asleep.
+    /// (a nap's, if it started as a nap or a doze), and then it does end;
+    /// `end` and `alarm` end it at once, saying whether there was one; and
+    /// after any end, it stays over while the wearer stays asleep.
     #[kani::proof]
     #[kani::unwind(6)]
     fn a_night_is_quiet_from_falling_asleep_until_it_ends() {
         let mut night = Night::default();
         // What the night should be, kept alongside.
         let (mut quiet, mut was_asleep, mut last_asleep, mut nap) = (false, false, 0u32, false);
+        let mut after_alarm = false;
         let mut now = 0u32;
         for _ in 0..4 {
             if kani::any() {
-                assert_eq!(night.end(), quiet);
+                // By hand, or an alarm, in the morning or not.
+                let (by_alarm, morning): (bool, bool) = kani::any();
+                let was = if by_alarm {
+                    after_alarm |= morning;
+                    night.alarm(morning)
+                } else {
+                    night.end()
+                };
+                assert_eq!(was, quiet);
                 quiet = false;
                 assert!(!night.quiet());
             }
@@ -1565,14 +1696,24 @@ mod proofs {
             if asleep {
                 last_asleep = now;
             }
+            if noon {
+                after_alarm = false;
+            }
             let limit = if nap {
                 sleep::NAP_AWAKE
             } else {
                 sleep::QUIET_AWAKE
             } as u32
                 * 60;
+            let rest = if after_alarm {
+                Rest::Doze
+            } else if nap_hours {
+                Rest::Nap
+            } else {
+                Rest::Night
+            };
             let expected = if !quiet {
-                (asleep && !was_asleep).then_some(Change::Quiet { nap: nap_hours })
+                (asleep && !was_asleep).then_some(Change::Quiet(rest))
             } else if noon {
                 Some(Change::Over(Over::Noon))
             } else if now - last_asleep > limit {
@@ -1582,7 +1723,7 @@ mod proofs {
             };
             assert_eq!(change, expected);
             match change {
-                Some(Change::Quiet { nap: as_nap }) => (quiet, nap) = (true, as_nap),
+                Some(Change::Quiet(rest)) => (quiet, nap) = (true, rest != Rest::Night),
                 Some(Change::Over(_)) => quiet = false,
                 None => {}
             }
