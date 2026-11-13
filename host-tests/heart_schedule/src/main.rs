@@ -2067,7 +2067,10 @@ mod proofs {
 
         let charger = schedule.charger(now, present);
         assert!(schedule.consistent() && schedule.as_of() <= now);
-        assert_eq!(present, matches!(charger, Charger::Arrived | Charger::On | Charger::Back));
+        assert_eq!(
+            present,
+            matches!(charger, Charger::Arrived | Charger::On | Charger::Back)
+        );
         assert_eq!(schedule.budget(now), before.budget(now));
         let (at, why) = schedule.due(active_polls, asleep);
         match charger {
