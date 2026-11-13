@@ -505,8 +505,8 @@ with both (a release's notes say which have one side only; see
 The watch thinks you're asleep: it's a quiet night. It ends with the
 morning's first alarm, or once you've been up for 22 minutes (7 after a
 nap, which is sleep between 09:00 and 20:00, or after dozing off again
-before noon once an alarm has rung). If you're up before either,
-double-press the button.
+before noon once an alarm has rung or you've double-pressed). If you're
+up before either, double-press the button.
 
 ### N02: The watch says "TEXT AS BITMAPS"
 

@@ -411,10 +411,10 @@ pub fn last_sleep(minutes: usize, kind: impl Fn(usize) -> Kind) -> Option<(usize
 /// It starts when the wearer falls asleep: when [`Night::update`] first
 /// sees `asleep` turn true. It ends at the first of:
 ///
-/// - **An alarm** ringing ([`Night::alarm`]): the morning has come. (Not
+/// - **An alarm** ringing ([`Night::end`]): the morning has come. (Not
 ///   a timer: one ringing at night is no sign of morning.)
 /// - **The wearer saying so**, with a double press of the button
-///   ([`Night::end`]): up before the alarm, they needn't wait out
+///   ([`Night::end`] too): up before the alarm, they needn't wait out
 ///   [`QUIET_AWAKE`] for the watch to act as by day.
 /// - **Being awake for longer than [`QUIET_AWAKE`]**: the morning came
 ///   without an alarm. Being awake per the classifier isn't enough by
@@ -447,21 +447,23 @@ pub fn last_sleep(minutes: usize, kind: impl Fn(usize) -> Kind) -> Option<(usize
 /// [`QUIET_AWAKE`]. Waking from a nap is waking up, not a trip to the
 /// bathroom; and noon, which ends any night, would cut a nap short anyway.
 ///
-/// So does a **doze** after a morning alarm: once an alarm has rung before
-/// noon ([`morning`]), falling asleep again before noon is quiet as ever
-/// (the night resumes, muted and dim, and the alarm, done for the day,
-/// doesn't ring again), but ends after [`NAP_AWAKE`] minutes awake. The
-/// alarm said the morning had come, so waking from the doze is getting up,
-/// not a trip to the bathroom. (In the field, the morning after a doze
-/// stayed muted for [`QUIET_AWAKE`] minutes more after getting up.) Until
-/// noon, as by then any night is over, and after it, sleep is a nap or the
-/// next night, which keeps its own limit. Only a morning alarm: one that
+/// So does a **doze** after getting up: once an alarm has rung, or the
+/// wearer has ended the night with the button, before noon ([`morning`]),
+/// falling asleep again before noon is quiet as ever (the night resumes,
+/// muted and dim, and the alarm, done for the day, doesn't ring again),
+/// but ends after [`NAP_AWAKE`] minutes awake. The alarm or the wearer
+/// said the morning had come, so waking from the doze is getting up, not
+/// a trip to the bathroom. (In the field, the morning after a doze stayed
+/// muted for [`QUIET_AWAKE`] minutes more after getting up.) Until noon,
+/// as by then any night is over, and after it, sleep is a nap or the next
+/// night, which keeps its own limit. Only in the morning: an alarm that
 /// rings in the afternoon or evening (the night started after noon) is the
 /// end of a nap, or of a night barely begun, and the night that follows is
-/// a whole one. Only an alarm, too, not the button: that's the user's
-/// call, for now. Every morning alarm counts, whether or not it ended a
+/// a whole one. Every morning alarm counts, whether or not it ended a
 /// quiet night: one that rings with the wearer already up (the night over,
-/// awake) still says it's morning.
+/// awake) still says it's morning. Not being awake for [`QUIET_AWAKE`],
+/// though: before dawn, that's as likely a long night-time wake as getting
+/// up, and the sleep after it the rest of the night.
 ///
 /// Nothing here survives a reset. That fails safe: after one, the night is
 /// over, and starts again once the classifier (whose history is lost too)
@@ -480,13 +482,13 @@ pub struct Night {
     /// When the wearer was last asleep. Meaningful only while quiet: it's
     /// set on falling asleep, which starts the night.
     last_asleep: u32,
-    /// Whether this is a nap (see [`nap_hours`]) or a doze after a
-    /// morning alarm, which end sooner.
+    /// Whether this is a nap (see [`nap_hours`]) or a doze after getting
+    /// up, which end sooner.
     nap: bool,
-    /// Whether an alarm has rung this morning (see [`Night::alarm`]), until
-    /// noon: falling asleep is then a doze. (In what was `Night`'s padding:
-    /// it stays 8 bytes.)
-    after_alarm: bool,
+    /// Whether the wearer got up this morning (an alarm or the button, see
+    /// [`Night::end`]), until noon: falling asleep is then a doze. (In
+    /// what was `Night`'s padding: it stays 8 bytes.)
+    up_this_morning: bool,
 }
 
 /// Minutes awake that end a quiet night without an alarm. Long enough for a
@@ -512,8 +514,8 @@ pub fn nap_hours(local_second: Option<i64>) -> bool {
 }
 
 /// Whether `local_second` (local seconds since 1970) is before noon: the
-/// morning, when an alarm ringing makes sleep until noon a doze (see
-/// [`Night::alarm`]). Unknown time isn't: without it, noon (see
+/// morning, when getting up makes sleep until noon a doze (see
+/// [`Night::end`]). Unknown time isn't: without it, noon (see
 /// [`noon_between`]) never comes to end the morning.
 pub fn morning(local_second: Option<i64>) -> bool {
     const DAY: i64 = 24 * 60 * 60;
@@ -528,9 +530,9 @@ pub enum Rest {
     Night,
     /// A nap ([`nap_hours`]), which ends after [`NAP_AWAKE`].
     Nap,
-    /// A doze after a morning alarm (see [`Night`]), which ends after
-    /// [`NAP_AWAKE`] too. A doze in nap hours is a doze: it's the alarm
-    /// that says why it ends sooner.
+    /// A doze after getting up in the morning (see [`Night`]), which ends
+    /// after [`NAP_AWAKE`] too. A doze in nap hours is a doze: it's having
+    /// got up that says why it ends sooner.
     Doze,
 }
 
@@ -544,7 +546,7 @@ pub enum Change {
 }
 
 /// Why a night ended (other than an alarm or the button, which
-/// [`Night::alarm`] and [`Night::end`] report).
+/// [`Night::end`] reports).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Over {
     /// Awake for longer than [`QUIET_AWAKE`] (or [`NAP_AWAKE`]).
@@ -583,13 +585,13 @@ impl Night {
         if asleep {
             self.last_asleep = now;
         }
-        // Noon ends the morning that an alarm began, whether or not the
+        // Noon ends the morning that getting up began, whether or not the
         // night is quiet: after it, sleep is a nap or the next night.
         if noon {
-            self.after_alarm = false;
+            self.up_this_morning = false;
         }
         if !self.quiet {
-            let rest = if self.after_alarm {
+            let rest = if self.up_this_morning {
                 Rest::Doze
             } else if nap_hours {
                 Rest::Nap
@@ -612,22 +614,14 @@ impl Night {
         Some(Change::Over(over))
     }
 
-    /// Call when the wearer ends the night by hand (a double press of the
-    /// button): the night is over. Returns whether it was quiet until now.
-    ///
-    /// Unlike [`Night::alarm`], this leaves a doze after it a night's quiet
-    /// (the user's call: only the alarm was asked for).
-    pub fn end(&mut self) -> bool {
+    /// Call when the wearer is up: an alarm rings (not a timer), or they
+    /// end the night by hand (a double press of the button). The night is
+    /// over, and if it's the [`morning`], falling asleep again before noon
+    /// is a doze, which ends sooner (see [`Night`]). Returns whether it
+    /// was quiet until now.
+    pub fn end(&mut self, morning: bool) -> bool {
+        self.up_this_morning |= morning;
         core::mem::replace(&mut self.quiet, false)
-    }
-
-    /// Call when an alarm rings (not a timer): the night is over, and if
-    /// it's the [`morning`], falling asleep again before noon is a doze,
-    /// which ends sooner (see [`Night`]). Returns whether it was quiet
-    /// until now.
-    pub fn alarm(&mut self, morning: bool) -> bool {
-        self.after_alarm |= morning;
-        self.end()
     }
 }
 

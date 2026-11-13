@@ -1449,11 +1449,12 @@ impl App {
         // a press does (most likely, woke the screen, dimly); the second,
         // instead of its usual (turning the screen off again, from the
         // clock), leaves the screen on, now bright. Outside the quiet
-        // night, a double press is just two presses.
+        // night, a double press is just two presses. Before noon, as after
+        // an alarm, a doze after it ends sooner (see `sleep::Night`).
         if let InputEvent::Button = event {
             let previous = core::mem::replace(&mut self.last_press, now);
             if self.night.quiet() && now - previous <= DOUBLE_PRESS {
-                self.night.end();
+                self.night.end(sleep::morning(self.local_second));
                 defmt::info!("night: over (button)");
                 // Up for the day, for the brightness, as after an alarm.
                 self.small_hours = false;
@@ -2483,7 +2484,7 @@ impl App {
         match change {
             Some(Change::Quiet(Rest::Night)) => defmt::info!("night: quiet"),
             Some(Change::Quiet(Rest::Nap)) => defmt::info!("night: quiet (nap)"),
-            Some(Change::Quiet(Rest::Doze)) => defmt::info!("night: quiet (after alarm)"),
+            Some(Change::Quiet(Rest::Doze)) => defmt::info!("night: quiet (doze)"),
             Some(Change::Over(Over::Awake)) => defmt::info!("night: over (awake)"),
             Some(Change::Over(Over::Noon)) => defmt::info!("night: over (noon)"),
             None => {}
@@ -2536,7 +2537,7 @@ impl App {
             // timer: that rings in the dim look, and the night goes on.
             // Before noon, a doze after it ends sooner (see `sleep::Night`).
             if !matches!(kind, alarm::Kind::Timer(_)) {
-                if self.night.alarm(sleep::morning(local_second)) {
+                if self.night.end(sleep::morning(local_second)) {
                     defmt::info!("night: over (alarm)");
                 }
                 // Waking up, even without a quiet night: the small hours
