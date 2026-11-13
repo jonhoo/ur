@@ -19,6 +19,7 @@ missing below were test builds for the dev kit.
 ### Changed
 
 - Wake the screen, rather than play or pause, when a second tap comes too slowly to be a double tap: with the screen off or on a glance, a tap that starts more than 0.3 s after the first one lifted, but within 1.5 s, now wakes it however light (a retry, the first tap having done nothing visible), where one within about half a second used to play or pause and a later light one did nothing; so a double tap, or a tap-and-hold for the next track, now needs its second touch within 0.3 s of the first tap's lift (the wearer's own take under 0.2 s), and a lighter firm tap on a glance wakes the screen 0.3 s after it rather than half a second (60dba38)
+- End the quiet night 7 minutes after waking from a doze that follows a morning alarm, rather than 22: dozing off again before noon, once an alarm has rung, still resumes the night (muted and dim, and the alarm doesn't ring again), but waking from it is getting up, as from a nap; an alarm in the afternoon or evening, or ending the night with a double press, leaves the next sleep a whole night (374a9d7)
 - Never measure the heart rate on the charger, charging or full: its LED stays dark there, a try under way stops within a second and counts as neither a reading nor a failure, and the clock face says OFF for the heart rate; taken off, the watch measures again two minutes later, or after 10 seconds if the clock face is looked at (f95500e, b3c315a)
 
 ### Deprecated
