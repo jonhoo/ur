@@ -14,13 +14,7 @@ missing below were test builds for the dev kit.
 
 ### Added
 
-- Light the screen within a second of setting the watch on its charger, so it's plain at once that it charges (dimly, without a buzz, in a quiet night; a wobbly cradle lights it once), showing the charge and the time to full (an estimate that errs long, by up to about 20 minutes), in each theme's own drawing, as the button or a tap there does too (the next press or touch goes on to the clock face); then, every 5 minutes there, outside a quiet night and not over anything on screen, show the same by itself, dimly and silently, for 10 seconds; and once the charge is done, buzz twice and show FULL on the whole screen for a few seconds, in each theme's own drawing (Retro's a big bolt, Living Tokyo's its city under a full moon, struck by lightning), so it's plain the watch can come off: once a charge, not for a watch set on the charger full, after any alarm, call, "find my watch", pairing, update or alarm editor on screen has ended, and in a quiet night dark and silent until the first time the screen is woken after it; the button puts it away (8bb97c0, 523b654, 101db71, 57541a1)
-
 ### Changed
-
-- Wake the screen, rather than play or pause, when a second tap comes too slowly to be a double tap: with the screen off or on a glance, a tap that starts more than 0.3 s after the first one lifted, but within 1.5 s, now wakes it however light (a retry, the first tap having done nothing visible), where one within about half a second used to play or pause and a later light one did nothing; so a double tap, or a tap-and-hold for the next track, now needs its second touch within 0.3 s of the first tap's lift (the wearer's own take under 0.2 s), and a lighter firm tap on a glance wakes the screen 0.3 s after it rather than half a second (60dba38)
-- End the quiet night 7 minutes after waking from a doze that follows a morning alarm, or a morning's double press, rather than 22: dozing off again before noon, once an alarm has rung or the night was ended with the button, still resumes the night (muted and dim, and the alarm doesn't ring again), but waking from it is getting up, as from a nap; an alarm in the afternoon or evening leaves the next sleep a whole night (374a9d7)
-- Never measure the heart rate on the charger, charging or full: its LED stays dark there, a try under way stops within a second and counts as neither a reading nor a failure, and the clock face says OFF for the heart rate; taken off, the watch measures again two minutes later, or after 10 seconds if the clock face is looked at (f95500e, b3c315a)
 
 ### Deprecated
 
@@ -28,14 +22,37 @@ missing below were test builds for the dev kit.
 
 ### Fixed
 
-- Stop a phone or computer that connects without pairing from nagging the wearer and holding one of the watch's two Bluetooth connections, which could keep the phone out: it's disconnected once it can no longer pair (40 s after connecting, or a minute after its passkey showed), and its "NOT PAIRED" or "PAIRING LOST" banner shows and buzzes at most once every five minutes, however often it reconnects (Info's PHONE row still says so while it's connected) (794b3a9)
-- Stop saying "PAIRING LOST" (or "NOT PAIRED") when a connection is merely dying, as when the phone reconnects at the edge of range while the wearer walks away from it: the watch now says so only once the device has shown it's there and the connection has lasted about 15 seconds, or at once when a pairing fails (afcfeb5)
-- Show a notification's sender or title, a caller's name, and the music screen's artist and track without the `:shortcodes:` Gadgetbridge sends in place of emoji by default (`Familien :house_with_garden:: Nils` is now `Familien: Nils`, as it would be with the emoji), leaving colons in ordinary text (`Re: lunch`, `10:30`) alone; a caller's name and the music's texts also leave out other emoji rather than show `?`, end in `…` when cut short, and a caller whose name shows nothing gets their number (5969889, bd13cea)
-- Send Gadgetbridge the activity recorded after the phone puts the watch's clock right, when its own clock was ahead and has since been corrected: the minutes from the corrected time on used to be skipped, up to the time the clock had reached while ahead, or up to the fetch after next, so they never reached Gadgetbridge or Health Connect (adfc271)
-- Stop the minutes just before falling asleep reaching Gadgetbridge, and so Health Connect, as awake when the watch then counts them as the start of the night (or of a doze): a fetch while settling down on the sofa sent them before the watch could tell, and Gadgetbridge keeps the first kind it gets; the watch now holds them back until it knows, which can also put off sending a nap of under 55 minutes or so a little longer after it (614731d, 66647c2, e955a76)
-- Show the day's colour schemes and daytime brightness by day where the sun sets after local midnight, which had the night's all day: Tromsø the weeks either side of the midnight sun, Reykjavik around midsummer, and anywhere while the phone's time zone is hours from the last location the watch had (1f7bfb3)
-
 ### Security
+
+## [0.11.1] - 2026-11-13
+
+The new ideas in it: **charger screens**, the screen lighting up as the
+watch is set on its charger with the time to full, glancing there every
+5 minutes, and buzzing and saying **FULL** once it's done; **no
+heart-rate LED on the charger**; **fewer and truer pairing banners**; a
+**slow second tap** that wakes the screen rather than playing or
+pausing; and a **shorter doze** after a morning alarm or double press,
+the quiet night ending 7 minutes after waking from it.
+
+### Added
+
+- Light the screen within a second of setting the watch on its charger, silently (dimly in a quiet night; a wobbly cradle lights it once), to show the charge and the time to full in each theme's own drawing (an estimate that errs long: up to about 20 minutes over, a couple under at worst); the button, a tap or a glance there shows the same (the next press or touch goes on to the clock face), and until it's full it also shows by itself every 5 minutes for 10 s, dimly and silently, outside a quiet night and not over anything on screen (8bb97c0, 523b654, 57541a1)
+- Buzz twice and show FULL on the whole screen for 4 s once the charge is done, so it's plain the watch can come off, in each theme's own drawing (Retro's a big bolt, Living Tokyo's its city under a full moon, struck by lightning): once a charge, not for a watch set on the charger full, after any alarm, call, "find my watch", pairing, update or alarm editor on screen has ended, and not if the watch has come off by then; in a quiet night it waits, dark, and shows without the buzz the first time the wearer wakes the screen after the night; the button or a touch puts it away (101db71, 793f77f)
+
+### Changed
+
+- Wake the screen, rather than play or pause, at a second tap too slow for a double tap: with the screen off or on a glance, outside the quiet night, a tap away from the edge that starts 0.3–1.5 s after the first one lifted now wakes it however light (a retry, the first tap having done nothing visible), where with a phone connected one within about half a second used to play or pause, and a later light one did nothing; so a double tap, or a tap-and-hold for the next track, now needs its second touch to start within 0.3 s of the first tap's lift (in field logs, they started within 0.2 s), even right after a tap that woke the screen, and a lighter firm tap on a glance wakes the screen after 0.3 s rather than 0.10.1's half second (60dba38, 0afa4ad)
+- End the quiet night 7 minutes, rather than 22, after waking from a doze that follows an alarm or a double press of the button before noon (even in the small hours): dozing off again before noon still resumes the night (muted and dim, and the alarm doesn't ring again), but waking from it is getting up, as from a nap; after an alarm or double press after noon, the next sleep is still a whole night (374a9d7, 3c7bb4c)
+- Never light the heart-rate LED on the charger, charging or full: a measurement under way stops within a second (counting as neither a reading nor a failure, unless it had already read), the clock face says OFF for the heart rate, and the watch counts as off the wrist for sleep tracking and the temperature as soon as it's set there, rather than up to an hour later; taken off, it measures again after two minutes, or after 10 s if the clock face is looked at (f95500e, b3c315a)
+
+### Fixed
+
+- Stop a phone or computer that connects without pairing from nagging the wearer and holding one of the watch's two Bluetooth connections, which could keep the phone out (introduced in 0.9.0): it's disconnected once it can no longer pair (40 s after connecting, or a minute after its passkey showed, which also clears a stalled pairing's passkey from the screen), and the "NOT PAIRED" and "PAIRING LOST" banners each show and buzz at most once every 5 minutes, however often such devices reconnect (Info's PHONE row still says so while one is connected) (794b3a9)
+- Stop saying "PAIRING LOST" (or "NOT PAIRED") when a connection is merely dying, as when the phone reconnects at the edge of range as the wearer walks away (introduced in 0.9.0): the watch now says so only once the device has talked to it and the connection has lasted about 15 s, or at once when a pairing fails (afcfeb5)
+- Leave out the `:shortcodes:` Gadgetbridge sends by default in place of emoji from a notification's sender or title, a caller's name, and the music screen's artist and track (`Book club :books:: Ada` is now `Book club: Ada`, as with the emoji), leaving ordinary colons (`Re: lunch`, `10:30`) alone; a caller's name and the music's texts also leave out other emoji rather than show `?`, end in `…` when cut short, and a caller whose name shows nothing gets their number (5969889, bd13cea)
+- Stop the minutes just before falling asleep reaching Gadgetbridge, and so Health Connect, as awake on the odd night the watch then counts them as the start of the night (or of a doze): a fetch while settling down on the sofa could send them before the watch could tell, and Gadgetbridge keeps the first kind it gets; the watch now holds them back until it knows, which can delay sending a nap of under about 55 minutes by up to about 10 minutes (614731d, 66647c2, e955a76)
+- Send Gadgetbridge, and so Health Connect, the activity recorded after the phone puts right a clock that was ahead (and had set the watch's ahead too): the minutes from the corrected time on used to be skipped, up to where the last fetch while ahead had reached or to the fetch after next, whichever came first (adfc271)
+- Show the day's colour schemes and daytime brightness by day where the sun sets after local midnight, rather than the night's all day: in Tromsø the few days either side of the midnight sun, Reykjavik around midsummer, and anywhere while the phone's time zone is hours from the last location the watch had (1f7bfb3)
 
 ## [0.11.0] - 2026-11-12
 
@@ -382,7 +399,8 @@ built up to that point, below.
 - Install under the PineTime's stock MCUBoot bootloader, and receive firmware updates over Bluetooth (fdc5a70)
 - Keep a field log in flash in the logging build, and fetch it over Bluetooth (57f261f)
 
-[Unreleased]: https://github.com/jonhoo/ur/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/jonhoo/ur/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/jonhoo/ur/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/jonhoo/ur/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/jonhoo/ur/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/jonhoo/ur/compare/v0.9.0...v0.10.0
