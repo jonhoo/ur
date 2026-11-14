@@ -185,6 +185,20 @@ const CRATERS: [(i32, i32, i32); 3] = [(22, 24, 9), (40, 38, 7), (36, 17, 4)];
 /// Drawn a row at a time: the dark run, then the lit one over it, then
 /// the craters' runs, so it costs a few rectangles a row.
 pub(super) fn fine_moon(canvas: &mut Canvas, x: i32, y: i32, d: i32, lit: i32, color: Color) {
+    moon(canvas, (x, y, d), lit, color, false);
+}
+
+/// A [`fine_moon`], or in the dim look (`dim`), as the dim look draws
+/// the city: its dark side outlined in the hints' red, a pixel thick,
+/// the lit share solid, and no seas, as tones there would be
+/// checkerboards, which flicker in idle mode (see `Palette::columns`).
+pub(super) fn moon(
+    canvas: &mut Canvas,
+    (x, y, d): (i32, i32, i32),
+    lit: i32,
+    color: Color,
+    dim: bool,
+) {
     let lit = lit.clamp(0, 100);
     // For a row half `half` wide (from the middle), the terminator is at
     // `k * half` across the middle, `k` from 1 (new) to -1 (full): its
@@ -213,6 +227,22 @@ pub(super) fn fine_moon(canvas: &mut Canvas, x: i32, y: i32, d: i32, lit: i32, c
         let from = span.clone().find(|&px| past(px)).unwrap_or(span.end);
         let width = span.len() as i32;
         canvas.fine_rect(span.start, py, width, 1, Color::SHADOW);
+        if dim {
+            // The outline: in to where the next row out starts, so that
+            // it's unbroken where the rows narrow fast; the top and
+            // bottom rows whole.
+            let outward = if 2 * (py - y) < d { -1 } else { 1 };
+            let outer = ellipse_span(x, y, d, d, py + outward);
+            let ring = if outer.is_empty() {
+                width
+            } else {
+                (outer.start - span.start).max(1)
+            };
+            canvas.fine_rect(span.start, py, ring, 1, Color::TEXT_FAINT);
+            canvas.fine_rect(span.end - ring, py, ring, 1, Color::TEXT_FAINT);
+            canvas.fine_rect(from, py, span.end - from, 1, color);
+            continue;
+        }
         canvas.fine_tone(span.start, py, 1, 1, 2, color);
         canvas.fine_tone(span.end - 1, py, 1, 1, 2, color);
         canvas.fine_rect(from, py, span.end - from, 1, color);
@@ -224,6 +254,9 @@ pub(super) fn fine_moon(canvas: &mut Canvas, x: i32, y: i32, d: i32, lit: i32, c
                 canvas.fine_tone(start, py, end - start, 1, 2, Color::TEXT_DIM);
             }
         }
+    }
+    if dim {
+        return;
     }
     // The ring's top and bottom, which the rows' ends leave open.
     let cap = ellipse_span(x, y, d, d, y);
