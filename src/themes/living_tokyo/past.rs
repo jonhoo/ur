@@ -30,9 +30,9 @@ use crate::ui::Fits;
 // with one busy hour (a run, a walk to work) as one tower among stubs a
 // row high; the root keeps a quiet hour's few hundred steps a house of a
 // few floors, still plainly lower. What's linear is its lit windows: a
-// building has its floors' sixteenth of them lit, so the lit windows it
-// has are in proportion to its steps (`floors²/8` of them), and the whole
-// street's lit windows add up as the steps do.
+// building of n floors has n sixteenths of its 2n windows lit, n²/8, in
+// proportion to its steps, so the street's lit windows add up as the
+// steps do.
 //
 // It lives on the hour. The hour now has a mast on its roof, its beacon
 // blinking with the seconds; the hours to come are empty lots behind a
@@ -189,10 +189,10 @@ pub(super) fn render_today(canvas: &mut Canvas, day: Option<&Day>, steps: Option
 
     // The steps, big: the step counter's total (which, unlike the hours,
     // counts steps from before the phone set the clock), a footprint
-    // before them. In the city's lettering, though they can change each
-    // second on a walk: the screen is looked at standing, mostly, and its
-    // rows round them are drawn finely anyway (see the report in the
-    // commit that made it so).
+    // before them. In the city's lettering, though on a walk they can
+    // change each second, and a fine row that changes is sent whole (see
+    // `Canvas::refine`): the screen is mostly read standing still, and
+    // their bands are drawn finely anyway (the title's sign, the stars).
     for (x, y, w, h) in FOOT {
         street::fine_ellipse(canvas, x, STEPS_Y + y, w, h, Color::TEXT_DIM);
     }
@@ -267,20 +267,21 @@ fn tube(canvas: &mut Canvas, day: &Day) {
     };
     let floor = i32::from(low) / 10 * 10;
     let ceiling = ((i32::from(high) + 9) / 10 * 10).max(floor + TUBE_BPM);
-    // Each hour's highest and lowest readings' rows, worked out once.
+    // Each hour's highest and lowest readings' rows, worked out once, as
+    // bytes (the tube is in rows 92..128), to keep it small on the stack.
     let mut readings = [None; HOURS];
     for (reading, hour) in readings.iter_mut().zip(&day.hours) {
         let y = |bpm: u8| {
-            TUBE_TOP + TUBE_H - 1 - (i32::from(bpm) - floor) * (TUBE_H - 1) / (ceiling - floor)
+            (TUBE_TOP + TUBE_H - 1 - (i32::from(bpm) - floor) * (TUBE_H - 1) / (ceiling - floor))
+                as u8
         };
         if hour.heart_max > 0 {
             *reading = Some((y(hour.heart_max), y(hour.heart_min)));
         }
     }
     let at = |i: i32| {
-        usize::try_from(i)
-            .ok()
-            .and_then(|i| readings.get(i)?.as_ref())
+        let (top, bottom) = (*readings.get(usize::try_from(i).ok()?)?)?;
+        Some((i32::from(top), i32::from(bottom)))
     };
     // The tube's edges at column `x`: between two hours' middles, from
     // one's to the other's; past the last of a run, flat, for 3 columns.
@@ -288,12 +289,12 @@ fn tube(canvas: &mut Canvas, day: &Day) {
         let i = (x - centre(0)).div_euclid(LOT);
         let from = centre(i);
         match (at(i), at(i + 1)) {
-            (Some(&(top, bottom)), Some(&(next_top, next_bottom))) => {
+            (Some((top, bottom)), Some((next_top, next_bottom))) => {
                 let along = |a: i32, b: i32| a + (b - a) * (x - from) / LOT;
                 Some((along(top, next_top), along(bottom, next_bottom)))
             }
-            (Some(&edges), None) if x - from <= 3 => Some(edges),
-            (None, Some(&edges)) if from + LOT - x <= 3 => Some(edges),
+            (Some(edges), None) if x - from <= 3 => Some(edges),
+            (None, Some(edges)) if from + LOT - x <= 3 => Some(edges),
             _ => None,
         }
     };
