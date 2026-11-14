@@ -7,9 +7,9 @@
 //! being restyled as the same city at street level, each living on the
 //! time and on what it shows, from the shared pieces in [`street`] (see
 //! DESIGN.md beside this file for the language and the plan). Restyled so
-//! far: the charge's glance and the full charge, the time glance's
-//! timers, Last night, a notification and its banner, and an alarm
-//! ringing. Every other screen, and where its taps land, started as a
+//! far: the glances (the time's, its timers', the route's and the
+//! charge's) and the full charge, Today, Last night, a notification and
+//! its banner, and an alarm ringing. Every other screen, and where its taps land, started as a
 //! copy of Retro's (`scripts/new-theme.sh`): the files beside this one,
 //! a file a group of screens, in Living Tokyo's colours, its own code
 //! from here on. [`LivingTokyo`]'s [`Theme`] says which draws which.
@@ -126,8 +126,8 @@ impl Theme for LivingTokyo {
         glance::render_glance(canvas, glance);
     }
 
-    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>, _dim: bool) {
-        past::render_today(canvas, day, steps);
+    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>, dim: bool) {
+        past::render_today(canvas, day, steps, dim);
     }
 
     fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>, dim: bool) {

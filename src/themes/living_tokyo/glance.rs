@@ -3,13 +3,13 @@
 //! navigates, or on the charger, how long it has to go; and, just after a
 //! media gesture, what it did.
 
-use super::{BACKGROUND, action_icon, draw_digit};
+use super::{BACKGROUND, action_icon, draw_digit, street};
 use crate::alarm;
 use crate::canvas::{Canvas, Color};
 use crate::font;
 use crate::route::Turn;
 use crate::themes::helpers::{countdown, hhmm, percent as percent_text, to_full as to_full_text};
-use crate::themes::{Glance, ToFull};
+use crate::themes::{Glance, STEP_GOAL, ToFull};
 use crate::ui::Status;
 
 /// A glance: the time alone, or with the running timers; the next turn
@@ -34,7 +34,7 @@ pub(super) fn render_glance(canvas: &mut Canvas, glance: &Glance) {
 }
 
 /// The glance: the hours above the minutes, as big as fits with room
-/// around them, and nothing else.
+/// around them, and at the foot, the city's lights, a row of them.
 ///
 /// The sizes follow from three rules. The digits scale by whole numbers
 /// (they're pixel art). The block keeps a margin of about a tenth of the
@@ -44,11 +44,16 @@ pub(super) fn render_glance(canvas: &mut Canvas, glance: &Glance) {
 /// minutes (two cells), so they read as two numbers rather than a grid of
 /// four digits. 5× (25×35 digits) can't keep the margin; 4× (20×28) can:
 /// a 45×65 block, with 7–8 px above and below.
+///
+/// Under it, the city a glance has room for: the far city's windows, a
+/// row of them in the bottom margin, lit with the day's steps (see
+/// [`foot_windows`]). Still, as the dim look is.
 fn render_time_glance(canvas: &mut Canvas, status: &Status) {
     canvas.clear(BACKGROUND);
     let Some(t) = &status.local_time else {
         return;
     };
+    foot_windows(canvas, status.steps.unwrap_or(0));
     const SCALE: i32 = 4;
     const WIDTH: i32 = font::DIGIT_W as i32 * SCALE;
     const HEIGHT: i32 = 7 * SCALE;
@@ -70,6 +75,44 @@ fn render_time_glance(canvas: &mut Canvas, status: &Status) {
             Color::TEXT,
         );
     }
+}
+
+/// The far city's blocks along the time glance's foot, left to right: how
+/// many windows each has. Their 28 windows and 7 gaps span 69 columns,
+/// from [`FOOT_X`], centred.
+const FOOT_BLOCKS: [i32; 8] = [4, 2, 5, 3, 4, 2, 5, 3];
+const FOOT_X: i32 = 5;
+
+/// The row the time glance's windows are on: in its bottom margin, 4 px
+/// under the minutes' shadow.
+const FOOT_Y: i32 = 76;
+
+/// The far city as the time glance has room for it: its windows alone,
+/// a row of them, in blocks (a window every other column, and a gap of
+/// three between blocks), lit with `steps` as the clock face's are with
+/// the day's: a share of them as far as the goal, all of them there. Only
+/// the lit ones show, in the windows' warm light (the dim look's white):
+/// a few lights at the foot of the dark after a quiet morning, a row of
+/// them after a long walk. (Drawn, the unlit ones' grey made a band that
+/// looked the same either way.)
+fn foot_windows(canvas: &mut Canvas, steps: u32) {
+    let lit = steps.min(STEP_GOAL) * 256 / STEP_GOAL;
+    let mut x = FOOT_X;
+    let mut window: u32 = 0;
+    for &count in &FOOT_BLOCKS {
+        for _ in 0..count {
+            // As the clock face's windows: a permutation of their
+            // indices, so that the lit share is spread along the row.
+            if (window * 167 + 13) % 256 < lit {
+                canvas.pixel(x, FOOT_Y, Color::HEART_SHINE);
+            }
+            window += 1;
+            x += 2;
+        }
+        x += 2;
+    }
+    // The last window is 4 columns back: its own step, and the gap's.
+    debug_assert!(x - 4 <= 76, "the glance's windows run off the screen");
 }
 
 /// The glance while a timer runs: the time in one row, HH:MM at 3×, and
@@ -161,20 +204,26 @@ fn render_timers_glance(
 }
 
 /// The glance while the phone navigates: the next turn takes the middle of
-/// the screen, as an arrow with the distance under it, then the street
-/// (two lines of the small font at most, as Gadgetbridge gives it). The
-/// time stays, smaller, at the top: a glance is still for the time too,
-/// but on the way somewhere, the turn is what a look at the wrist is for.
+/// the screen, as an arrow with the distance under it, then the street on
+/// a street plate, as a corner's in Tokyo has it (two lines of the small
+/// font at most, as Gadgetbridge gives it). The time stays, smaller, at
+/// the top: a glance is still for the time too, but on the way somewhere,
+/// the turn is what a look at the wrist is for.
 ///
 /// From the top: the time (2×, 10 px), the arrow (16×16 at 2×), the
-/// distance (2×), and the street (1×), with 4 px between them; it just
-/// fits, with the street's second line ending a pixel above the bottom.
+/// distance (2×), with 3 px between them, then the plate, 16 px tall for
+/// two lines (a tube, a clear row, a line, two clear rows, a line, a clear
+/// row and the tube), ending 2 px above the bottom; a one-line plate,
+/// [`street::SIGN_H`] tall, centred in that room.
 fn render_route_glance(canvas: &mut Canvas, status: &Status, step: &crate::route::Step) {
     canvas.clear(BACKGROUND);
     const TIME_Y: i32 = 3;
-    const ARROW_Y: i32 = 17;
-    const DISTANCE_Y: i32 = ARROW_Y + 32 + 4;
-    const STREET_Y: i32 = DISTANCE_Y + 10 + 4;
+    const ARROW_Y: i32 = 16;
+    const DISTANCE_Y: i32 = ARROW_Y + 32 + 3;
+    const PLATE_Y: i32 = DISTANCE_Y + 10 + 1;
+    const PLATE_H: i32 = 16;
+    // The plate's lettering has a tube and a clear column either side.
+    const STREET_W: i32 = 76 - 4;
     let centred = |canvas: &mut Canvas, y: i32, text: &str, scale: i32, color: Color| {
         let width = font::small_text_width(text) * scale;
         canvas.text_scaled(40 - width / 2, y, text, color, scale);
@@ -214,27 +263,73 @@ fn render_route_glance(canvas: &mut Canvas, status: &Status, step: &crate::route
     };
     centred(canvas, DISTANCE_Y, &step.distance, scale, Color::TEXT);
 
+    // The street on its plate: a sign's box round its lines (none for a
+    // turn on no named street), outlined in the hints' colour as street
+    // furniture is, the name in the text's.
     let mut lines = [font::Line::default(); 2];
     let street = step.street.trim();
-    match font::fill(street, font::Face::Small, 76, &mut lines) {
-        count @ 0..=2 => {
+    if street.is_empty() {
+        return;
+    }
+    let count = font::fill(street, font::Face::Small, STREET_W, &mut lines);
+    // Lines on the plate: one, unless the name took two.
+    let shown = if count == 2 { 2 } else { 1 };
+    let width = |line: font::Line| line.width(street, font::Face::Small);
+    let widest = match count {
+        1 | 2 => lines[..count]
+            .iter()
+            .map(|&line| width(line))
+            .max()
+            .unwrap_or(0),
+        // Too long even for two lines (one very long word): its start, cut
+        // at the plate's edge.
+        _ => STREET_W,
+    };
+    let plate_h = 4 + 5 * shown + 2 * (shown - 1);
+    let plate_w = widest + 4;
+    let plate_x = 40 - plate_w / 2;
+    let plate_y = PLATE_Y + (PLATE_H - plate_h) / 2;
+    street::sign(
+        canvas,
+        plate_x,
+        plate_y,
+        plate_w,
+        plate_h,
+        Color::TEXT_FAINT,
+    );
+    match count {
+        1 | 2 => {
             for (i, &line) in lines[..count].iter().enumerate() {
-                let width = font::small_text_width(line.of(street))
-                    + font::small_text_width(line.tail.as_str())
-                    + if line.tail == font::Tail::None { 0 } else { 1 };
-                let y = STREET_Y + i as i32 * 7;
+                let y = plate_y + 2 + i as i32 * 7;
                 canvas.line(
-                    40 - width / 2,
+                    40 - width(line) / 2,
                     y,
                     street,
                     line,
                     font::Face::Small,
-                    Color::TEXT_DIM,
+                    Color::TEXT,
                 );
             }
         }
-        // Too long even for two lines (one very long word): its start.
-        _ => canvas.text_cut(2, STREET_Y, &step.street, Color::TEXT_DIM),
+        _ => {
+            canvas.text_cut(plate_x + 2, plate_y + 2, street, Color::TEXT);
+            // What ran past the lettering's room, over the tube and on.
+            canvas.fill_rect(
+                plate_x + plate_w - 2,
+                plate_y + 1,
+                80,
+                plate_h - 2,
+                Color::SHADOW,
+            );
+            canvas.fill_rect(
+                plate_x + plate_w - 1,
+                plate_y,
+                1,
+                plate_h,
+                Color::TEXT_FAINT,
+            );
+            canvas.fill_rect(plate_x + plate_w, plate_y, 80, plate_h, BACKGROUND);
+        }
     }
 }
 

@@ -157,13 +157,13 @@ it stays the night's city under the full dawn glow, with no stars.
 | Method | Weight | The scene | What lives |
 |---|---|---|---|
 | `clock` | elaborate | *Done.* The skyline at night, the time over it | Windows lit by the steps, the moon by the battery, the beacon by the heart rate, the billboard while notifications are unseen |
-| `glance` (time) | subtle, dim | The hours over the minutes, big, as now | Still (dim): at most a 1-row skyline at the foot whose windows are the steps |
+| `glance` (time) | subtle, dim | *Done.* The hours over the minutes, big, as before; at the foot, the far city's lit windows, a row of them | Still (dim): the windows lit are the day's steps' share of the goal (only the lit ones show) |
 | `glance` (timers) | subtle, dim | *Done.* The time, and an hourglass and the time left a timer | The time left |
-| `glance` (route) | subtle, dim | The turn's arrow; the street's name on a street plate | The turn, the distance |
+| `glance` (route) | subtle, dim | *Done.* The turn's arrow and the distance; the street's name on a street plate | The turn, the distance |
 | `glance` (charge) | subtle | *Done.* The moon, big, among stars | The moon waxes with the charge |
 | `charged` | elaborate | *Done.* The city under a full moon, lightning, FULL in neon | The windows are the day's steps |
-| `today` | medium, dense (approved) | The day's steps as the city: a building an hour, as tall as its steps, its windows lit with them, over the far city; the heart rate's range as a pink neon tube over it | The hour now has a beacon blinking; the hours to come are empty lots; after dark the buildings' windows light, by day they don't; rain on the roofs or stars over them |
-| `last_night` | medium, dense | *Done.* An overnight sleeper train from falling asleep to waking, the times on station signs over its ends, its carriages the stages, the far city behind | A lit window for each share of the night spent awake; the sky the wearer woke under: the moon setting behind the city the later the wake, its windows as lit as its people were up then, the dawn's glow from 04:00; that night's rain, or its stars, one twinkling |
+| `today` | medium, dense (approved) | *Done.* The day's steps as the city: a building an hour, as tall as its steps; the heart rate's range as a pink neon tube over it; the steps big and the resting rate above, and the rest left dark (no far city, no glow) | The hour now has a beacon blinking; the hours to come are empty lots; after dark the buildings' windows light, by day they don't; a few stars, or a fine slate rain behind the roofs |
+| `last_night` | medium, dense | *Done.* An overnight sleeper train from falling asleep to waking, the times on station signs over its ends, its carriages the stages, in a dark sky (calmed: no far city, glow or headlight beam) | A lit window for each share of the night spent awake; the sky the wearer woke under: the moon setting towards the rails the later the wake, the stars going out towards the morning; that night's fine slate rain instead, on a wet one |
 | `alarms` | medium (approved) | A station's departure board under a platform roof: smart wake, the alarms and the timers as departures | The next to ring flagged and counting down ("IN 7H05"); running timers tick; an alarm off is a dark row; rain past the platform's edge, or the night sky |
 | `phone_alarms` | subtle (approved) | The same board, ten rows | The next to ring flagged |
 | `editor` | subtle | One departure, big, on the board; its buttons as lit panel keys | A running timer ticks |

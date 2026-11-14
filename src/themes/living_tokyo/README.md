@@ -14,8 +14,11 @@ Its other screens are being restyled as the same city at street level
 (see [DESIGN.md](DESIGN.md)), and live as the clock face does, on the
 hour, the night's weather and what they show. So far: the glance on the
 charger (the clock face's moon, big), the full charge's (the city under
-a full moon, struck by lightning, FULL in neon), Last night (an
-overnight sleeper train), a notification and its banner (the app's
+a full moon, struck by lightning, FULL in neon), the time's glance (the
+day's steps as a row of lit windows at its foot) and the route's (the
+street on a street plate), Today (the day's steps as a street of
+buildings, one an hour, under the heart rate's neon tube), Last night
+(an overnight sleeper train), a notification and its banner (the app's
 noren over a noodle bar's door), and an alarm ringing (a level crossing
 at night). The rest are still copies of [Retro](../retro/)'s, in Tokyo
 Night's colours.
@@ -56,7 +59,7 @@ says.)
 
 | Screen | At night (LIVING TOKYO) |
 |---|---|
-| Last night | <img src="shots/night-last-night.png" width="120" alt="Last night: LAST NIGHT on a blue neon sign, 7:20 big, ASLEEP, and a sleeper train from 23:20 to 06:55, the times on station signs over its ends, its carriages the deep, REM and light sleep in cyan, violet and grey, with their times under it; behind it the far city against the dawn's glow, the moon setting behind it"> |
+| Last night | <img src="shots/night-last-night.png" width="120" alt="Last night: LAST NIGHT on a blue neon sign, 7:20 big, ASLEEP, and a sleeper train from 23:20 to 06:55, the times on station signs over its ends, its carriages the deep, REM and light sleep in cyan, violet and grey, with their times under it; between the signs, a crescent moon setting towards the rails, and a few stars in the dark sky"> |
 | A notification's banner | <img src="shots/night-banner.png" width="120" alt="The clock face with a banner over its bottom: a dark sign outlined in the app's cyan neon, SIGNAL in cyan and Nora Lindqvist in white"> |
 | A notification | <img src="shots/night-notification.png" width="120" alt="A notification in the history at 21:30: SIGNAL on a cyan neon sign top left, the time top right, Nora Lindqvist big in the middle; under it a noodle bar, its cyan noren over a warmly lit doorway with diners at the counter, a red lantern either side, steam from its vent, and the light spilling onto the pavement"> |
 | An alarm ringing | <img src="shots/night-ringing.png" width="120" alt="An alarm ringing at 06:10: ALARM on a red neon sign, the time big, and a level crossing on the right, its crossbuck yellow, one red lamp lit and hazing, the yellow and black boom down across the screen over TAP: SNOOZE and BUTTON: STOP; behind, the far city against a dawn glowing yellow and violet, a few windows lit"> |
@@ -92,7 +95,7 @@ with a buzz.
 
 | A glance | With timers running | A notification, with the screen off | A glance on the charger |
 |---|---|---|---|
-| <img src="shots/dim-glance.png" width="120" alt="A glance: the hours above the minutes, big, white on black"> | <img src="shots/dim-glance-timers.png" width="120" alt="A glance with two timers running: the time in one row, white on black, and under it a red hourglass with the time left on each, 2:46, then 45 MIN"> | <img src="shots/dim-notification.png" width="120" alt="A notification that arrived with the screen off: the app on its sign, outlined, top left, who it's from, big, in white, and under it the noodle bar's eave and its noren, outlined; no rain, no light, nothing moving"> | <img src="shots/dim-charging.png" width="120" alt="On the charger: the time small in red; the moon, big, waxing to the charge, among red stars, with 66% under it; then FULL IN in red, and 1:12, big, in white"> |
+| <img src="shots/dim-glance.png" width="120" alt="A glance: the hours above the minutes, big, white on black, and at the foot a sparse row of lit windows, the day's steps"> | <img src="shots/dim-glance-timers.png" width="120" alt="A glance with two timers running: the time in one row, white on black, and under it a red hourglass with the time left on each, 2:46, then 45 MIN"> | <img src="shots/dim-notification.png" width="120" alt="A notification that arrived with the screen off: the app on its sign, outlined, top left, who it's from, big, in white, and under it the noodle bar's eave and its noren, outlined; no rain, no light, nothing moving"> | <img src="shots/dim-charging.png" width="120" alt="On the charger: the time small in red; the moon, big, waxing to the charge, among red stars, with 66% under it; then FULL IN in red, and 1:12, big, in white"> |
 
 These are `shots.txt`'s, drawn in a build with every theme (where
 FORCE is a choice), which the simulator's tests check (see
