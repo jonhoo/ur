@@ -78,16 +78,20 @@ pixel: detail that makes a thing read as what it is (a noren's slits
 and lettering, a stool's seat, a lantern's hoops), and tones (amber
 checkered over the dark is wood) beyond the sixteen roles.
 
-What it costs: a frame that draws finely is drawn again for every eight
-canvas rows it draws finely in, as they're sent (see `canvas.rs`), and
-a fine row that changes goes to the panel whole. So:
+What it costs: a frame that changes what it draws finely is drawn again
+for every eight canvas rows it changes them in, as they're sent (see
+`canvas.rs`: 4–7 ms each on the watch), and a fine row that changes
+goes to the panel whole. Bands whose fine drawing didn't change aren't
+drawn again, so a still screen costs only its own pass. So:
 
 - Draw finely where detail tells: the scene's subject, and the big,
   still text (see Type). Small text and the sky can stay on the canvas,
   at 3×, where they always were.
 - A fine row that moves costs a full row's SPI each second it does: keep
   what moves in few rows (steam, not a whole rainy sky, for now).
-- Shapes drawn a pixel at a time walk only `canvas.fine_rows()`.
+- Shapes drawn a pixel at a time walk only `canvas.fine_rows()`, and
+  are noted whole (`Canvas::fine_shape`, as `street::fine_glow` is), so
+  that the frame's own pass doesn't hash their every pixel.
 
 
 The 16 roles are the Tokyo Night palettes' (see
@@ -136,9 +140,9 @@ lettering at the panel's resolution.
 - **The pixel fonts** (the small font, the medium face, the 5×7 digits):
   small labels and hints, and anything that changes every second (the
   clock's seconds, a countdown's last minutes, a marquee). A fine row
-  that changes goes to the panel whole, and every band of fine rows is
-  drawn again each frame (see Resolution), where the canvas sends a
-  changed figure as a narrow span.
+  that changes goes to the panel whole, and its band of eight rows is
+  drawn again (see Resolution), where the canvas sends a changed figure
+  as a narrow span.
 - Information in `TEXT`; labels `TEXT_DIM`, hints `TEXT_FAINT`; a
   sign's lettering in its tube's colour.
 - Names as the phone writes them, capitals and lowercase; signs in

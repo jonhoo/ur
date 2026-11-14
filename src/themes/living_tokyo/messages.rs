@@ -813,11 +813,11 @@ fn render_booth(canvas: &mut Canvas, ringing: bool, seconds: u64, rain: bool, di
 // still.
 //
 // The turntable is drawn at the panel's resolution, the marquee on the
-// canvas. A long name scrolls ten times a second, and a fine row is drawn
-// again with every frame and sent whole whenever it changes (see
+// canvas. A long name scrolls ten times a second, and a fine row's band is
+// drawn again and sent whole whenever what's drawn in it changes (see
 // `Canvas::refine`): the marquee's rows have no fine drawing, so a scroll
-// sends only the canvas's narrow spans, and the turntable's bands, drawn
-// again each frame, are sent only as the record turns, once a second.
+// sends only the canvas's narrow spans, and the turntable's bands are
+// drawn again and sent only as the record turns, once a second.
 
 /// The marquee's box: its top row, and its height.
 const MARQUEE_TOP: i32 = 14;
@@ -835,7 +835,7 @@ const RECORD_R: i32 = 31;
 const LABEL_R: i32 = 11;
 /// The plinth: its left, top, width and height. Its rows stop short of
 /// the canvas's band from row 72, which then has no fine rows to draw
-/// again with every frame of a scroll.
+/// again.
 const PLINTH: (i32, i32, i32, i32) = (74, 143, 94, 71);
 /// The tonearm's pivot, at the plinth's top right; and where its stylus
 /// is: on the record's grooves while it plays, on its rest beside the

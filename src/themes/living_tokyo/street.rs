@@ -433,35 +433,40 @@ pub(super) fn lit_window(index: u32, lit: u32) -> bool {
 /// windows lit in the windows' warm yellow (see [`city_lights`]), the
 /// rest dark.
 pub(super) fn fine_skyline(canvas: &mut Canvas, x: i32, w: i32, y: i32, tallest: i32, lit: u32) {
-    let mut left = x;
-    let mut window: u32 = 0;
-    let mut i = 0;
-    let light = |index: u32| lit_window(index, lit).then_some(Color::HEART_SHINE);
-    while left < x + w {
-        let (width, height) = SKYLINE[i % SKYLINE.len()];
-        let width = (3 * width).min(x + w - left);
-        let height = height * tallest / 16;
-        // A tank on every fourth from the second, a mast on every fifth:
-        // a few, at no rhythm the eye picks up.
-        let roof = match i {
-            _ if i % 4 == 1 => Roof::Tank,
-            _ if i % 5 == 3 => Roof::Antenna,
-            _ => Roof::Flat,
-        };
-        window = fine_building(
-            canvas,
-            (left, y - height, width, y),
-            Color::TRACK,
-            roof,
-            Some(Windows {
-                first: window,
-                lit: &light,
-                glass: None,
-            }),
-        );
-        left += width + 2;
-        i += 1;
-    }
+    // Its many windows noted whole (see `Canvas::fine_shape`): the
+    // tallest building's mast reaches 13 rows over its roof.
+    let args = [SKYLINE_SHAPE, x, w, y, tallest, lit as i32];
+    canvas.fine_shape(y - tallest - 13..y, &args, |canvas| {
+        let mut left = x;
+        let mut window: u32 = 0;
+        let mut i = 0;
+        let light = |index: u32| lit_window(index, lit).then_some(Color::HEART_SHINE);
+        while left < x + w {
+            let (width, height) = SKYLINE[i % SKYLINE.len()];
+            let width = (3 * width).min(x + w - left);
+            let height = height * tallest / 16;
+            // A tank on every fourth from the second, a mast on every
+            // fifth: a few, at no rhythm the eye picks up.
+            let roof = match i {
+                _ if i % 4 == 1 => Roof::Tank,
+                _ if i % 5 == 3 => Roof::Antenna,
+                _ => Roof::Flat,
+            };
+            window = fine_building(
+                canvas,
+                (left, y - height, width, y),
+                Color::TRACK,
+                roof,
+                Some(Windows {
+                    first: window,
+                    lit: &light,
+                    glass: None,
+                }),
+            );
+            left += width + 2;
+            i += 1;
+        }
+    });
 }
 
 /// How many of the city's windows, out of 256, are lit at `hour`
@@ -718,23 +723,37 @@ fn ellipse_span(x: i32, y: i32, w: i32, h: i32, py: i32) -> core::ops::Range<i32
     }
 }
 
+// The shapes drawn a row or a pixel at a time are noted whole, each by
+// its kind and arguments (see `Canvas::fine_shape`).
+const ELLIPSE: i32 = 0x100;
+const LINE: i32 = 0x101;
+const GLOW: i32 = 0x102;
+const SKYLINE_SHAPE: i32 = 0x103;
+
 /// A filled ellipse in the box `w` by `h` from `(x, y)`.
 pub(super) fn fine_ellipse(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Color) {
-    for py in drawn(canvas, y, h) {
-        let span = ellipse_span(x, y, w, h, py);
-        canvas.fine_rect(span.start, py, span.len() as i32, 1, color);
-    }
+    let args = [ELLIPSE, x, y, w, h, color.0.into()];
+    canvas.fine_shape(y..y + h, &args, |canvas| {
+        for py in drawn(canvas, y, h) {
+            let span = ellipse_span(x, y, w, h, py);
+            canvas.fine_rect(span.start, py, span.len() as i32, 1, color);
+        }
+    });
 }
 
 /// A line a pixel thick from `from` to `to`, both drawn.
 pub(super) fn fine_line(canvas: &mut Canvas, from: (i32, i32), to: (i32, i32), color: Color) {
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-    let steps = dx.abs().max(dy.abs()).max(1);
-    for i in 0..=steps {
-        let x = from.0 + (dx * i + dx.signum() * steps / 2) / steps;
-        let y = from.1 + (dy * i + dy.signum() * steps / 2) / steps;
-        canvas.fine_pixel(x, y, color);
-    }
+    let args = [LINE, from.0, from.1, to.0, to.1, color.0.into()];
+    let rows = from.1.min(to.1)..from.1.max(to.1) + 1;
+    canvas.fine_shape(rows, &args, |canvas| {
+        let steps = dx.abs().max(dy.abs()).max(1);
+        for i in 0..=steps {
+            let x = from.0 + (dx * i + dx.signum() * steps / 2) / steps;
+            let y = from.1 + (dy * i + dy.signum() * steps / 2) / steps;
+            canvas.fine_pixel(x, y, color);
+        }
+    });
 }
 
 /// A red paper lantern (chōchin) centred on column `x`, 12 wide and 18
@@ -774,18 +793,21 @@ pub(super) fn fine_lantern(canvas: &mut Canvas, x: i32, top: i32, lit: bool) {
 /// from `(x, y)`: a pixel in four lit, thinning to one in eight at its
 /// edge. Drawn before the light, which covers its middle.
 pub(super) fn fine_glow(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Color) {
-    for py in drawn(canvas, y, h) {
-        let span = ellipse_span(x, y, w, h, py);
-        // Its outer quarter, each side, is sparser.
-        let edge = span.len() as i32 / 4;
-        for px in span.clone() {
-            let outer = px < span.start + edge || px >= span.end - edge;
-            let period = if outer { 4 } else { 2 };
-            if px.rem_euclid(period) == 0 && py.rem_euclid(2) == (px / period).rem_euclid(2) {
-                canvas.fine_pixel(px, py, color);
+    let args = [GLOW, x, y, w, h, color.0.into()];
+    canvas.fine_shape(y..y + h, &args, |canvas| {
+        for py in drawn(canvas, y, h) {
+            let span = ellipse_span(x, y, w, h, py);
+            // Its outer quarter, each side, is sparser.
+            let edge = span.len() as i32 / 4;
+            for px in span.clone() {
+                let outer = px < span.start + edge || px >= span.end - edge;
+                let period = if outer { 4 } else { 2 };
+                if px.rem_euclid(period) == 0 && py.rem_euclid(2) == (px / period).rem_euclid(2) {
+                    canvas.fine_pixel(px, py, color);
+                }
             }
         }
-    }
+    });
 }
 
 /// How a wisp of steam sways, a column a row, over a cycle of 16 rows.
