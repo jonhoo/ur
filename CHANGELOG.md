@@ -16,6 +16,8 @@ missing below were test builds for the dev kit.
 
 ### Changed
 
+- Hold about 2½ days of a worn watch in the logging build's (`ur-logging`) field log, rather than under one (about 20 hours since 0.11.0): it now packs its busiest lines, the accelerometer's every 2 s and the heart-rate sensor's samples, so decode a fetched log with `defmt-print` and then `scripts/expand_log.py`, which writes them back as before (logs from older builds pass through unchanged). Log times are now in milliseconds rather than microseconds. The `ur` build is unchanged (bf66d61, e357323)
+
 ### Deprecated
 
 ### Removed
