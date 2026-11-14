@@ -952,3 +952,66 @@ pub(super) fn fine_noren(
         }
     }
 }
+
+// ==============================================================================
+// For the alarms' boards, the crossing and finding the watch (alarms.rs)
+// ==============================================================================
+
+/// `text` in the small font as a station board's LEDs, from the canvas's
+/// `(x, y)` (as `Canvas::text` takes them): each of the font's pixels an
+/// LED of 2×2 of the panel's, 3 apart, as [`led_digit`]'s are, so that a
+/// board's rows read as its dot matrix rather than as the canvas's
+/// blocks. Not `fine`, the canvas's text, for a row that changes every
+/// second (a running timer's), whose rows are cheaper sent coarse (see
+/// `Canvas::refine`). Returns the x just past it, as `Canvas::text` does.
+pub(super) fn led_text(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    text: &str,
+    color: Color,
+    fine: bool,
+) -> i32 {
+    if !fine {
+        return canvas.text(x, y, text, color);
+    }
+    let top = y - font::ACCENT_ROWS;
+    let rows = canvas.fine_rows();
+    let drawn = 3 * top < rows.end && 3 * (y + 5) > rows.start;
+    let mut cursor = x;
+    for c in text.chars() {
+        let glyph = font::glyph(c);
+        let w = glyph.width as i32;
+        for (dy, &bits) in glyph.rows.iter().enumerate().filter(|_| drawn) {
+            for dx in (0..w).filter(|dx| bits >> (w - 1 - dx) & 1 != 0) {
+                let (px, py) = (3 * (cursor + dx), 3 * (top + dy as i32));
+                canvas.fine_rect(px, py, 2, 2, color);
+            }
+        }
+        cursor += w + 1;
+    }
+    cursor
+}
+
+/// An ellipse's outline in the box `w` by `h` from `(x, y)`, `thick`
+/// pixels thick (across; a pixel or so down at its top and bottom), lit
+/// `level` of four (see `Canvas::fine_tone`): a ripple on water, fainter
+/// as it spreads.
+pub(super) fn fine_ring(
+    canvas: &mut Canvas,
+    (x, y, w, h): (i32, i32, i32, i32),
+    thick: i32,
+    level: u8,
+    color: Color,
+) {
+    for py in drawn(canvas, y, h) {
+        let outer = ellipse_span(x, y, w, h, py);
+        let inner = ellipse_span(x + thick, y + 1, w - 2 * thick, h - 2, py);
+        if inner.is_empty() {
+            canvas.fine_tone(outer.start, py, outer.len() as i32, 1, level, color);
+        } else {
+            canvas.fine_tone(outer.start, py, inner.start - outer.start, 1, level, color);
+            canvas.fine_tone(inner.end, py, outer.end - inner.end, 1, level, color);
+        }
+    }
+}
