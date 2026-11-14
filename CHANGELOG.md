@@ -14,6 +14,8 @@ missing below were test builds for the dev kit.
 
 ### Added
 
+- Show each running timer's time left on a glance, soonest first, under the time (which drops a size, to one row as on the clock face, while a timer runs), with an hourglass, as "42 MIN", "2H05", or minutes and seconds that tick under 10 minutes; not on the glance while the phone navigates, nor on the charger (23bdb6c)
+
 ### Changed
 
 ### Deprecated
