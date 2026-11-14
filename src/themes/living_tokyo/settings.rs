@@ -79,12 +79,12 @@ pub(super) fn render_info(canvas: &mut Canvas, status: &Status) {
             } else {
                 Color::TRACK
             };
-            street::sign(
+            street::fine_sign(
                 canvas,
-                2,
-                y - 2,
-                font::small_text_width(label) + 5,
-                street::SIGN_H,
+                3 * 2,
+                3 * (y - 2),
+                3 * (font::small_text_width(label) + 5),
+                3 * street::SIGN_H,
                 tube,
             );
             let ink = if status.connected {

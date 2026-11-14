@@ -128,28 +128,35 @@ A sign's colour says whose it is:
 
 ## The shared pieces
 
-In [street.rs](street.rs):
+In [street.rs](street.rs). Most are drawn at the panel's resolution
+(the `fine_` ones take its coordinates, 0..240); a few still on the
+canvas's grid, for the screens that need them so (see each).
 
 | Piece | What it is |
 |---|---|
-| `sign`, `SIGN_H` | A sign's box: dark inside a neon tube a pixel thick |
-| `title` | A screen's title as a sign hanging from the top edge, its lettering where titles always were (4, 3), so what's under it keeps its place |
+| `fine_sign` | A sign's box: dark inside a neon tube a pixel thick, a pixel in from its edge, its corners rounded, a glow either side of it; in the canvas `sign`'s footprint, three times over |
+| `title` | A screen's title as a `fine_sign` hanging from the top edge on wires, its lettering where titles always were (4, 3), so what's under it keeps its place |
 | `hanging` | The same box, round lettering the screen draws itself (cut to fit, say) |
-| `disc`, `in_disc` | A filled circle: the moon, a lamp's lens |
-| `glow` | A dithered halo round a light |
-| `stars` | Single pixels, every third brighter |
-| `steam` | Two wisps rising and swaying with a tick |
-| `skyline` | The far city along a horizon, any height, its windows lit by a share |
+| `sign`, `SIGN_H` | The canvas's sign, a tube a canvas pixel thick: only the music's marquee, which scrolls ten times a second, still has it |
+| `fine_moon` | The moon: a real circle, lit from the right by a share (the terminator a half-ellipse), its seas greyed, its dark side ringed faintly. The battery (`clock::moon`), the charge glance, the full charge's, Last night's |
+| `disc`, `in_disc`, `glow` | A filled circle on the canvas (a lamp's lens, the record) and a dithered halo round a light |
+| `fine_stars` | Single panel pixels at the middles of canvas pixels, every third brighter; given the seconds, one twinkling every third second as a small cross |
+| `steam` | Two wisps rising and swaying with a tick (canvas) |
+| `fine_skyline` | The far city along a horizon, any height: `fine_building`s in slate, a few with a water tank or a mast, windows lit by a share |
+| `fine_building`, `Roof`, `Windows`, `lit_window` | A building: its wall, a parapet, what's on its roof, and windows of 2×2 pixels 3 apart across and 4 down, lit by their index (`lit_window`: a share of every 256), the dark ones as a tone of glass if shown. The clock face's near buildings too |
 | `city_lights` | How many of the city's windows are lit at an hour |
-| `rain` | Leaning streaks, falling with a tick |
-| `reflection` | A light broken up in the puddles below it |
-| `rails` | A railway line seen from the side |
+| `fine_rain` | Thin streaks, a pixel wide and leaning, falling with a tick |
+| `reflection` | A light broken up in the puddles below it (canvas) |
+| `rails` | A railway line seen from the side (canvas) |
 | `daylight`, `DAYLIGHT` | How light the sky is at an hour: 0 until 04:00, up to 4 by 07:00, down again from 17:00 |
-| `horizon` | The dawn's (or dusk's) glow above a horizon: 4, 9, 15 or 22 rows, yellow at the bottom, violet above |
+| `fine_horizon` | The dawn's (or dusk's) glow above a horizon: 12, 27, 45 or 66 rows, in six steps of tone, yellow at the bottom, violet above |
 | `evening`, `rainy` | Which evening a local second belongs to (noon to noon), and whether it rains that night (a third of nights) |
 | `local_now`, `hour_of` | The local time now, for a screen not handed it, and a local second's hour |
+| `board` | A station board: a dark panel in a slate frame (on the canvas, so a ticking row on it stays coarse), on thin rods |
+| `led_digit`, `led_colon`, `LED_H` | A board's big digits, each dot a 3×3 of LEDs of 2×2 panel pixels; or, for a running timer's, a canvas square |
+| `fine_noren`, `NOREN_SLIT` | A shop's noren: panels in a neon, slit, a fold under the rail and a hem, a letter dyed on each; in the dim look, outlines |
 
-At the panel's resolution (coordinates 0..240):
+More at the panel's resolution:
 
 | Piece | What it is |
 |---|---|
@@ -160,19 +167,22 @@ At the panel's resolution (coordinates 0..240):
 | `fine_steam` | Wisps rising from a bowl, swaying wider and thinning as they rise, lifted by the seconds |
 | `fine_reflection` | A light broken up in a wet street below it |
 
-The clock face's moon (the battery) is `clock::moon`, and its city
-`clock::city`. A screen handed the time (`Status::local_second`, an
-`Instant`) uses that; one that isn't, `local_now`.
+The clock face's moon (the battery) is `clock::moon` (a `fine_moon`),
+and its city `clock::city`: its far buildings on the canvas, which
+keeps the beacon's rows coarse, and its near ones `fine_building`s. A
+screen handed the time (`Status::local_second`, an `Instant`) uses
+that; one that isn't, `local_now`.
 
-Pieces the plan below needs, to add to `street.rs` when the first
-screen does (one agent each, so two don't draw their own):
+What the canvas's pieces still left are for, and when they can go:
 
-- **board**: a station board, a `SHADOW` panel with a `TRACK` frame,
-  its rows in `HEART_SHINE` like an LED board. Alarms, the phone's
-  alarms, Info.
-- **noren**: the notification's (`messages::render_shop`), moved here
-  for the call's booth or Settings if they hang one: panels in a neon,
-  slit, a fold under the rail and a hem, a letter dyed on each.
+- `sign`: the music's marquee. Once it has a marquee of its own.
+- `disc`, `in_disc`, `glow`: the crossing's lamps, the record and its
+  arm's pivot. Once the ringing and music screens draw them finely.
+- `steam`, `reflection`, `rails`: the air's bowl, the wet street under
+  the grid, the booth and the crossing; the trains' rails. Once those
+  screens move.
+- `led_digit`'s and `led_colon`'s coarse squares: a running timer's
+  digits, which tick (keep them coarse: see the resolution's costs).
 
 ## The screens
 

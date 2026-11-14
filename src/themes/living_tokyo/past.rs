@@ -78,9 +78,9 @@ pub(super) fn render_today(canvas: &mut Canvas, day: Option<&Day>, steps: Option
     if !rain {
         let shown =
             TODAY_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-        street::stars(canvas, &TODAY_STARS[..shown]);
+        street::fine_stars(canvas, &TODAY_STARS[..shown], None);
     } else if !dim {
-        street::rain(canvas, TUBE_TOP - 2, GROUND, tick, Color::TRACK);
+        street::fine_rain(canvas, 3 * (TUBE_TOP - 2), 3 * GROUND, tick, Color::TRACK);
     }
 
     // The hours' buildings, their windows lit after dark: twice as many as
@@ -315,17 +315,16 @@ pub(super) fn render_last_night(
     if !rain {
         let shown =
             NIGHT_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-        street::stars(canvas, &NIGHT_STARS[..shown]);
+        street::fine_stars(canvas, &NIGHT_STARS[..shown], None);
         // The moon, a crescent, setting: between the signs for a night
         // that ended by 04:00, 2 px lower each hour after, behind the
         // train by 10:00.
         let hours_after_four = i32::from(hour.saturating_sub(4).min(6));
         let moon_y = BOARD_Y + 2 * hours_after_four;
-        street::disc(canvas, 36, moon_y, 9, Color::TEXT_DIM);
-        street::disc(canvas, 33, moon_y - 1, 9, BACKGROUND);
+        street::fine_moon(canvas, 3 * 34, 3 * moon_y, 3 * 9, 25, Color::TEXT_DIM);
     }
     if rain && !dim {
-        street::rain(canvas, 0, TRAIN_Y, tick, Color::TRACK);
+        street::fine_rain(canvas, 0, 3 * TRAIN_Y, tick, Color::TRACK);
         // Behind ASLEEP, whose small letters it would break up; the big
         // digits stand it.
         canvas.fill_rect(26, 34, 28, 7, BACKGROUND);
@@ -375,7 +374,14 @@ pub(super) fn render_last_night(
     if let (Some(left), Some(woke)) = (left, woke) {
         let minute = |second: i64| second.div_euclid(60).rem_euclid(24 * 60);
         for (x, second) in [(2, left), (55, woke)] {
-            street::sign(canvas, x, BOARD_Y, 23, street::SIGN_H, Color::TEXT_FAINT);
+            street::fine_sign(
+                canvas,
+                3 * x,
+                3 * BOARD_Y,
+                3 * 23,
+                3 * street::SIGN_H,
+                Color::TEXT_FAINT,
+            );
             canvas.text(x + 2, BOARD_Y + 2, &hhmm(minute(second)), Color::TEXT);
         }
     }

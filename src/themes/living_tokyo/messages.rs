@@ -147,12 +147,12 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str,
     // dull slate. Dim, neither: idle mode keeps still.
     if !dim {
         if rain {
-            street::rain(canvas, 12, roof, tick, Color::TRACK);
+            street::fine_rain(canvas, 3 * 12, 3 * roof, tick, Color::TRACK);
         } else {
             let light = street::daylight(hour);
             let shown =
                 CARD_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-            street::stars(canvas, &CARD_STARS[..shown]);
+            street::fine_stars(canvas, &CARD_STARS[..shown], None);
         }
     }
     render_shop(canvas, roof, tube, hour, rain, dim, tick);
@@ -564,7 +564,7 @@ pub(super) fn render_banner(canvas: &mut Canvas, app: &str, who: &str) {
     let count = font::wrap(who, font::Face::Small, BANNER_TEXT_WIDTH, &mut lines).max(1);
     let top = 63 - SMALL_PITCH * (count as i32 - 1);
     let tube = neon(app);
-    street::sign(canvas, 0, top, 80, 80 - top, tube);
+    street::fine_sign(canvas, 0, 3 * top, 240, 3 * (80 - top), tube);
     fitted(
         canvas,
         (BANNER_TEXT.start, top + 2),
@@ -631,10 +631,10 @@ pub(super) fn render_call(canvas: &mut Canvas, call: &Call, dim: bool) {
     // lightens), and the far city, low.
     if !dim {
         if night.rain {
-            street::rain(
+            street::fine_rain(
                 canvas,
-                BOOTH_TOP - 1,
-                BOOTH_FLOOR,
+                3 * (BOOTH_TOP - 1),
+                3 * BOOTH_FLOOR,
                 night.tick,
                 Color::TEXT_FAINT,
             );
@@ -642,14 +642,14 @@ pub(super) fn render_call(canvas: &mut Canvas, call: &Call, dim: bool) {
             let light = street::daylight(night.hour);
             let shown =
                 BOOTH_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-            street::stars(canvas, &BOOTH_STARS[..shown]);
+            street::fine_stars(canvas, &BOOTH_STARS[..shown], None);
         }
-        street::skyline(
+        street::fine_skyline(
             canvas,
             0,
-            80,
-            BOOTH_FLOOR,
-            7,
+            240,
+            3 * BOOTH_FLOOR,
+            3 * 7,
             street::city_lights(night.hour),
         );
     }
@@ -807,12 +807,18 @@ pub(super) fn render_music(canvas: &mut Canvas, music: &Music, dim: bool) {
     // The night over the marquee: a little rain, or a few stars.
     if !dim {
         if night.rain {
-            street::rain(canvas, 0, MARQUEE_TOP - 1, night.tick, Color::TEXT_FAINT);
+            street::fine_rain(
+                canvas,
+                0,
+                3 * (MARQUEE_TOP - 1),
+                night.tick,
+                Color::TEXT_FAINT,
+            );
         } else {
             let light = street::daylight(night.hour);
             let shown =
                 BAR_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-            street::stars(canvas, &BAR_STARS[..shown]);
+            street::fine_stars(canvas, &BAR_STARS[..shown], None);
         }
     }
 

@@ -111,7 +111,7 @@ pub(super) fn render_off(canvas: &mut Canvas, reason: Reason, dim: bool) {
     // buildings would be half-toned.
     if !dim {
         let hour = street::local_now().map_or(0, street::hour_of);
-        street::skyline(canvas, 0, 80, 80, 16, street::city_lights(hour) / 8);
+        street::fine_skyline(canvas, 0, 240, 240, 3 * 16, street::city_lights(hour) / 8);
     }
 }
 

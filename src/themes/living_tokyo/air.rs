@@ -211,14 +211,14 @@ fn render_window(canvas: &mut Canvas, humidity: Option<u8>, night: street::Night
                 canvas.fill_rect(rx, ry, 1, 2, Color::TEXT_FAINT);
             }
         } else {
-            street::stars(canvas, &WINDOW_STARS);
+            street::fine_stars(canvas, &WINDOW_STARS, None);
         }
-        street::skyline(
+        street::fine_skyline(
             canvas,
-            inside,
-            inner,
-            bottom,
-            5,
+            3 * inside,
+            3 * inner,
+            3 * bottom,
+            3 * 5,
             street::city_lights(night.hour),
         );
         // Fog: every `period`th pixel, staggered row to row.

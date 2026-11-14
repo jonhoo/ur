@@ -289,12 +289,12 @@ fn render_route_glance(canvas: &mut Canvas, status: &Status, step: &crate::route
     let plate_w = widest + 4;
     let plate_x = 40 - plate_w / 2;
     let plate_y = PLATE_Y + (PLATE_H - plate_h) / 2;
-    street::sign(
+    street::fine_sign(
         canvas,
-        plate_x,
-        plate_y,
-        plate_w,
-        plate_h,
+        3 * plate_x,
+        3 * plate_y,
+        3 * plate_w,
+        3 * plate_h,
         Color::TEXT_FAINT,
     );
     match count {
@@ -312,23 +312,17 @@ fn render_route_glance(canvas: &mut Canvas, status: &Status, step: &crate::route
             }
         }
         _ => {
-            canvas.text_cut(plate_x + 2, plate_y + 2, street, Color::TEXT);
-            // What ran past the lettering's room, over the tube and on.
-            canvas.fill_rect(
-                plate_x + plate_w - 2,
-                plate_y + 1,
-                80,
-                plate_h - 2,
-                Color::SHADOW,
-            );
-            canvas.fill_rect(
-                plate_x + plate_w - 1,
-                plate_y,
+            // Cut at the lettering's room, short of the tube: a marquee
+            // at its start, still (a glance asks for no frames).
+            let room = plate_x + 2..plate_x + plate_w - 1;
+            canvas.marquee(
+                room,
+                plate_y + 2,
+                street,
+                Color::TEXT,
                 1,
-                plate_h,
-                Color::TEXT_FAINT,
+                embassy_time::Duration::from_ticks(0),
             );
-            canvas.fill_rect(plate_x + plate_w, plate_y, 80, plate_h, BACKGROUND);
         }
     }
 }
@@ -368,7 +362,7 @@ fn render_charge_glance(canvas: &mut Canvas, status: &Status, to_full: ToFull) {
         let time = hhmm(i64::from(t.hour) * 60 + i64::from(t.minute));
         centred(canvas, TIME_Y, &time, 2, Color::TEXT_DIM);
     }
-    super::street::stars(canvas, &STARS);
+    super::street::fine_stars(canvas, &STARS, None);
     super::clock::moon(canvas, 40 - MOON_D / 2, MOON_Y, MOON_D, status.battery);
     centred(
         canvas,
@@ -428,8 +422,8 @@ pub(super) fn render_charged(canvas: &mut Canvas, status: &Status) {
     const SIGN_Y: i32 = 56;
     const SIGN_H: i32 = 5 * SCALE + 6;
     canvas.clear(BACKGROUND);
-    super::street::stars(canvas, &CHARGED_STARS);
-    super::street::disc(canvas, MOON_X, MOON_Y, MOON_D, Color::TEXT);
+    super::street::fine_stars(canvas, &CHARGED_STARS, None);
+    super::street::fine_moon(canvas, 3 * MOON_X, 3 * MOON_Y, 3 * MOON_D, 100, Color::TEXT);
     super::clock::city(canvas, status.steps);
     // The lightning: a white-hot core in a glow of the windows' yellow,
     // three pixels across, so it reads at a glance; its fork thinner.

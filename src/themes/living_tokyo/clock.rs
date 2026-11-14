@@ -34,7 +34,7 @@
 
 use core::fmt::Write as _;
 
-use super::street::{self, disc, in_disc};
+use super::street::{self, Roof};
 use crate::battery::Battery;
 use crate::canvas::{Canvas, Color, HEIGHT};
 use crate::font;
@@ -72,14 +72,6 @@ const NEAR: [Building; 6] = [
     building(51, 12, 53),
     building(65, 15, 49),
 ];
-
-/// Windows: 1×2, in columns 3 apart and rows 4 apart, centred in their
-/// building with at least 2 px of wall either side.
-const WINDOW_W: i32 = 1;
-const WINDOW_H: i32 = 2;
-const WINDOW_COLUMN: i32 = 3;
-const WINDOW_ROW: i32 = 4;
-const WINDOW_MARGIN: i32 = 2;
 
 /// Clear of the time, the date (and the rune after it), and the moon:
 /// its shadow is painted in the sky's colour, so a star beside it would
@@ -225,11 +217,12 @@ pub(super) fn render_clock(canvas: &mut Canvas, face: &Face) {
 }
 
 fn render_sky(canvas: &mut Canvas, battery: &Battery) {
-    street::stars(canvas, &STARS);
+    street::fine_stars(canvas, &STARS, None);
     moon(canvas, MOON_X, MOON_Y, MOON_D, battery);
 }
 
-/// The moon as the battery, `d` across, from `(left, top)`: waxing from
+/// The moon as the battery, `d` across, from `(left, top)` (the canvas's),
+/// drawn at the panel's resolution (see `street::fine_moon`): waxing from
 /// new (empty) to full (charged), in the "good" colour while charging and
 /// the "bad" one below 20%, with its outline always there. The clock
 /// face's, and the glance's on the charger, bigger.
@@ -242,19 +235,7 @@ pub(super) fn moon(canvas: &mut Canvas, left: i32, top: i32, d: i32, battery: &B
     } else {
         Color::TEXT
     };
-    disc(canvas, left, top, d, color);
-    // The shadow slides off to the right as the battery fills up.
-    let shadow = left + percent.min(100) * d / 100;
-    disc(canvas, shadow, top, d, Color::BACKGROUND);
-    // An outline, so that the moon is still there on an empty battery.
-    for y in 0..d {
-        for x in 0..d {
-            let inner = |x: i32, y: i32| in_disc(x - 1, y - 1, d - 2);
-            if in_disc(x, y, d) && !inner(x, y) {
-                canvas.pixel(left + x, top + y, color);
-            }
-        }
-    }
+    street::fine_moon(canvas, 3 * left, 3 * top, 3 * d, percent, color);
 }
 
 /// The city, its windows lit by the day's `steps`, as the clock face
@@ -274,6 +255,26 @@ fn lit_level(steps: Option<u32>) -> u32 {
     level - level % LIT_STEP
 }
 
+/// What stands on the near buildings' roofs: a mast and two water
+/// tanks, clear of the beacon's antenna and the signs.
+const NEAR_ROOFS: [Roof; 6] = [
+    Roof::Flat,
+    Roof::Tank,
+    Roof::Antenna,
+    Roof::Flat,
+    Roof::Tank,
+    Roof::Flat,
+];
+
+/// The city: the far buildings dark slate, windowless in the haze; the
+/// near ones at the panel's resolution (see `street::fine_building`),
+/// with their windows, `level` of every 256 lit (each in a colour picked
+/// by a hash of its index), the rest dark glass.
+///
+/// The far buildings stay on the canvas's grid, as plain blocks lose
+/// nothing there, and it keeps the beacon's rows coarse: drawn finely,
+/// they'd be sent whole every time it blinks, a second at a time (see
+/// `Canvas::refine`), where now only its few pixels go.
 fn render_city(canvas: &mut Canvas, palette: &Palette, level: u32) {
     let height = HEIGHT as i32;
     for building in &FAR {
@@ -291,29 +292,19 @@ fn render_city(canvas: &mut Canvas, palette: &Palette, level: u32) {
         Color::TEXT_FAINT,
     );
 
+    let lit = |index: u32| {
+        street::lit_window(index, level).then(|| palette.lit[(index * 37 % 8) as usize])
+    };
     let mut index: u32 = 0;
-    for building in &NEAR {
+    for (building, &roof) in NEAR.iter().zip(&NEAR_ROOFS) {
         let Building { x, width, top } = *building;
-        canvas.fill_rect(x, top, width, height - top, palette.near);
-        let columns = (width - 2 * WINDOW_MARGIN + WINDOW_COLUMN - WINDOW_W) / WINDOW_COLUMN;
-        let used = columns * WINDOW_COLUMN - (WINDOW_COLUMN - WINDOW_W);
-        let left = x + (width - used) / 2;
-        let mut y = top + WINDOW_MARGIN;
-        while y + WINDOW_H < height {
-            for column in 0..columns {
-                // Multiplying by an odd number permutes 0..256, so every
-                // level lights exactly its share of the windows.
-                let hash = (index * 167 + 13) % 256;
-                let color = if hash < level {
-                    palette.lit[(index * 37 % 8) as usize]
-                } else {
-                    palette.unlit
-                };
-                canvas.fill_rect(left + column * WINDOW_COLUMN, y, WINDOW_W, WINDOW_H, color);
-                index += 1;
-            }
-            y += WINDOW_ROW;
-        }
+        let windows = street::Windows {
+            first: index,
+            lit: &lit,
+            glass: Some(palette.unlit),
+        };
+        let shape = (3 * x, 3 * top, 3 * width, 3 * height);
+        index = street::fine_building(canvas, shape, palette.near, roof, Some(windows));
     }
 }
 

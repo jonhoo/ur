@@ -255,7 +255,7 @@ fn render_platform(canvas: &mut Canvas, top: i32, now: Option<i64>, tick: u64, d
         // Over the rails alone, however much sky the board leaves: rain
         // seen past the edge, not a screen of it.
         let from = (top + 1).max(PLATFORM_EDGE - RAIN_ROWS);
-        street::rain(canvas, from, PLATFORM_EDGE, tick, Color::TEXT_FAINT);
+        street::fine_rain(canvas, 3 * from, 3 * PLATFORM_EDGE, tick, Color::TEXT_FAINT);
     } else if !rain {
         // Stars from the table where the board leaves sky, as many as
         // the dawn leaves out.
@@ -268,11 +268,7 @@ fn render_platform(canvas: &mut Canvas, top: i32, now: Option<i64>, tick: u64, d
         {
             shown.push(star).fits();
         }
-        street::stars(canvas, &shown);
-        if !dim && !shown.is_empty() && tick.is_multiple_of(3) {
-            let (x, y) = shown[(tick / 3) as usize % shown.len()];
-            canvas.pixel(x, y, Color::TEXT);
-        }
+        street::fine_stars(canvas, &shown, (!dim).then_some(tick));
     }
     // The rail, and the platform's edge: its yellow tactile strip, in
     // dashes. (Not `street::rails`' sleepers: in so thin a strip, one
@@ -453,11 +449,18 @@ pub(super) fn render_editor(canvas: &mut Canvas, editor: &Editor, dim: bool) {
             digit as u64,
             Color::HEART_SHINE,
             None,
+            left.is_none(),
         );
     }
     // The colon ticks while a timer runs.
     if left.is_none() || dim || uptime % 2 == 0 {
-        street::led_colon(canvas, EDITOR_COLON_X, EDITOR_DIGITS_Y, Color::HEART_SHINE);
+        street::led_colon(
+            canvas,
+            EDITOR_COLON_X,
+            EDITOR_DIGITS_Y,
+            Color::HEART_SHINE,
+            left.is_none(),
+        );
     }
     let labels_y = EDITOR_DIGITS_Y + street::LED_H + 4;
     canvas.text_centered(20, labels_y, labels.0, Color::TEXT_FAINT);
@@ -515,7 +518,7 @@ fn key(canvas: &mut Canvas, x: i32, label: &str, lit: Option<Color>) {
 // It lives on the hour and the night. The city's windows are lit as its
 // people are up (`street::city_lights`: most in the evening, hardly any
 // at 02:00), and from 04:00 the sky behind it glows, higher each hour
-// (`street::horizon`), so 02:00, 05:00 and 06:30 are three skies at a
+// (`street::fine_horizon`), so 02:00, 05:00 and 06:30 are three skies at a
 // glance. On a rainy night (`street::rainy`, a third of them) the rain
 // falls and the road is wet, the lit lamp and the windows broken up in
 // it; on a clear one, the stars are out, one twinkling. The lamps take
@@ -568,27 +571,23 @@ pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &St
     // one; and the far city in front of the glow.
     if !dim {
         // Three levels at most: the fourth's would reach the hints.
-        street::horizon(canvas, 0, 80, CROSSING_GROUND, light.min(3));
+        street::fine_horizon(canvas, 0, 240, 3 * CROSSING_GROUND, light.min(3));
     }
     if !rain {
         let shown =
             CROSSING_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-        street::stars(canvas, &CROSSING_STARS[..shown]);
-        if !dim && shown > 0 && tick.is_multiple_of(3) {
-            let (x, y) = CROSSING_STARS[(tick / 3) as usize % shown];
-            canvas.pixel(x, y, Color::TEXT);
-        }
+        street::fine_stars(canvas, &CROSSING_STARS[..shown], (!dim).then_some(tick));
     }
-    street::skyline(
+    street::fine_skyline(
         canvas,
         0,
-        80,
-        CROSSING_GROUND,
-        CROSSING_CITY,
+        240,
+        3 * CROSSING_GROUND,
+        3 * CROSSING_CITY,
         street::city_lights(hour),
     );
     if rain && !dim {
-        street::rain(canvas, 0, CROSSING_GROUND, tick, Color::TEXT_FAINT);
+        street::fine_rain(canvas, 0, 3 * CROSSING_GROUND, tick, Color::TEXT_FAINT);
         // The rain passes behind the time and the hints, not through
         // their letters, which it would break up.
         canvas.fill_rect(3, 14, 56, 17, BACKGROUND);
@@ -776,20 +775,20 @@ pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration, dim: bool) {
             // and a third at 40, each a few rows behind the last.
             for fall in 0..(1 + seconds / 20).min(3) {
                 let tick = night.tick + fall * 2;
-                street::rain(canvas, 0, FIND_GROUND, tick, Color::TEXT_FAINT);
+                street::fine_rain(canvas, 0, 3 * FIND_GROUND, tick, Color::TEXT_FAINT);
             }
         } else {
             let light = street::daylight(night.hour);
             let shown =
                 FIND_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-            street::stars(canvas, &FIND_STARS[..shown]);
+            street::fine_stars(canvas, &FIND_STARS[..shown], None);
         }
-        street::skyline(
+        street::fine_skyline(
             canvas,
             0,
-            80,
-            FIND_GROUND,
-            8,
+            240,
+            3 * FIND_GROUND,
+            3 * 8,
             street::city_lights(night.hour),
         );
     }

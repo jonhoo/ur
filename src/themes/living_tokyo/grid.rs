@@ -223,7 +223,7 @@ fn render_weather(canvas: &mut Canvas, machine: &Machine, rain: bool, tick: u64)
     /// The moth's circuit, round a point over the roof.
     const FLIGHT: [(i32, i32); 6] = [(0, 0), (4, -1), (7, 1), (5, 2), (1, 2), (-2, 1)];
     if rain {
-        street::rain(canvas, 0, 80, tick, Color::TEXT_FAINT);
+        street::fine_rain(canvas, 0, 240, tick, Color::TEXT_FAINT);
         let street = machine.base;
         if street < 80 {
             for &(x, w) in &SEGMENTS {
@@ -231,11 +231,7 @@ fn render_weather(canvas: &mut Canvas, machine: &Machine, rain: bool, tick: u64)
             }
         }
     } else {
-        street::stars(canvas, &GRID_STARS);
-        let (x, y) = GRID_STARS[(tick / 3) as usize % GRID_STARS.len()];
-        if tick.is_multiple_of(3) {
-            canvas.pixel(x, y, Color::TEXT);
-        }
+        street::fine_stars(canvas, &GRID_STARS, Some(tick));
         let (dx, dy) = FLIGHT[tick as usize % FLIGHT.len()];
         let (x, y) = (22 + dx, machine.top - 4 + dy);
         // Its wings, up on even seconds and level on odd ones, over its

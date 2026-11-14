@@ -7,7 +7,7 @@
 //! scarcer than the few cycles it takes to draw them once a second. None
 //! clears the canvas or picks a place on the screen: the screens do.
 
-use crate::canvas::{Canvas, Color, WIDTH};
+use crate::canvas::{Canvas, Color, FINE};
 use crate::font;
 
 // ==============================================================================
@@ -18,10 +18,16 @@ use crate::font;
 /// of capitals, a clear row, and the tube.
 pub(super) const SIGN_H: i32 = 9;
 
-/// A sign's box: dark (the near buildings' colour, black in the dim look)
-/// inside a neon tube a pixel thick, in `tube`. What it says is the
-/// caller's to draw, in the tube's colour for a sign's own lettering, or
-/// in the text's for what it shows (a name, a time).
+/// A sign's box on the canvas's grid: dark (the near buildings' colour,
+/// black in the dim look) inside a neon tube a canvas pixel thick, in
+/// `tube`. What it says is the caller's to draw, in the tube's colour for
+/// a sign's own lettering, or in the text's for what it shows (a name, a
+/// time).
+///
+/// Only the music's marquee still has this one: its rows scroll ten
+/// times a second, which a [`fine_sign`]'s sides would make fine rows,
+/// each drawn again and sent whole every frame (see `Canvas::refine`).
+/// TODO: delete it once the music screen has a marquee of its own.
 pub(super) fn sign(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, tube: Color) {
     canvas.fill_rect(x, y, w, h, Color::SHADOW);
     canvas.fill_rect(x, y, w, 1, tube);
@@ -43,16 +49,57 @@ pub(super) fn title(canvas: &mut Canvas, text: &str, tube: Color) -> i32 {
 
 /// The box of a [`title`]'s sign, round `width` pixels of lettering from
 /// (4, 3), for lettering the caller draws (cut to fit, say). Returns the
-/// x just past the box.
+/// x just past the box. The box is a [`fine_sign`] on the canvas's grid,
+/// and its wires the panel's pixels.
 pub(super) fn hanging(canvas: &mut Canvas, width: i32, tube: Color) -> i32 {
     const X: i32 = 2;
     const Y: i32 = 1;
     let w = width + 4;
-    sign(canvas, X, Y, w, SIGN_H, tube);
+    fine_sign(canvas, 3 * X, 3 * Y, 3 * w, 3 * SIGN_H, tube);
     for x in [X + 2, X + w - 3] {
-        canvas.fill_rect(x, 0, 1, Y, Color::TEXT_FAINT);
+        // Down to the tube, a pixel in from the box's edge.
+        canvas.fine_rect(3 * x + 1, 0, 1, 3 * Y + 1, Color::TEXT_FAINT);
     }
     X + w
+}
+
+/// A sign's box at the panel's resolution, `w` by `h` from `(x, y)`: dark
+/// inside a neon tube a pixel thick, a pixel in from its edge, its
+/// corners rounded, the way a bent glass tube turns; and the tube's glow
+/// round it, every other pixel, so that it reads as lit rather than
+/// drawn. In the footprint of the canvas's [`sign`] three times over (its
+/// tube there a canvas pixel, here the glow, the tube and the box's dark
+/// inside it), so a sign that moves keeps its lettering's room. The
+/// lettering is the caller's, as on [`sign`].
+///
+/// Glowing outwards only: a glow inside too blurred the tube into the
+/// lettering, where the dark keeps it crisp. And it stays in the dim
+/// look: it's still (idle mode's limit is motion and colours, and the
+/// tube's are its own), and without it the tube is a hairline.
+pub(super) fn fine_sign(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, tube: Color) {
+    // The box, its corners cut round the tube's.
+    canvas.fine_rect(x + 2, y, w - 4, h, Color::SHADOW);
+    canvas.fine_rect(x, y + 2, w, h - 4, Color::SHADOW);
+    canvas.fine_rect(x + 1, y + 1, w - 2, h - 2, Color::SHADOW);
+    // A ring `inset` pixels in, its corners rounded: its sides stop
+    // short of them, and a pixel each turns them, diagonally.
+    let ring = |canvas: &mut Canvas, inset: i32, level: u8| {
+        let (left, right) = (x + inset, x + w - 1 - inset);
+        let (top, bottom) = (y + inset, y + h - 1 - inset);
+        let (across, down) = (w - 6, h - 6);
+        canvas.fine_tone(x + 3, top, across, 1, level, tube);
+        canvas.fine_tone(x + 3, bottom, across, 1, level, tube);
+        canvas.fine_tone(left, y + 3, 1, down, level, tube);
+        canvas.fine_tone(right, y + 3, 1, down, level, tube);
+        // The corners: the glow's at (1, 1), the tube's at (2, 2).
+        let c = inset + 1;
+        for (cx, cy) in [(x + c, y + c), (x + w - 1 - c, y + c)] {
+            canvas.fine_tone(cx, cy, 1, 1, level, tube);
+            canvas.fine_tone(cx, y + h - 1 - (cy - y), 1, 1, level, tube);
+        }
+    };
+    ring(canvas, 0, 2);
+    ring(canvas, 1, 4);
 }
 
 // ==============================================================================
@@ -93,15 +140,92 @@ pub(super) fn glow(canvas: &mut Canvas, left: i32, top: i32, d: i32, spread: i32
     }
 }
 
-/// Stars: single pixels, every third a little brighter.
-pub(super) fn stars(canvas: &mut Canvas, points: &[(i32, i32)]) {
+/// Craters on a [`fine_moon`] `d` across: each one's middle and radius, in
+/// 64ths of its diameter, from its box's top left. The seas, really: the
+/// big grey patches the eye sees on a full moon.
+const CRATERS: [(i32, i32, i32); 3] = [(22, 24, 9), (40, 38, 7), (36, 17, 4)];
+
+/// The moon at the panel's resolution, `d` across from `(x, y)`, `lit`
+/// percent of it lit in `color` (waxing: lit from the right, the
+/// terminator a half-ellipse across it, as the real one's is), with its
+/// craters greyed on the lit part, and the rest of it dark (the near
+/// buildings' colour, a little lighter than the sky, as earthshine
+/// leaves a new moon), ringed in a faint tone of `color` so that it's
+/// there even at 0%.
+///
+/// Drawn a row at a time: the dark run, then the lit one over it, then
+/// the craters' runs, so it costs a few rectangles a row.
+pub(super) fn fine_moon(canvas: &mut Canvas, x: i32, y: i32, d: i32, lit: i32, color: Color) {
+    let lit = lit.clamp(0, 100);
+    // For a row half `half` wide (from the middle), the terminator is at
+    // `k * half` across the middle, `k` from 1 (new) to -1 (full): its
+    // lit share is then (1 - k) / 2 of the disc, a row and so the whole.
+    // Doubled coordinates, from pixel centres, keep it in integers.
+    let c = 2 * lit - 100;
+    for py in drawn(canvas, y, d) {
+        let span = ellipse_span(x, y, d, d, py);
+        if span.is_empty() {
+            continue;
+        }
+        let dy = 2 * (py - y) + 1 - d;
+        let half2 = d * d - dy * dy;
+        // Lit from the first column whose middle is past the terminator:
+        // 100·dx > -c·√half2, compared squared (dx doubled, as dy).
+        let past = |px: i32| {
+            let a = 100 * (2 * (px - x) + 1 - d);
+            let b2 = c * c * half2;
+            match (a >= 0, c >= 0) {
+                (true, true) => true,
+                (false, true) => a * a < b2,
+                (true, false) => a * a > b2,
+                (false, false) => false,
+            }
+        };
+        let from = span.clone().find(|&px| past(px)).unwrap_or(span.end);
+        let width = span.len() as i32;
+        canvas.fine_rect(span.start, py, width, 1, Color::SHADOW);
+        canvas.fine_tone(span.start, py, 1, 1, 2, color);
+        canvas.fine_tone(span.end - 1, py, 1, 1, 2, color);
+        canvas.fine_rect(from, py, span.end - from, 1, color);
+        for (cx, cy, r) in CRATERS {
+            let (cx, cy, r) = (x + cx * d / 64, y + cy * d / 64, (r * d / 64).max(1));
+            let crater = ellipse_span(cx - r, cy - r, 2 * r, 2 * r, py);
+            let (start, end) = (crater.start.max(from), crater.end);
+            if start < end {
+                canvas.fine_tone(start, py, end - start, 1, 2, Color::TEXT_DIM);
+            }
+        }
+    }
+    // The ring's top and bottom, which the rows' ends leave open.
+    let cap = ellipse_span(x, y, d, d, y);
+    canvas.fine_tone(cap.start, y, cap.len() as i32, 1, 2, color);
+    canvas.fine_tone(cap.start, y + d - 1, cap.len() as i32, 1, 2, color);
+}
+
+/// Stars at the panel's resolution: each a single pixel at the middle of
+/// its canvas pixel in `points` (the screens' tables are on the canvas's
+/// grid), every third brighter; and given a `tick`, one twinkling every
+/// third second, a different one each time (as the screens had them), as
+/// a small cross of the text's white, three pixels each way.
+///
+/// A star a canvas pixel across was a square, and a twinkle a brighter
+/// square; a point of light and a glint read as stars.
+pub(super) fn fine_stars(canvas: &mut Canvas, points: &[(i32, i32)], tick: Option<u64>) {
     for (i, &(x, y)) in points.iter().enumerate() {
         let color = if i % 3 == 0 {
-            Color::TEXT_DIM
+            Color::TEXT
         } else {
-            Color::TEXT_FAINT
+            Color::TEXT_DIM
         };
-        canvas.pixel(x, y, color);
+        canvas.fine_pixel(3 * x + 1, 3 * y + 1, color);
+    }
+    let Some(tick) = tick.filter(|tick| tick.is_multiple_of(3)) else {
+        return;
+    };
+    if let Some(&(x, y)) = points.get((tick / 3) as usize % points.len().max(1)) {
+        let (x, y) = (3 * x + 1, 3 * y + 1);
+        canvas.fine_rect(x - 1, y, 3, 1, Color::TEXT);
+        canvas.fine_rect(x, y - 1, 1, 3, Color::TEXT);
     }
 }
 
@@ -109,29 +233,33 @@ pub(super) fn stars(canvas: &mut Canvas, points: &[(i32, i32)]) {
 // Rain and the wet street
 // ==============================================================================
 
-/// How many streaks of rain fill the screen's width.
-const DROPS: u32 = 22;
+/// How many streaks of [`fine_rain`] fill the screen's width.
+const FINE_DROPS: u32 = 28;
 
-/// Rain between rows `top` and `bottom`: short streaks, four pixels
-/// long and leaning with the wind, in `color`: the far buildings'
-/// ([`Color::TRACK`]) where it's texture behind text, the hints'
-/// ([`Color::TEXT_FAINT`]) where it's weather to be seen. Drawn first,
-/// so whatever's in front covers it. `tick` moves it on: a screen drawn
-/// every second passes the seconds, and the rain falls; one that isn't,
-/// a constant.
-pub(super) fn rain(canvas: &mut Canvas, top: i32, bottom: i32, tick: u64, color: Color) {
+/// Rain at the panel's resolution, between its rows `top` and `bottom`:
+/// thin streaks, a pixel wide and nine long, leaning a pixel every three
+/// rows with the wind, in `color`: the far buildings' ([`Color::TRACK`])
+/// where it's texture behind text, the hints' ([`Color::TEXT_FAINT`])
+/// where it's weather to be seen. Drawn first, so whatever's in front
+/// covers it. `tick` moves it on, 33 rows a second, which isn't a
+/// multiple of the drops' spacing, so they don't seem to stand still: a
+/// screen drawn every second passes the seconds, and the rain falls; one
+/// that isn't, a constant.
+///
+/// The canvas's streaks, a canvas pixel wide, were stripes; a hairline
+/// reads as rain, and leaves the sky round it dark.
+pub(super) fn fine_rain(canvas: &mut Canvas, top: i32, bottom: i32, tick: u64, color: Color) {
     let height = (bottom - top).max(1) as u32;
-    // Falling 11 rows a second, which isn't a multiple of the spacing, so
-    // the drops don't seem to stand still.
-    let fall = (tick % u64::from(height)) as u32 * 11;
-    for i in 0..DROPS {
-        // Odd multipliers, coprime to the width, spread the drops
-        // across every column before any repeats.
-        let x = ((i * 37 + 5) % WIDTH as u32) as i32;
-        let y = top + ((i * 29 + 3 + fall) % height) as i32;
-        for (dx, dy) in [(0, 0), (0, 1), (-1, 2), (-1, 3)] {
-            if y + dy < bottom {
-                canvas.pixel(x + dx, y + dy, color);
+    let fall = (tick % u64::from(height)) as u32 * 33;
+    for i in 0..FINE_DROPS {
+        // Odd multipliers spread the drops over every column and row
+        // before any repeats.
+        let x = ((i * 113 + 17) % FINE as u32) as i32;
+        let y = top + ((i * 89 + 7 + fall) % height) as i32;
+        for step in 0..3 {
+            let (sy, sh) = (y + 3 * step, 3.min(bottom - y - 3 * step));
+            if sh > 0 {
+                canvas.fine_rect(x - step, sy, 1, sh, color);
             }
         }
     }
@@ -216,35 +344,144 @@ const SKYLINE: [(i32, i32); 12] = [
     (7, 9),
 ];
 
-/// The far city along the horizon `y` (its ground), `w` wide from `x`,
-/// at most `tallest` rows high (the table's heights scaled to it): its
-/// buildings in the far buildings' slate, their windows a pixel each,
-/// every other column and every third row, `lit` of 256 of them lit in
-/// the windows' warm yellow (see [`city_lights`]).
-pub(super) fn skyline(canvas: &mut Canvas, x: i32, w: i32, y: i32, tallest: i32, lit: u32) {
+/// What stands on a [`fine_building`]'s roof: a tank in its wall's
+/// colour, so that a near one stands dark against the far ones behind
+/// it; a mast in the structure's colour.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Roof {
+    Flat,
+    /// A water tank on its legs, as on Tokyo's older blocks.
+    Tank,
+    /// A mast, and its red light (unlit in the dim look).
+    Antenna,
+}
+
+/// A [`fine_building`]'s windows: from which index they're numbered (the
+/// city's, building after building), the colour of each one lit (by its
+/// index; `None` for one dark), and, if the dark ones show, the glass's
+/// colour, a tone over the whole face (a pixel in four).
+///
+/// The glass is a tone rather than a dark window each: a window is a
+/// rectangle drawn, and the clock face's city has thousands, each drawn
+/// again for its band (see `Canvas::refine`); a tone is one a building.
+pub(super) struct Windows<'a> {
+    pub first: u32,
+    pub lit: &'a dyn Fn(u32) -> Option<Color>,
+    pub glass: Option<Color>,
+}
+
+/// A building at the panel's resolution, `w` wide from `x`, from its roof
+/// at `top` down to the panel's row `bottom`: its wall in `wall`, a
+/// parapet's edge along its roof, `roof` on that, and its `windows`, if
+/// any, of 2×2 pixels, 3 apart across and 4 down (the floors' slabs
+/// between). Returns the index after its last window, for the next
+/// building's.
+///
+/// A window a pixel high read as a slot, and one a canvas pixel across as
+/// a light; at the panel's resolution, a building is its windows.
+pub(super) fn fine_building(
+    canvas: &mut Canvas,
+    (x, top, w, bottom): (i32, i32, i32, i32),
+    wall: Color,
+    roof: Roof,
+    windows: Option<Windows>,
+) -> u32 {
+    canvas.fine_rect(x, top, w, bottom - top, wall);
+    canvas.fine_rect(x, top, w, 1, Color::TEXT_FAINT);
+    // What's on the roof, off its middle, standing on it.
+    let at = x + w / 3;
+    match roof {
+        Roof::Flat => {}
+        Roof::Tank => {
+            canvas.fine_rect(at, top - 8, 7, 5, wall);
+            canvas.fine_rect(at, top - 8, 7, 1, Color::TEXT_FAINT);
+            canvas.fine_rect(at + 1, top - 3, 1, 3, wall);
+            canvas.fine_rect(at + 5, top - 3, 1, 3, wall);
+        }
+        Roof::Antenna => {
+            canvas.fine_rect(at, top - 12, 1, 12, Color::TEXT_FAINT);
+            canvas.fine_rect(at - 2, top - 7, 5, 1, Color::TEXT_FAINT);
+            canvas.fine_pixel(at, top - 13, Color::HEART);
+        }
+    }
+    let Some(Windows { first, lit, glass }) = windows else {
+        return 0;
+    };
+    // The windows: as many columns as fit in a margin of 2 a side,
+    // centred; rows from 3 under the roof to 2 above the ground.
+    let columns = ((w - 4 + 1) / 3).max(0);
+    let left = x + (w - (3 * columns - 1)) / 2;
+    let rows = ((bottom - top - 5 + 2) / 4).max(0);
+    if let Some(glass) = glass.filter(|_| rows > 0 && columns > 0) {
+        let (gw, gh) = (3 * columns - 1, 4 * rows - 2);
+        canvas.fine_tone(left, top + 3, gw, gh, 1, glass);
+    }
+    // Only the rows being drawn: the rest are walked past.
+    let drawn = canvas.fine_rows();
+    let from = ((drawn.start - top - 3) / 4).clamp(0, rows);
+    let to = ((drawn.end - top - 3 + 3) / 4).clamp(0, rows);
+    for row in from..to {
+        let wy = top + 3 + 4 * row;
+        for column in 0..columns {
+            let index = first + (row * columns + column) as u32;
+            if let Some(color) = lit(index) {
+                canvas.fine_rect(left + 3 * column, wy, 2, 2, color);
+            }
+        }
+    }
+    first + (rows * columns) as u32
+}
+
+/// Whether window `index` is one of the `lit` of every 256 (see
+/// [`fine_building`]): its index's low byte through a permutation of
+/// 0..256, so every share lights exactly its part of them, wherever they
+/// are. Multiplying by an odd number and adding permutes them, as does
+/// folding the high bits into the low (`x ^ x >> n`); the canvas's
+/// windows needed only the first, but a building's rows of the panel's
+/// many windows lined its lit ones up into diagonals, which the rest
+/// break up.
+pub(super) fn lit_window(index: u32, lit: u32) -> bool {
+    let mut x = (index as u8).wrapping_mul(167).wrapping_add(13);
+    x ^= x >> 4;
+    x = x.wrapping_mul(43);
+    x ^= x >> 3;
+    u32::from(x) < lit
+}
+
+/// The far city at the panel's resolution, along its row `y` (the
+/// ground), `w` wide from `x`, at most `tallest` rows high (the table's
+/// heights scaled to it): [`fine_building`]s in the far buildings'
+/// slate, a few with a water tank or a mast, `lit` of 256 of their
+/// windows lit in the windows' warm yellow (see [`city_lights`]), the
+/// rest dark.
+pub(super) fn fine_skyline(canvas: &mut Canvas, x: i32, w: i32, y: i32, tallest: i32, lit: u32) {
     let mut left = x;
     let mut window: u32 = 0;
     let mut i = 0;
+    let light = |index: u32| lit_window(index, lit).then_some(Color::HEART_SHINE);
     while left < x + w {
         let (width, height) = SKYLINE[i % SKYLINE.len()];
-        let width = width.min(x + w - left);
+        let width = (3 * width).min(x + w - left);
         let height = height * tallest / 16;
-        canvas.fill_rect(left, y - height, width, height, Color::TRACK);
-        let mut wy = y - height + 2;
-        while wy < y - 1 {
-            let mut wx = left + 1;
-            while wx < left + width - 1 {
-                // As the clock face's windows: a permutation of their
-                // indices, so `lit` lights its share wherever they are.
-                if (window * 167 + 13) % 256 < lit {
-                    canvas.pixel(wx, wy, Color::HEART_SHINE);
-                }
-                window += 1;
-                wx += 2;
-            }
-            wy += 3;
-        }
-        left += width + 1;
+        // A tank on every fourth from the second, a mast on every fifth:
+        // a few, at no rhythm the eye picks up.
+        let roof = match i {
+            _ if i % 4 == 1 => Roof::Tank,
+            _ if i % 5 == 3 => Roof::Antenna,
+            _ => Roof::Flat,
+        };
+        window = fine_building(
+            canvas,
+            (left, y - height, width, y),
+            Color::TRACK,
+            roof,
+            Some(Windows {
+                first: window,
+                lit: &light,
+                glass: None,
+            }),
+        );
+        left += width + 2;
         i += 1;
     }
 }
@@ -272,7 +509,7 @@ pub(super) fn city_lights(hour: u8) -> u32 {
 /// How light the sky is at `hour` (local), from 0, the dead of night, to
 /// [`DAYLIGHT`], day: up an hour at a time from 4 to 7, and down again
 /// from 17 to 20. What a screen that keeps the hour shows the dawn (or
-/// the dusk) by: a glow on the horizon ([`horizon`]), and fewer stars.
+/// the dusk) by: a glow on the horizon ([`fine_horizon`]), and fewer stars.
 pub(super) fn daylight(hour: u8) -> i32 {
     match hour {
         4 | 19 => 1,
@@ -306,29 +543,33 @@ pub(super) fn hour_of(second: i64) -> u8 {
 /// How far up the sky the dawn's glow reaches, by level of [`daylight`].
 const GLOW_ROWS: [i32; DAYLIGHT as usize + 1] = [0, 4, 9, 15, 22];
 
-/// The glow of a sky lightening above the horizon, `w` wide from `x`, the
-/// row above `y` and up, for `level` of [`daylight`], so that 02:00,
-/// 05:00 and 06:30 are three skies at a glance: nothing in the dead of
-/// night; then a band that grows a level at a time (4, 9, 15 and 22
-/// rows), the windows' warm yellow nearest the horizon (solid from the
-/// third level, dithered before), the neon's violet above it, and a
-/// sparse violet haze at its top. Drawn before the buildings, or
-/// whatever stands on the horizon, which stand dark against it.
-pub(super) fn horizon(canvas: &mut Canvas, x: i32, w: i32, y: i32, level: i32) {
-    let rows = GLOW_ROWS[level.clamp(0, DAYLIGHT) as usize];
-    for row in 0..rows {
-        // Which quarter of the band, from the horizon up.
-        let (color, period) = match row * 4 / rows {
-            0 if level >= 3 => (Color::HEART_SHINE, 1),
-            0 | 1 => (Color::HEART_SHINE, 2),
-            2 => (Color::REM, 2),
-            _ => (Color::REM, 3),
-        };
-        for dx in 0..w {
-            if (dx + row) % period == 0 {
-                canvas.pixel(x + dx, y - 1 - row, color);
-            }
-        }
+/// The glow of a sky lightening above the horizon at the panel's
+/// resolution, `w` wide from `x`, the rows above `y`, for `level` of
+/// [`daylight`], so that 02:00, 05:00 and 06:30 are three skies at a
+/// glance: nothing in the dead of night; then a band that grows a level
+/// at a time (12, 27, 45 and 66 rows), in six steps of tone from the
+/// horizon up: the windows' warm yellow (solid at the horizon from the
+/// third level, three in four before), thinning, then the neon's violet,
+/// thinning to nothing. Drawn before the buildings, or whatever stands
+/// on the horizon, which stand dark against it.
+///
+/// The canvas's was four dithers of its pixels, which stood in bands; a
+/// tone of the panel's reads as a shade, so the glow fades.
+pub(super) fn fine_horizon(canvas: &mut Canvas, x: i32, w: i32, y: i32, level: i32) {
+    let rows = 3 * GLOW_ROWS[level.clamp(0, DAYLIGHT) as usize];
+    let bright = if level >= 3 { 4 } else { 3 };
+    let steps = [
+        (Color::HEART_SHINE, bright),
+        (Color::HEART_SHINE, 3),
+        (Color::HEART_SHINE, 2),
+        (Color::REM, 2),
+        (Color::REM, 1),
+        (Color::REM, 1),
+    ];
+    for (i, (color, level)) in steps.into_iter().enumerate() {
+        // Each step's share of the band, from the horizon up.
+        let (low, high) = (rows * i as i32 / 6, rows * (i as i32 + 1) / 6);
+        canvas.fine_tone(x, y - high, w, high - low, level, color);
     }
 }
 
@@ -367,9 +608,15 @@ pub(super) fn rainy(evening: i64) -> bool {
 /// dark row (in the hints' colour), and a time to read from along the
 /// platform in [`led_digit`]s. Rods behind a title's sign are covered by
 /// it, as if it hung in front of them.
+///
+/// The rods are the panel's pixels, two wide, as thin beside a title's
+/// sign as its wires; the frame stays on the canvas's grid, as its sides
+/// would otherwise make every row of the board a fine one, each drawn
+/// again and sent whole whenever a running timer on it ticks (see
+/// `Canvas::refine`).
 pub(super) fn board(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, rods: [i32; 2]) {
     for rod in rods {
-        canvas.fill_rect(rod, 0, 1, y, Color::TEXT_FAINT);
+        canvas.fine_rect(3 * rod, 0, 2, 3 * y, Color::TEXT_FAINT);
     }
     canvas.fill_rect(x, y, w, h, Color::TRACK);
     canvas.fill_rect(x + 1, y + 1, w - 2, h - 2, Color::SHADOW);
@@ -385,7 +632,10 @@ pub(super) const LED_H: i32 = 7 * LED_PITCH - 1;
 /// a dot (2×2) a pixel of the glyph, lit in `color`, and, given an
 /// `unlit` colour, the rest of its grid's dots dark in it, as a board's
 /// LEDs show when they're off (none in the dim look, where a half-tone's
-/// dots would only be noise).
+/// dots would only be noise). `fine`, each dot is LEDs of 2×2 of the
+/// panel's pixels (see [`led`]); otherwise a canvas pixel's square each,
+/// for digits that change every second (a running timer's), whose rows
+/// are cheaper sent coarse (see `Canvas::refine`).
 pub(super) fn led_digit(
     canvas: &mut Canvas,
     x: i32,
@@ -393,6 +643,7 @@ pub(super) fn led_digit(
     digit: u64,
     color: Color,
     unlit: Option<Color>,
+    fine: bool,
 ) {
     let glyph = crate::themes::helpers::digit_glyph(digit);
     for (row, &bits) in glyph.iter().enumerate() {
@@ -402,16 +653,34 @@ pub(super) fn led_digit(
                 continue;
             };
             let (dx, dy) = (column * LED_PITCH, row as i32 * LED_PITCH);
-            canvas.fill_rect(x + dx, y + dy, LED_PITCH - 1, LED_PITCH - 1, color);
+            led(canvas, x + dx, y + dy, color, fine);
         }
     }
 }
 
 /// The colon between two pairs of [`led_digit`]s, from column `x`: a dot
 /// level with each of their third and fifth rows of dots.
-pub(super) fn led_colon(canvas: &mut Canvas, x: i32, y: i32, color: Color) {
+pub(super) fn led_colon(canvas: &mut Canvas, x: i32, y: i32, color: Color, fine: bool) {
     for row in [2, 4] {
-        canvas.fill_rect(x, y + row * LED_PITCH, LED_PITCH - 1, LED_PITCH - 1, color);
+        led(canvas, x, y + row * LED_PITCH, color, fine);
+    }
+}
+
+/// A big [`led_digit`]'s dot, from the canvas's `(x, y)`, its square
+/// ([`LED_PITCH`] less a pixel a side): `fine`, as a board's LEDs at the
+/// panel's resolution, 3×3 of them, each 2×2 of its pixels, 3 apart, the
+/// next dot's 3 on, so that a digit's strokes are an even matrix of
+/// LEDs, as a departure board's are; or the square.
+fn led(canvas: &mut Canvas, x: i32, y: i32, color: Color, fine: bool) {
+    let side = LED_PITCH - 1;
+    if !fine {
+        canvas.fill_rect(x, y, side, side, color);
+        return;
+    }
+    for dy in [0, 3, 6] {
+        for dx in [0, 3, 6] {
+            canvas.fine_rect(3 * x + dx, 3 * y + dy, 2, 2, color);
+        }
     }
 }
 
