@@ -14,7 +14,24 @@ missing below were test builds for the dev kit.
 
 ### Added
 
-- Show each running timer's time left on a glance, soonest first, under the time (which drops a size, to one row as on the clock face, while a timer runs), with an hourglass, as "42 MIN", "2H05", or minutes and seconds that tick under 10 minutes; not on the glance while the phone navigates, nor on the charger (23bdb6c)
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.11.2] - 2026-11-14
+
+The new idea in it: **timers on the glance**, a look at the wrist
+showing how long each running timer has left.
+
+### Added
+
+- Show each running timer's time left on the time glance, soonest first, under the time (one row, as on the clock face, while a timer runs), with an hourglass, as "42 MIN", "2H05", or minutes and seconds that tick under 10 minutes (23bdb6c)
 
 ### Changed
 
@@ -401,7 +418,8 @@ built up to that point, below.
 - Install under the PineTime's stock MCUBoot bootloader, and receive firmware updates over Bluetooth (fdc5a70)
 - Keep a field log in flash in the logging build, and fetch it over Bluetooth (57f261f)
 
-[Unreleased]: https://github.com/jonhoo/ur/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/jonhoo/ur/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/jonhoo/ur/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/jonhoo/ur/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/jonhoo/ur/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/jonhoo/ur/compare/v0.10.0...v0.10.1
