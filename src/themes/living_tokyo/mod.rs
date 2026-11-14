@@ -299,7 +299,7 @@ impl Theme for LivingTokyo {
     }
 
     fn call_overflow(&self, caller: &str) -> i32 {
-        helpers::overflow(caller, 2, layout::CALL_TEXT_WIDTH)
+        messages::call_overflow(caller)
     }
 
     fn music_overflow(&self, artist: &str, track: &str) -> i32 {

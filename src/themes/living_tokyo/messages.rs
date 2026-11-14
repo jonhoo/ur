@@ -5,7 +5,7 @@ use super::{BACKGROUND, street};
 use crate::canvas::{Canvas, Color};
 use crate::font;
 use crate::font::fine::Style;
-use crate::themes::helpers::fitted;
+use crate::themes::helpers::{self, fitted};
 use crate::themes::{Call, Music};
 
 // A notification is a message from somewhere else in the city: its app
@@ -356,36 +356,7 @@ fn render_shop(
     // has squeezed the stall so far that the noren hides it).
     let bowl = lit && hem <= counter - 10;
     if bowl {
-        let rim = counter - 8;
-        // Chopsticks across it, and the noodles' heap.
-        street::fine_line(
-            canvas,
-            (BOWL - 13, rim - 3),
-            (BOWL + 12, rim + 1),
-            Color::TEXT_DIM,
-        );
-        street::fine_line(
-            canvas,
-            (BOWL - 13, rim - 2),
-            (BOWL + 12, rim + 2),
-            Color::TEXT_DIM,
-        );
-        // A black bowl, its red band, wide at the rim and narrow at the
-        // foot.
-        for (dy, half) in [
-            (0, 10),
-            (1, 10),
-            (2, 9),
-            (3, 9),
-            (4, 8),
-            (5, 7),
-            (6, 6),
-            (7, 4),
-        ] {
-            let color = if dy == 2 { Color::HEART } else { Color::SHADOW };
-            canvas.fine_rect(BOWL - half, rim + dy, 2 * half, 1, color);
-        }
-        canvas.fine_rect(BOWL - 9, rim - 1, 18, 1, Color::TEXT_DIM);
+        street::fine_bowl(canvas, BOWL, counter);
     }
 
     // The noren, in the app's neon, slit into panels, its letters dyed in
@@ -595,48 +566,68 @@ pub(super) fn render_banner(canvas: &mut Canvas, app: &str, who: &str) {
 // back wall, with the far city low behind it; and in front, decline and
 // answer as two lit keys, where the UI takes taps on them.
 //
-// Its one living thing is the handset: it jumps on its hook with each
+// Its one living thing is the handset: it jumps off its hook with each
 // ring, a second on and a second off; silenced, it's still and the
 // booth's light goes down. The hour and the night are quiet: the far
 // city's windows lit as its people are up, and either a little rain
 // past the booth (the wet ground under it holding its light) or a few
-// stars over it. In the dim look, the booth's outline and the keys.
+// stars over it, its light pooled on the dry ground. In the dim look,
+// the booth's outline and the keys.
+//
+// Who's calling is in the city's lettering, as on a notification's card,
+// on a line, big or smaller, if it fits on one: then it never scrolls
+// (see `call_overflow`). A longer name scrolls at 2× in the canvas's
+// small font, as a fine row would be drawn again and sent whole ten
+// times a second (see `Canvas::refine`). The booth is drawn at the
+// panel's resolution, the keys on the canvas.
 
-/// The booth: its left post, its width, its roof's row and its floor
-/// (the ground line, which the far city stands on too).
-const BOOTH_X: i32 = 29;
-const BOOTH_W: i32 = 22;
-const BOOTH_TOP: i32 = 37;
-const BOOTH_FLOOR: i32 = 54;
+/// The booth, in the panel's pixels: its left, its roof's top, its width
+/// and its floor (the ground, which the far city stands on too).
+const BOOTH: (i32, i32, i32, i32) = (98, 105, 44, 162);
 /// The keys: their top (a little under where the taps on them start,
 /// [`CALL_BUTTONS_Y`], which take the whole half either side), height
 /// and width.
 const KEY_Y: i32 = CALL_BUTTONS_Y + 3;
 const KEY_H: i32 = 15;
+/// The middle of who's calling, lettered finely: the panel's row.
+const CALLER_Y: i32 = 64;
 const KEY_W: i32 = 32;
 
 /// Stars either side of the booth, over the far city.
 const BOOTH_STARS: [(i32, i32); 4] = [(9, 39), (66, 38), (24, 42), (75, 44)];
 
-/// The caller's name scrolls within columns 4..76 (see
-/// [`CALL_TEXT_WIDTH`]); the decline and answer keys are on the halves
-/// where the UI takes taps on them.
+/// The size who's calling is lettered in, if it fits on a line: the
+/// card's big or its smaller (see [`NAME_LARGE`]); or none, and it
+/// scrolls.
+fn caller_style(caller: &str) -> Option<Style> {
+    [NAME_LARGE, NAME_SMALL]
+        .into_iter()
+        .find(|&style| font::Face::Fine(style).width(caller) <= 3 * CALL_TEXT_WIDTH)
+}
+
+/// How far who's calling overflows its room (see `Theme::call_overflow`):
+/// not at all if it's lettered finely, which never scrolls.
+pub(super) fn call_overflow(caller: &str) -> i32 {
+    match caller_style(caller) {
+        Some(_) => 0,
+        None => helpers::overflow(caller, 2, CALL_TEXT_WIDTH),
+    }
+}
+
+/// Who's calling is in columns 4..76 (see [`CALL_TEXT_WIDTH`]); the
+/// decline and answer keys are on the halves where the UI takes taps on
+/// them.
 pub(super) fn render_call(canvas: &mut Canvas, call: &Call, dim: bool) {
     canvas.clear(BACKGROUND);
     let night = street::Night::now();
+    let (_, top, _, floor) = BOOTH;
     let ringing = !call.silenced;
 
     // Behind the booth: a little rain, or a few stars (fewer as the sky
     // lightens), and the far city, low.
     if !dim {
         if night.rain {
-            street::fine_rain(
-                canvas,
-                3 * (BOOTH_TOP - 1),
-                3 * BOOTH_FLOOR,
-                night.tick,
-                Color::TEXT_FAINT,
-            );
+            street::fine_rain(canvas, top, floor, night.tick, Color::TEXT_FAINT);
         } else {
             let light = street::daylight(night.hour);
             let shown =
@@ -647,30 +638,32 @@ pub(super) fn render_call(canvas: &mut Canvas, call: &Call, dim: bool) {
             canvas,
             0,
             240,
-            3 * BOOTH_FLOOR,
+            floor,
             3 * 7,
             street::city_lights(night.hour),
         );
     }
-    canvas.fill_rect(0, BOOTH_FLOOR, 80, 1, Color::TRACK);
+    canvas.fine_rect(0, floor, 240, 2, Color::TRACK);
 
-    // The corner's sign, then who's calling, at 2×, centred if it fits,
-    // scrolling if not.
+    // The corner's sign, then who's calling: lettered if it fits, else
+    // scrolling at 2×.
     street::title(canvas, "INCOMING CALL", Color::GOOD);
-    let width = font::small_text_width(call.caller) * 2;
-    let left = if width <= CALL_TEXT_WIDTH {
-        40 - width / 2
-    } else {
-        4
-    };
-    canvas.marquee(
-        left..4 + CALL_TEXT_WIDTH,
-        18,
-        call.caller,
-        Color::TEXT,
-        2,
-        call.elapsed,
-    );
+    match caller_style(call.caller) {
+        Some(style) => {
+            let w = font::Face::Fine(style).width(call.caller);
+            let edge = (!dim).then_some(Color::TEXT_FAINT);
+            let (x, y) = (120 - w / 2, CALLER_Y - style.height() / 2);
+            canvas.fine_type(x, y, call.caller, style, Color::TEXT, edge);
+        }
+        None => canvas.marquee(
+            4..4 + CALL_TEXT_WIDTH,
+            18,
+            call.caller,
+            Color::TEXT,
+            2,
+            call.elapsed,
+        ),
+    }
     let hint = if ringing {
         "BUTTON: SILENCE"
     } else {
@@ -689,61 +682,114 @@ pub(super) fn render_call(canvas: &mut Canvas, call: &Call, dim: bool) {
     }
 }
 
-/// The booth: a glass box under a green-lit roof, its light on while it
-/// rings (down once silenced), the phone on its back wall, and its
-/// handset jumping on its hook on every other second of `seconds` while
-/// it rings. On a rainy night, its light lies on the wet ground in front.
+/// The booth, at the panel's resolution: a glass box under a roof with
+/// a green band, lit from inside while it rings (the light down once
+/// silenced), the green phone on its back wall, and its handset jumping
+/// off its hook on every other second of `seconds` while it rings. Its
+/// light lies on the ground in front: broken up on a wet night, pooled
+/// on a dry one. In the dim look, its outline, the phone and the
+/// handset, unlit.
 fn render_booth(canvas: &mut Canvas, ringing: bool, seconds: u64, rain: bool, dim: bool) {
-    let (x, w, top, floor) = (BOOTH_X, BOOTH_W, BOOTH_TOP, BOOTH_FLOOR);
-    let glass = top + 2;
-    // The glass: lit, or nearly dark; and in the dim look, unlit.
-    canvas.fill_rect(x, glass, w, floor - glass, Color::SHADOW);
+    let (x, top, w, floor) = BOOTH;
+    let glass = top + 9;
+
+    // Its light, hazing round it while it rings.
+    if ringing && !dim {
+        street::fine_glow(
+            canvas,
+            x - 16,
+            top + 2,
+            w + 32,
+            floor - top,
+            Color::TEXT_DIM,
+        );
+    }
+    // The glass: lit as bright as it rings (or not at all, dim); the
+    // panel along its foot, and a rail across it.
+    canvas.fine_rect(x, glass, w, floor - glass, Color::SHADOW);
     if !dim {
-        let light = if ringing { 1 } else { 3 };
-        for gy in glass..floor {
-            for gx in x + 1..x + w - 1 {
-                if (gx + gy) % 2 == 0 && (gy - glass) % light == 0 {
-                    canvas.pixel(gx, gy, Color::TEXT_DIM);
-                }
+        let light = if ringing { 2 } else { 1 };
+        canvas.fine_tone(x, glass, w, floor - glass, light, Color::TEXT_DIM);
+    }
+    let frame = Color::TEXT_FAINT;
+    canvas.fine_rect(x, floor - 8, w, 8, Color::TRACK);
+    canvas.fine_rect(x, floor - 22, w, 1, frame);
+    // The posts, either side and between the door's two panes.
+    for post in [x, x + w / 2 - 1, x + w - 2] {
+        canvas.fine_rect(post, glass, 2, floor - glass, frame);
+    }
+    // The roof, overhanging, over its band in the phones' green (dark in
+    // the dim look, half lit once silenced).
+    canvas.fine_rect(x - 3, top, w + 6, 4, Color::TRACK);
+    canvas.fine_rect(x - 3, top, w + 6, 1, frame);
+    canvas.fine_rect(x, top + 4, w, 5, Color::SHADOW);
+    if !dim {
+        let band = if ringing { 4 } else { 2 };
+        canvas.fine_tone(x, top + 4, w, 5, band, Color::GOOD);
+    }
+
+    // The phone: a green box on the back wall, on a shelf, its little
+    // display and its keypad dark; its handset hung on its left.
+    let (px, py, pw, ph) = (x + 18, glass + 9, 14, 20);
+    canvas.fine_rect(x + 4, py + ph, w - 8, 2, frame);
+    canvas.fine_rect(px, py, pw, ph, Color::GOOD);
+    canvas.fine_rect(px + 3, py + 2, 8, 3, Color::SHADOW);
+    for row in 0..4 {
+        for column in 0..3 {
+            canvas.fine_rect(px + 3 + 3 * column, py + 8 + 3 * row, 2, 2, Color::SHADOW);
+        }
+    }
+    // The handset: an earpiece and a mouthpiece on a grip, on its hook;
+    // on a ring, jumped up off it and tipped out, the ring's marks beside
+    // it.
+    let jump = ringing && !dim && seconds % 2 == 1;
+    let (hx, hy, tip) = if jump {
+        (px - 7, py - 5, -3)
+    } else {
+        (px - 7, py, 0)
+    };
+    let handset = if dim { Color::TEXT } else { Color::SHADOW };
+    canvas.fine_rect(hx - 1 + tip, hy, 6, 4, handset);
+    canvas.fine_rect(hx - 1, hy + 15, 6, 4, handset);
+    for dx in 0..3 {
+        street::fine_line(canvas, (hx + tip + dx, hy + 3), (hx + dx, hy + 15), handset);
+    }
+    if jump {
+        for (from, to) in [
+            ((-5, -2), (-9, -5)),
+            ((-6, 3), (-10, 3)),
+            ((-5, 8), (-9, 11)),
+        ] {
+            let at = |(dx, dy): (i32, i32)| (hx + tip + dx, hy + dy);
+            street::fine_line(canvas, at(from), at(to), Color::SHADOW);
+        }
+    }
+
+    // Its light on the ground in front: broken up on a wet night, pooled
+    // on a dry one, fading out from the booth.
+    if !dim {
+        if rain {
+            let color = if ringing {
+                Color::TEXT_DIM
+            } else {
+                Color::TRACK
+            };
+            street::fine_reflection(canvas, x, w, floor + 2, 3, color);
+        } else {
+            let level = if ringing { 2 } else { 1 };
+            for row in 0..4 {
+                let spread = 2 + 3 * row;
+                let level = if row < 2 { level } else { 1 };
+                canvas.fine_tone(
+                    x - spread,
+                    floor + 2 + row,
+                    w + 2 * spread,
+                    1,
+                    level,
+                    Color::TEXT_DIM,
+                );
             }
         }
-    }
-    // Its frame: the posts, a rail across the glass, and the roof, its
-    // edge lit green (dark in the dim look).
-    for post in [x, x + w - 1] {
-        canvas.fill_rect(post, glass, 1, floor - glass, Color::TEXT_FAINT);
-    }
-    canvas.fill_rect(x, floor - 5, w, 1, Color::TEXT_FAINT);
-    canvas.fill_rect(x - 1, top, w + 2, 1, Color::TEXT_FAINT);
-    let roof = if dim { Color::TRACK } else { Color::GOOD };
-    canvas.fill_rect(x, top + 1, w, 1, roof);
-
-    // The phone: a green box on the back wall, its keypad a dark patch,
-    // and the handset on its hook at its left: on a ring, jumped up off
-    // it and tipped out, with the ring's two marks beside it.
-    let (px, py) = (x + 10, glass + 2);
-    canvas.fill_rect(px, py, 6, 9, Color::GOOD);
-    canvas.fill_rect(px + 1, py + 4, 4, 4, Color::SHADOW);
-    let jump = ringing && !dim && seconds % 2 == 1;
-    let (hx, hy) = if jump { (px - 4, py - 2) } else { (px - 3, py) };
-    let handset = if dim { Color::TEXT } else { Color::SHADOW };
-    canvas.fill_rect(hx + 1, hy, 2, 9, handset);
-    canvas.fill_rect(hx, hy, 1, 2, handset);
-    canvas.fill_rect(hx, hy + 7, 1, 2, handset);
-    if jump {
-        for (mx, my) in [(hx - 2, hy + 1), (hx - 2, hy + 6)] {
-            canvas.fill_rect(mx, my, 1, 2, Color::TEXT);
-        }
-    }
-
-    // Its light on the wet ground in front.
-    if rain && !dim {
-        let color = if ringing {
-            Color::TEXT_DIM
-        } else {
-            Color::TRACK
-        };
-        street::reflection(canvas, x, w, floor + 1, 2, color);
     }
 }
 
@@ -753,18 +799,26 @@ fn render_booth(canvas: &mut Canvas, ringing: bool, seconds: u64, rain: bool, di
 
 // What the phone plays is a record playing in a small bar: its sign
 // (MUSIC) hanging top left, the artist and the track on the marquee
-// under it, and below, the turntable the controls are on: previous and
-// next either side, and play or pause on the record's label, the middle
-// third that a tap on it takes.
+// under it, and below, the turntable under the bar's lamp, with the
+// controls on and beside it: previous and next either side, and play or
+// pause on the record's label, the middle third that a tap on it takes.
 //
 // Its one living thing is the record: while the music plays, the sign is
-// lit, the tonearm is on the record and a sheen goes round it, a step a
-// second; paused, the sign goes dark, the arm lifts to its rest and the
-// record stops. The hour and the night are quieter: the bar's lamp warms
-// the record (bright in the evening, low in the small hours, out from
-// 04:00, as the noodle bar keeps its hours: see [`Shop`]), and over the
-// marquee a little rain falls, or a few stars are out. In the dim look,
-// the shapes and what they show, still.
+// lit, the tonearm is on the record and the lamp's sheen goes round it, a
+// step a second; paused, the sign goes dark, the arm lifts back to its
+// rest and the record stops. The hour and the night are quieter: the lamp
+// over the turntable keeps the noodle bar's hours (bright in the evening,
+// low in the small hours, out from 04:00: see [`Shop`]), its light pooled
+// on the plinth while it's on, and over the marquee a little rain falls,
+// or a few stars are out. In the dim look, the shapes and what they show,
+// still.
+//
+// The turntable is drawn at the panel's resolution, the marquee on the
+// canvas. A long name scrolls ten times a second, and a fine row is drawn
+// again with every frame and sent whole whenever it changes (see
+// `Canvas::refine`): the marquee's rows have no fine drawing, so a scroll
+// sends only the canvas's narrow spans, and the turntable's bands, drawn
+// again each frame, are sent only as the record turns, once a second.
 
 /// The marquee's box: its top row, and its height.
 const MARQUEE_TOP: i32 = 14;
@@ -772,27 +826,50 @@ const MARQUEE_H: i32 = 29;
 /// The artist's and the track's rows on it (their capitals' tops).
 const ARTIST_Y: i32 = 19;
 const TRACK_Y: i32 = 31;
-/// The record: its box's top left and its diameter, and its label's, so
-/// that both are centred on (40, 63), the play or pause on the label.
-const RECORD: (i32, i32, i32) = (27, 50, 26);
-const LABEL: (i32, i32, i32) = (32, 55, 16);
-/// The tonearm's pivot, right of the record.
-const ARM: (i32, i32) = (57, 52);
+
+// The turntable is in the panel's pixels.
+
+/// The record's middle, under the middle third's taps (the play or pause
+/// is on its label), its radius, and its label's.
+const RECORD: (i32, i32) = (120, 180);
+const RECORD_R: i32 = 31;
+const LABEL_R: i32 = 11;
+/// The plinth: its left, top, width and height. Its rows stop short of
+/// the canvas's band from row 72, which then has no fine rows to draw
+/// again with every frame of a scroll.
+const PLINTH: (i32, i32, i32, i32) = (74, 143, 94, 71);
+/// The tonearm's pivot, at the plinth's top right; and where its stylus
+/// is: on the record's grooves while it plays, on its rest beside the
+/// record while it doesn't.
+const PIVOT: (i32, i32) = (157, 154);
+const ON_RECORD: (i32, i32) = (138, 191);
+const ON_REST: (i32, i32) = (160, 198);
+/// The lamp, hanging from the marquee's foot over the turntable: its
+/// shade's middle, and its foot.
+const LAMP: (i32, i32) = (120, 140);
+/// Previous and next, either side of the plinth: their left columns, and
+/// how tall each is.
+const SKIPS: [i32; 2] = [34, 187];
+const SKIP_H: i32 = 27;
+const _: () = assert!(
+    RECORD.1 - SKIP_H / 2 >= 3 * MUSIC_CONTROLS_Y,
+    "the controls are where their taps are"
+);
 
 /// Stars right of the sign, the last to go first as the sky lightens.
 const BAR_STARS: [(i32, i32); 4] = [(47, 3), (66, 8), (36, 9), (75, 2)];
 
-/// Where the sheen on the record is, a step a second: eight steps round,
-/// a short streak along a radius each (from the record's centre).
-const SHEEN: [(i32, i32); 8] = [
-    (0, -1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-    (0, 1),
-    (-1, 1),
-    (-1, 0),
-    (-1, -1),
+/// Which way the lamp's sheen on the record points, a step a second:
+/// eight steps round, in sixteenths of a radius.
+const TURN: [(i32, i32); 8] = [
+    (0, -16),
+    (11, -11),
+    (16, 0),
+    (11, 11),
+    (0, 16),
+    (-11, 11),
+    (-16, 0),
+    (-11, -11),
 ];
 
 /// The artist and the track scroll within columns 3..77 (see
@@ -829,8 +906,10 @@ pub(super) fn render_music(canvas: &mut Canvas, music: &Music, dim: bool) {
         street::title(canvas, "MUSIC", Color::REM);
     }
 
-    // The marquee: a dark box in a dull frame, what's playing lit on it.
-    street::sign(canvas, 1, MARQUEE_TOP, 78, MARQUEE_H, Color::TRACK);
+    // The marquee: a dark box in a dull frame, what's playing lit on it,
+    // all on the canvas (see above).
+    canvas.fill_rect(1, MARQUEE_TOP, 78, MARQUEE_H, Color::TRACK);
+    canvas.fill_rect(2, MARQUEE_TOP + 1, 76, MARQUEE_H - 2, Color::SHADOW);
     let columns = 3..3 + MUSIC_TEXT_WIDTH;
     let elapsed = music.elapsed;
     canvas.marquee(
@@ -843,78 +922,149 @@ pub(super) fn render_music(canvas: &mut Canvas, music: &Music, dim: bool) {
     );
     canvas.marquee(columns, TRACK_Y, music.track, Color::TEXT, 2, elapsed);
 
-    // The turntable, in the bar's lamplight while the bar's open.
-    let (rx, ry, rd) = RECORD;
-    let (lx, ly, ld) = LABEL;
-    let (cx, cy) = (rx + rd / 2, ry + rd / 2);
-    let lamp = match Shop::at(night.hour) {
-        Shop::Busy => 3,
-        Shop::Late => 2,
-        Shop::Shut => 0,
+    let lamp = if dim {
+        Shop::Shut
+    } else {
+        Shop::at(night.hour)
     };
-    if !dim && lamp > 0 {
-        street::glow(canvas, rx, ry, rd, lamp, Color::HEART_SHINE);
+    let step = if on {
+        night.tick % TURN.len() as u64
+    } else {
+        0
+    };
+    render_turntable(canvas, on, lamp, step as usize, dim);
+
+    // Previous and next either side, in the text's colour: a bar, and a
+    // triangle pointing away from the record.
+    let (_, cy) = RECORD;
+    let (top, half) = (cy - SKIP_H / 2, SKIP_H / 2);
+    let [previous, next] = SKIPS;
+    canvas.fine_rect(previous, top, 4, SKIP_H, Color::TEXT);
+    arrow(canvas, previous + 5 + half, top, SKIP_H, -1, Color::TEXT);
+    arrow(canvas, next, top, SKIP_H, 1, Color::TEXT);
+    canvas.fine_rect(next + half + 1, top, 4, SKIP_H, Color::TEXT);
+}
+
+/// A triangle `h` rows tall (odd) from `top`, its flat side on column
+/// `x`, pointing `towards` the right (1) or the left (-1), its tip
+/// half its height away.
+fn arrow(canvas: &mut Canvas, x: i32, top: i32, h: i32, towards: i32, color: Color) {
+    for row in 0..h {
+        let w = h / 2 + 1 - (row - h / 2).abs();
+        let left = if towards > 0 { x } else { x - w + 1 };
+        canvas.fine_rect(left, top + row, w, 1, color);
     }
-    // The record: a black disc with a rim and a groove, its label in the
-    // bar's neon.
-    street::disc(canvas, rx, ry, rd, Color::TRACK);
-    street::disc(canvas, rx + 1, ry + 1, rd - 2, Color::SHADOW);
-    if !dim {
-        street::disc(canvas, rx + 5, ry + 5, rd - 10, Color::TRACK);
-        street::disc(canvas, rx + 6, ry + 6, rd - 12, Color::SHADOW);
+}
+
+/// The turntable, at the panel's resolution: the lamp over it (lit as
+/// `lamp` has it), the plinth, the record (its sheen pointing `step` of
+/// [`TURN`] while it plays, and the notch in its label so), the tonearm
+/// (on the record while it's `on`, on its rest otherwise), and play or
+/// pause on the label, whichever a tap does.
+fn render_turntable(canvas: &mut Canvas, on: bool, lamp: Shop, step: usize, dim: bool) {
+    let (px, py, pw, ph) = PLINTH;
+    let (cx, cy) = RECORD;
+    let lit = lamp != Shop::Shut;
+
+    // The lamp, on a short cord from the marquee: a dark shade, wide at
+    // its foot, its bulb under it lit as the bar's hours have it, and in
+    // the evening, a haze round it.
+    let (lx, ly) = LAMP;
+    if lamp == Shop::Busy {
+        street::fine_glow(canvas, lx - 22, ly - 12, 44, 14, Color::HEART_SHINE);
     }
-    street::disc(canvas, lx, ly, ld, Color::REM);
-    // Where it has turned to: a step a second while it plays; stopped,
-    // at rest (and in the dim look, which holds still, not drawn).
+    let cord = 3 * (MARQUEE_TOP + MARQUEE_H);
+    canvas.fine_rect(lx, cord, 1, ly - 9 - cord, Color::TEXT_FAINT);
+    for row in 0..9 {
+        let half = 3 + row;
+        canvas.fine_rect(lx - half, ly - 9 + row, 2 * half + 1, 1, Color::TRACK);
+    }
+    canvas.fine_rect(lx - 3, ly - 9, 7, 1, Color::TEXT_FAINT);
+    let bulb = match lamp {
+        Shop::Busy => Color::HEART_SHINE,
+        Shop::Late => Color::HEART,
+        Shop::Shut => Color::TEXT_FAINT,
+    };
+    street::fine_ellipse(canvas, lx - 4, ly - 1, 9, 5, bulb);
+
+    // The plinth, dark wood, its grain faint, in a faint edge, its
+    // corners rounded; and the lamp's light pooled on it, wider while
+    // it's bright.
+    canvas.fine_rect(px, py, pw, ph, Color::TEXT_FAINT);
+    canvas.fine_rect(px + 1, py + 1, pw - 2, ph - 2, Color::SHADOW);
+    for y in (py + 4..py + ph - 2).step_by(6) {
+        canvas.fine_rect(px + 3, y, pw - 6, 1, Color::TRACK);
+    }
+    for (x, y) in [
+        (px, py),
+        (px + pw - 1, py),
+        (px, py + ph - 1),
+        (px + pw - 1, py + ph - 1),
+    ] {
+        canvas.fine_pixel(x, y, BACKGROUND);
+    }
+    if lit {
+        let (w, h) = if lamp == Shop::Busy {
+            (96, 60)
+        } else {
+            (64, 36)
+        };
+        street::fine_glow(canvas, lx - w / 2, py + 1, w, h, Color::HEART_SHINE);
+    }
+
+    // The record on its platter's metal rim: black, its grooves catching
+    // the light in rings, its label in the bar's neon.
+    let disc = |canvas: &mut Canvas, r: i32, color: Color| {
+        street::fine_ellipse(canvas, cx - r, cy - r, 2 * r, 2 * r, color);
+    };
+    disc(canvas, RECORD_R + 2, Color::TEXT_FAINT);
+    disc(canvas, RECORD_R, Color::SHADOW);
     if !dim {
-        let step = if on {
-            night.tick % SHEEN.len() as u64
-        } else {
-            0
-        };
-        let (dx, dy) = SHEEN[step as usize];
-        let at = |r: i32| {
-            (
-                cx + dx * r - i32::from(dx < 0),
-                cy + dy * r - i32::from(dy < 0),
-            )
-        };
-        // A diagonal's steps are √2 long: two of them to a straight's
-        // three, about the same length.
-        let (sheen, notch): (&[i32], i32) = if dx != 0 && dy != 0 {
-            (&[7, 8], 5)
-        } else {
-            (&[9, 10, 11], 7)
-        };
+        for r in [27, 22, 17] {
+            disc(canvas, r, Color::TRACK);
+            disc(canvas, r - 1, Color::SHADOW);
+        }
+    }
+    disc(canvas, LABEL_R, Color::REM);
+    if !dim {
+        // The lamp's sheen across it, as two opposite streaks along a
+        // radius, the far one fainter, going round while it plays; and the
+        // notch in the label's edge, turning with it.
+        let (dx, dy) = TURN[step];
+        let at = |r: i32, sign: i32| (cx + sign * dx * r / 16, cy + sign * dy * r / 16);
         if on {
-            for &r in sheen {
-                let (x, y) = at(r);
-                canvas.pixel(x, y, Color::TEXT);
+            for (sign, color) in [(1, Color::TEXT_DIM), (-1, Color::TEXT_FAINT)] {
+                street::fine_line(canvas, at(LABEL_R + 3, sign), at(RECORD_R - 2, sign), color);
+                let (x, y) = at(LABEL_R + 5, sign);
+                let (x1, y1) = at(RECORD_R - 4, sign);
+                street::fine_line(canvas, (x + 1, y), (x1 + 1, y1), color);
             }
         }
-        // A notch in the label's edge, turning with it.
-        let (x, y) = at(notch);
-        canvas.pixel(x, y, Color::SHADOW);
+        let (x, y) = at(LABEL_R - 2, 1);
+        canvas.fine_rect(x - 1, y - 1, 2, 2, Color::SHADOW);
     }
 
-    // The tonearm, from its pivot: on the record's outer grooves while
-    // it plays, down at its rest otherwise.
-    let (px, py) = ARM;
-    let end = if on { (cx + 10, cy + 2) } else { (px, py + 15) };
-    let steps = (end.0 - px).abs().max(end.1 - py);
-    for i in 0..=steps {
-        let x = px + (end.0 - px) * i / steps;
-        let y = py + (end.1 - py) * i / steps;
-        canvas.pixel(x, y, Color::TEXT_DIM);
+    // The tonearm, from its pivot: its counterweight behind, the arm a
+    // tube two pixels thick, the headshell at its end; on the record's
+    // grooves while it plays, or lifted back to its rest.
+    let (ax, ay) = PIVOT;
+    let end = if on { ON_RECORD } else { ON_REST };
+    canvas.fine_rect(ON_REST.0 - 2, ON_REST.1 + 1, 5, 4, Color::TEXT_FAINT);
+    canvas.fine_rect(ax - 2, ay - 12, 6, 6, Color::TEXT_FAINT);
+    canvas.fine_rect(ax, ay - 6, 2, 6, Color::TEXT_DIM);
+    for dx in [0, 1] {
+        street::fine_line(canvas, (ax + dx, ay), (end.0 + dx, end.1), Color::TEXT_DIM);
     }
-    canvas.fill_rect(end.0 - 1, end.1, 2, 2, Color::TEXT);
-    street::disc(canvas, px - 1, py - 1, 3, Color::TEXT_FAINT);
+    canvas.fine_rect(end.0 - 2, end.1 - 2, 5, 5, Color::TEXT);
+    street::fine_ellipse(canvas, ax - 4, ay - 4, 10, 10, Color::TEXT_FAINT);
+    canvas.fine_rect(ax, ay, 2, 2, Color::SHADOW);
 
-    // The controls: play or pause (whichever a tap does) in the label's
-    // dark ink, as printed on it; previous and next in the text's colour.
-    let play_pause = if on { &font::PAUSE } else { &font::PLAY };
-    canvas.sprite(cx - 5, cy - 5, 5, play_pause, 2, Color::SHADOW);
-    for (x, icon) in [(6, &font::PREVIOUS), (61, &font::NEXT)] {
-        canvas.sprite(x, MUSIC_CONTROLS_Y + 6, 5, icon, 3, Color::TEXT);
+    // Play or pause, printed on the label in its dark ink.
+    if on {
+        for x in [cx - 5, cx + 2] {
+            canvas.fine_rect(x, cy - 6, 3, 12, Color::SHADOW);
+        }
+    } else {
+        arrow(canvas, cx - 3, cy - 6, 13, 1, Color::SHADOW);
     }
 }

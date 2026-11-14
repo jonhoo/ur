@@ -19,24 +19,6 @@ use crate::font::fine::Style;
 /// of capitals, a clear row, and the tube.
 pub(super) const SIGN_H: i32 = 9;
 
-/// A sign's box on the canvas's grid: dark (the near buildings' colour,
-/// black in the dim look) inside a neon tube a canvas pixel thick, in
-/// `tube`. What it says is the caller's to draw, in the tube's colour for
-/// a sign's own lettering, or in the text's for what it shows (a name, a
-/// time).
-///
-/// Only the music's marquee still has this one: its rows scroll ten
-/// times a second, which a [`fine_sign`]'s sides would make fine rows,
-/// each drawn again and sent whole every frame (see `Canvas::refine`).
-/// TODO: delete it once the music screen has a marquee of its own.
-pub(super) fn sign(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, tube: Color) {
-    canvas.fill_rect(x, y, w, h, Color::SHADOW);
-    canvas.fill_rect(x, y, w, 1, tube);
-    canvas.fill_rect(x, y + h - 1, w, 1, tube);
-    canvas.fill_rect(x, y, 1, h, tube);
-    canvas.fill_rect(x + w - 1, y, 1, h, tube);
-}
-
 /// A sign's lettering, in the city's fine face (see `font::fine`): its
 /// capitals the small font's height, in a tube not quite two pixels
 /// thick, the sign's own neon, where a [`SIGN_H`] box holds them.
@@ -96,10 +78,10 @@ pub(super) fn hanging(canvas: &mut Canvas, width: i32, tube: Color) -> i32 {
 /// inside a neon tube a pixel thick, a pixel in from its edge, its
 /// corners rounded, the way a bent glass tube turns; and the tube's glow
 /// round it, every other pixel, so that it reads as lit rather than
-/// drawn. In the footprint of the canvas's [`sign`] three times over (its
-/// tube there a canvas pixel, here the glow, the tube and the box's dark
-/// inside it), so a sign that moves keeps its lettering's room. The
-/// lettering is the caller's, as on [`sign`].
+/// drawn. On the canvas's grid, three times over (a canvas pixel all
+/// round for the glow, the tube and the box's dark inside it), a sign
+/// keeps the room for its lettering a canvas sign had. The lettering is
+/// the caller's.
 ///
 /// Glowing outwards only: a glow inside too blurred the tube into the
 /// lettering, where the dark keeps it crisp. And it stays in the dim
@@ -147,40 +129,6 @@ pub(super) fn fine_sign_in(
 // ==============================================================================
 // Lights
 // ==============================================================================
-
-/// Whether `(x, y)` is in the disc of diameter `d` whose bounding box
-/// starts at the origin, measured from pixel centres.
-pub(super) fn in_disc(x: i32, y: i32, d: i32) -> bool {
-    let (dx, dy) = (2 * x + 1 - d, 2 * y + 1 - d);
-    dx * dx + dy * dy <= d * d
-}
-
-/// A disc `d` across, from `(left, top)`: the moon, a lamp's lens.
-pub(super) fn disc(canvas: &mut Canvas, left: i32, top: i32, d: i32, color: Color) {
-    for y in 0..d {
-        for x in 0..d {
-            if in_disc(x, y, d) {
-                canvas.pixel(left + x, top + y, color);
-            }
-        }
-    }
-}
-
-/// The glow round a light `d` across at `(left, top)`: every other pixel
-/// of a ring `spread` pixels wide round it, in its colour, the way a lamp
-/// hazes in the rain. Drawn before the light, and before what stands in
-/// front of it.
-pub(super) fn glow(canvas: &mut Canvas, left: i32, top: i32, d: i32, spread: i32, color: Color) {
-    let outer = d + 2 * spread;
-    for y in 0..outer {
-        for x in 0..outer {
-            let lamp = in_disc(x - spread, y - spread, d);
-            if (x + y) % 2 == 0 && in_disc(x, y, outer) && !lamp {
-                canvas.pixel(left - spread + x, top - spread + y, color);
-            }
-        }
-    }
-}
 
 /// Craters on a [`fine_moon`] `d` across: each one's middle and radius, in
 /// 64ths of its diameter, from its box's top left. The seas, really: the
@@ -340,61 +288,12 @@ pub(super) fn fine_rain(canvas: &mut Canvas, top: i32, bottom: i32, tick: u64, c
     }
 }
 
-/// A light's reflection in the wet street below it, `w` wide from `x`,
-/// from row `y` down: broken dashes in its colour, sparser each row
-/// further from it, as ripples break it up.
-pub(super) fn reflection(canvas: &mut Canvas, x: i32, w: i32, y: i32, rows: i32, color: Color) {
-    for row in 0..rows {
-        // Two rows apart; each row's dashes shorter, and shifted, so
-        // they don't line up into columns.
-        let dash = (4 - row).max(1);
-        let period = dash + 2 + row;
-        let shift = row * 3;
-        let mut dx = shift % period;
-        while dx < w {
-            let len = dash.min(w - dx);
-            canvas.fill_rect(x + dx, y + 2 * row, len, 1, color);
-            dx += period;
-        }
-    }
-}
-
 /// A railway line seen from the side, `w` wide from `x` at row `y`: the
 /// rail, and the sleepers' ends under it, every third pixel.
 pub(super) fn rails(canvas: &mut Canvas, x: i32, w: i32, y: i32) {
     canvas.fill_rect(x, y, w, 1, Color::TEXT_FAINT);
     for dx in (1..w).step_by(3) {
         canvas.pixel(x + dx, y + 1, Color::TRACK);
-    }
-}
-
-// ==============================================================================
-// Steam
-// ==============================================================================
-
-/// How a wisp of steam sways, a column a row, over a cycle.
-const SWAY: [i32; 6] = [0, 1, 1, 0, -1, -1];
-
-/// Steam rising `height` rows from `(x, y)` (its source, at the bottom):
-/// two wisps, swaying and broken, fading as they rise. `tick`
-/// moves it up a row a second; a constant holds it still.
-pub(super) fn steam(canvas: &mut Canvas, x: i32, y: i32, height: i32, tick: u64) {
-    let tick = (tick % SWAY.len() as u64) as i32;
-    for (wisp, offset) in [(0, 0), (3, 3)] {
-        for row in 0..height {
-            // Every other row, and fewer higher up: wisps, not a column.
-            let phase = (row - tick + offset).rem_euclid(SWAY.len() as i32);
-            if phase % 2 == 1 || (row > height / 2 && phase % 3 == 0) {
-                continue;
-            }
-            let dx = SWAY[(phase as usize) % SWAY.len()];
-            let color = if row < height / 2 {
-                Color::TEXT_DIM
-            } else {
-                Color::TEXT_FAINT
-            };
-            canvas.pixel(x + wisp + dx, y - row, color);
-        }
     }
 }
 
@@ -1060,4 +959,39 @@ pub(super) fn fine_ring(
             canvas.fine_tone(inner.end, py, outer.end - inner.end, 1, level, color);
         }
     }
+}
+
+// ==============================================================================
+// For the notification's stall and the air's room
+// ==============================================================================
+
+/// A ramen bowl at the panel's resolution standing on a counter at row
+/// `counter`, centred on column `x`: black, its red band, wide at the rim
+/// and narrow at the foot, the noodles' heap catching the light over its
+/// rim, and chopsticks across it. Its steam is [`fine_steam`]'s, from 10
+/// rows over the counter.
+pub(super) fn fine_bowl(canvas: &mut Canvas, x: i32, counter: i32) {
+    let rim = counter - 8;
+    for dy in [-3, -2] {
+        fine_line(
+            canvas,
+            (x - 13, rim + dy),
+            (x + 12, rim + dy + 4),
+            Color::TEXT_DIM,
+        );
+    }
+    for (dy, half) in [
+        (0, 10),
+        (1, 10),
+        (2, 9),
+        (3, 9),
+        (4, 8),
+        (5, 7),
+        (6, 6),
+        (7, 4),
+    ] {
+        let color = if dy == 2 { Color::HEART } else { Color::SHADOW };
+        canvas.fine_rect(x - half, rim + dy, 2 * half, 1, color);
+    }
+    canvas.fine_rect(x - 9, rim - 1, 18, 1, Color::TEXT_DIM);
 }
