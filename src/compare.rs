@@ -100,8 +100,10 @@ pub struct Head {
     pub finished: u32,
     /// The [`state`] flags last logged (as a [`kind::STATE`] event).
     pub state: u32,
-    pub push: Push,
+    /// Before `push`, in the 4 bytes its alignment would leave after
+    /// `state` (see [`Boot`]).
     pub boot: Boot,
+    pub push: Push,
     pub pass: Pass,
 }
 
@@ -130,7 +132,12 @@ pub struct Push {
     pub bytes: u32,
 }
 
-#[repr(C)]
+/// Packed to 4 bytes, rather than aligned to its `u64`'s 8: its fields
+/// come to 4 bytes short of a multiple of 8, so aligned, it took 4 bytes
+/// of padding at its end and left 4 in [`Head`] before it, where it now
+/// fits: 8 bytes of the `compare` build's scarce RAM. (Read `at` by
+/// value: a reference to it might be misaligned.)
+#[repr(C, packed(4))]
 #[derive(Clone, Copy)]
 pub struct Boot {
     /// `App::new`'s instant, in ticks.
