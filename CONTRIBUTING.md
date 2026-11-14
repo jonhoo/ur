@@ -620,6 +620,11 @@ python3 scripts/fetch-log.py --address <MAC> --out logs
 defmt-print -e ur-logging-0.9.0.elf < logs/field-log-0.9.0.defmt > decoded.log
 ```
 
+The first fetch from a watch reads all of it (a couple of minutes); later
+ones read only the sectors written since, from a cache of what was fetched
+before (`--cache`, by default under `~/.cache/ur/field-log/`), so they take
+seconds. `--full` reads everything again.
+
 Every build also logs why the chip last reset, and, after a panic or a
 watchdog reset, where the previous run was, with a backtrace: the call
 sites found on the stack, innermost first. A few are stale leftovers, but
