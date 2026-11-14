@@ -206,7 +206,6 @@ canvas's grid, for the screens that need them so (see each).
 | `fine_building`, `Roof`, `Windows`, `lit_window` | A building: its wall, a parapet, what's on its roof, and windows of 2×2 pixels 3 apart across and 4 down, lit by their index (`lit_window`: a share of every 256), the dark ones as a tone of glass if shown |
 | `city_lights` | How many of the city's windows are lit at an hour |
 | `fine_rain` | Thin streaks, a pixel wide and leaning, falling with a tick |
-| `rails` | A railway line seen from the side (canvas) |
 | `daylight`, `DAYLIGHT` | How light the sky is at an hour: 0 until 04:00, up to 4 by 07:00, down again from 17:00 |
 | `fine_horizon` | The dawn's (or dusk's) glow above a horizon: 12, 27, 45 or 66 rows, in six steps of tone, yellow at the bottom, violet above |
 | `evening`, `rainy` | Which evening a local second belongs to (noon to noon), and whether it rains that night (a third of nights) |
@@ -240,7 +239,6 @@ that; one that isn't, `local_now`.
 
 What the canvas's pieces still left are for, and when they can go:
 
-- `rails`: Last night's train. Once it draws its own.
 - `led_digit`'s and `led_colon`'s coarse squares: a running timer's
   digits, which tick (keep them coarse: see the resolution's costs).
 

@@ -301,15 +301,6 @@ pub(super) fn fine_rain(canvas: &mut Canvas, top: i32, bottom: i32, tick: u64, c
     }
 }
 
-/// A railway line seen from the side, `w` wide from `x` at row `y`: the
-/// rail, and the sleepers' ends under it, every third pixel.
-pub(super) fn rails(canvas: &mut Canvas, x: i32, w: i32, y: i32) {
-    canvas.fill_rect(x, y, w, 1, Color::TEXT_FAINT);
-    for dx in (1..w).step_by(3) {
-        canvas.pixel(x + dx, y + 1, Color::TRACK);
-    }
-}
-
 // ==============================================================================
 // The far city
 // ==============================================================================
