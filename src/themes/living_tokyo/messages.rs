@@ -66,19 +66,6 @@ const NAME_SMALL: Style = Style {
     caps: false,
 };
 
-/// The app on its sign: capitals the canvas's small font's height, in a
-/// tube not quite two pixels thick, where the sign's box (`SIGN_H`) holds
-/// them.
-const SIGN_LETTERING: Style = Style {
-    cap: 12,
-    stroke: 28,
-    caps: true,
-};
-/// The sign's lettering's left and top, in the panel's pixels: where the
-/// small font's was, a pixel lower, as the face's capitals are a stroke
-/// shorter than its 5 rows.
-const SIGN_TEXT: (i32, i32) = (BANNER_TEXT.start * 3, 10);
-
 /// The most lines who it's from takes in the card: 40 letters at about 13
 /// a line, with room to spare for long words.
 const CARD_LINES: usize = 5;
@@ -163,7 +150,7 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str,
     let gap = if time.is_empty() { 0 } else { time_width + 6 };
     let mut line = [font::Line::default()];
     let room = (BANNER_TEXT_WIDTH - gap) * 3;
-    let sign = font::Face::Fine(SIGN_LETTERING);
+    let sign = font::Face::Fine(street::LETTERING);
     let width = match font::wrap(app, sign, room, &mut line) {
         0 => 0,
         _ => line[0].width(app, sign),
@@ -172,7 +159,7 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str,
     // the panel's or two clear of its end.
     street::hanging(canvas, (width + 2) / 3, tube);
     if width > 0 {
-        let (x, y) = SIGN_TEXT;
+        let (x, y) = street::LETTERING_AT;
         canvas.line(x, y, app, line[0], sign, tube);
     }
     canvas.text_right(BANNER_TEXT.end, 3, time, Color::TEXT_DIM);
@@ -575,12 +562,14 @@ pub(super) fn render_banner(canvas: &mut Canvas, app: &str, who: &str) {
     let top = 63 - SMALL_PITCH * (count as i32 - 1);
     let tube = neon(app);
     street::fine_sign(canvas, 0, 3 * top, 240, 3 * (80 - top), tube);
+    // The app in a sign's lettering, in its rows (see above), a pixel
+    // down as on a title.
     fitted(
         canvas,
-        (BANNER_TEXT.start, top + 2),
+        (3 * BANNER_TEXT.start, 3 * (top + 2) + 1),
         app,
-        font::Face::Small,
-        BANNER_TEXT_WIDTH,
+        font::Face::Fine(street::LETTERING),
+        3 * BANNER_TEXT_WIDTH,
         tube,
     );
     for (i, &line) in lines[..count].iter().enumerate() {
@@ -835,8 +824,7 @@ pub(super) fn render_music(canvas: &mut Canvas, music: &Music, dim: bool) {
     // The sign: lit in the bar's neon unless the music is paused, then
     // dark (and still legible).
     if music.playing == Some(false) {
-        street::hanging(canvas, font::small_text_width("MUSIC"), Color::TRACK);
-        canvas.text(4, 3, "MUSIC", Color::TEXT_FAINT);
+        street::lettered(canvas, "MUSIC", Color::TRACK, Color::TEXT_FAINT);
     } else {
         street::title(canvas, "MUSIC", Color::REM);
     }

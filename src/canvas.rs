@@ -1002,51 +1002,6 @@ impl Canvas {
         self.fine_rect(x, y, 1, 1, color);
     }
 
-    /// Text in `face` at `scale` of the panel's pixels a font pixel (the
-    /// canvas's [`Canvas::text_scaled`] is 3 of them): lettering on a
-    /// scene's detail, a noren's, say. `y` is the top of the capitals, as
-    /// on the canvas. Returns the x past its end.
-    pub fn fine_text(
-        &mut self,
-        x: i32,
-        y: i32,
-        text: &str,
-        face: font::Face,
-        color: Color,
-        scale: i32,
-    ) -> i32 {
-        let mut cursor = x;
-        let top = y - font::ACCENT_ROWS * scale;
-        for c in text.chars() {
-            let (width, rows) = match face {
-                font::Face::Small => {
-                    let glyph = font::glyph(c);
-                    let mut rows = [0; 9];
-                    rows[..7].copy_from_slice(&glyph.rows);
-                    (glyph.width, rows)
-                }
-                font::Face::Medium => {
-                    let glyph = font::medium_glyph(c);
-                    (glyph.width, glyph.rows)
-                }
-                // Drawn at its own size, whatever the scale.
-                font::Face::Fine(style) => {
-                    return self.fine_type(x, y, text, style, color, None);
-                }
-            };
-            for (dy, &row) in rows.iter().enumerate() {
-                for dx in 0..width {
-                    if row & (1 << (width - 1 - dx)) != 0 {
-                        let (px, py) = (cursor + dx as i32 * scale, top + dy as i32 * scale);
-                        self.fine_rect(px, py, scale, scale, color);
-                    }
-                }
-            }
-            cursor += (width as i32 + 1) * scale;
-        }
-        cursor
-    }
-
     /// `text` in Living Tokyo's lettering (see [`font::fine`]), in
     /// `style`, from `x` and with its capitals' ink from `y`, in the
     /// panel's pixels; and if `edge` is given, its edges smoothed in

@@ -9,6 +9,7 @@
 
 use crate::canvas::{Canvas, Color, FINE};
 use crate::font;
+use crate::font::fine::Style;
 
 // ==============================================================================
 // Signs
@@ -36,15 +37,43 @@ pub(super) fn sign(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, tube: Co
     canvas.fill_rect(x + w - 1, y, 1, h, tube);
 }
 
+/// A sign's lettering, in the city's fine face (see `font::fine`): its
+/// capitals the small font's height, in a tube not quite two pixels
+/// thick, the sign's own neon, where a [`SIGN_H`] box holds them.
+pub(super) const LETTERING: Style = Style {
+    cap: 12,
+    stroke: 28,
+    caps: true,
+};
+/// Where a [`title`]'s lettering starts, in the panel's pixels: its left,
+/// where the small font's was, and its capitals' top, a pixel below the
+/// small font's, as the face's capitals are a stroke shorter than its 5
+/// rows.
+pub(super) const LETTERING_AT: (i32, i32) = (3 * 4, 3 * 3 + 1);
+
 /// A screen's title as a sign hanging in the top left corner, lit in
-/// `tube`: its lettering where a title has always been (4, 3), so that
-/// what's under it keeps its place; the box round it (from (2, 1), a
-/// [`SIGN_H`] tall) hangs from the top edge on two short wires. Returns
-/// the x just past the box.
+/// `tube`: its lettering where a title has always been (see
+/// [`LETTERING_AT`]), so that what's under it keeps its place; the box
+/// round it (from (2, 1), a [`SIGN_H`] tall) hangs from the top edge on
+/// two short wires. Returns the x just past the box.
 pub(super) fn title(canvas: &mut Canvas, text: &str, tube: Color) -> i32 {
-    let end = hanging(canvas, font::small_text_width(text), tube);
-    canvas.text(4, 3, text, tube);
+    lettered(canvas, text, tube, tube)
+}
+
+/// A [`title`] lettered in `ink` rather than its tube's colour: a sign
+/// that's off, its lettering still legible.
+pub(super) fn lettered(canvas: &mut Canvas, text: &str, tube: Color, ink: Color) -> i32 {
+    let end = hanging(canvas, lettering_width(text), tube);
+    let (x, y) = LETTERING_AT;
+    canvas.fine_type(x, y, text, LETTERING, ink, None);
     end
+}
+
+/// The width of a sign's lettering, in the canvas's pixels (as
+/// [`hanging`] takes it): its ink's, a pixel or two of the panel's to
+/// spare.
+pub(super) fn lettering_width(text: &str) -> i32 {
+    (font::Face::Fine(LETTERING).width(text) + 2) / 3
 }
 
 /// The box of a [`title`]'s sign, round `width` pixels of lettering from
@@ -870,6 +899,15 @@ pub(super) fn fine_reflection(
     }
 }
 
+/// A [`fine_noren`]'s letters: a sign's [`LETTERING`], dyed bolder, as a
+/// brush lays it on cloth, and in 15 rows, as the shortest noren with
+/// letters has 19 under its fold.
+const NOREN_LETTERING: Style = Style {
+    cap: 12,
+    stroke: 48,
+    caps: true,
+};
+
 /// The slit between a [`fine_noren`]'s panels.
 pub(super) const NOREN_SLIT: i32 = 2;
 
@@ -878,7 +916,8 @@ pub(super) const NOREN_SLIT: i32 = 2;
 /// letter of `letters` (as noren carry the shop's name), [`NOREN_SLIT`]
 /// apart, in `tube` (the app's neon, say), each with the cloth's fold
 /// under the rail and its hem shaded, its letter dyed in the dark in the
-/// medium face at 2× where there's room for it (`h` of 20 or more). In
+/// signs' fine face, bolder, where there's room for it (`h` of 20 or
+/// more). In
 /// the dim look (`dim`), outlines in `tube`, from the rail itself, the
 /// letters solid in it.
 #[allow(clippy::too_many_arguments)]
@@ -907,9 +946,9 @@ pub(super) fn fine_noren(
             Color::SHADOW
         };
         if h >= 20 {
-            let w = font::Face::Medium.width(letter) * 2;
-            let (x, y) = (x + (panel - w) / 2, rail + 5);
-            canvas.fine_text(x, y, letter, font::Face::Medium, ink, 2);
+            let w = font::Face::Fine(NOREN_LETTERING).width(letter);
+            let (x, y) = (x + (panel - w) / 2, rail + 4);
+            canvas.fine_type(x, y, letter, NOREN_LETTERING, ink, None);
         }
     }
 }

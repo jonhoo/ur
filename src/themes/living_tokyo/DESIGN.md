@@ -70,7 +70,7 @@ squiggles posing as kanji would be wrong to anyone who reads them.
 
 Living Tokyo isn't a retro theme, and needn't be as coarse as the
 canvas's 80×80. Its builds can draw rows at the panel's own 240×240
-(`Canvas::fine_rect`, `fine_tone`, `fine_text`, `fine_type` (see
+(`Canvas::fine_rect`, `fine_tone`, `fine_type` (see
 Type), and the `fine_` pieces in [street.rs](street.rs), all in the
 panel's pixels), over and under
 the canvas's drawing in the order drawn. A tenth of a millimetre a
@@ -129,8 +129,10 @@ lettering at the panel's resolution.
   a station sign's rounded face, at any size and weight, in capitals and
   lowercase, with Latin-1's letters. For what's big and mostly still:
   who a message or call is from, a screen's title on its sign, big
-  times and figures that change by the minute or slower. Done: the
-  notification card's name and its app's sign.
+  times and figures that change by the minute or slower. Done: every
+  screen's title on its sign (`street::title`, `street::lettered`), the
+  banner's and the card's app signs, the noren's letters, and the
+  card's name.
 - **The pixel fonts** (the small font, the medium face, the 5×7 digits):
   small labels and hints, and anything that changes every second (the
   clock's seconds, a countdown's last minutes, a marquee). A fine row
@@ -155,7 +157,8 @@ pixel; and `caps`. The card's, as a guide:
 |---|---|---|---|---|
 | A name, big | 26 | 68 (4¼ px) | `TEXT_FAINT` | about 11 |
 | A name, longer | 16 | 44 (2¾ px) | `TEXT_FAINT` | about 17 |
-| A sign's title | 12 | 28 (1¾ px) | none | about 19 |
+| A sign's title (`street::LETTERING`) | 12 | 28 (1¾ px) | none | about 19 |
+| A noren's letter | 12 | 48 (3 px) | none | one a panel |
 
 Draw with `canvas.fine_type(x, y, text, style, color, edge)`, in panel
 pixels: `x` is the ink's left, `y` the top of the capitals' ink (an
@@ -194,8 +197,8 @@ canvas's grid, for the screens that need them so (see each).
 | Piece | What it is |
 |---|---|
 | `fine_sign` | A sign's box: dark inside a neon tube a pixel thick, a pixel in from its edge, its corners rounded, a glow either side of it; in the canvas `sign`'s footprint, three times over |
-| `title` | A screen's title as a `fine_sign` hanging from the top edge on wires, its lettering where titles always were (4, 3), so what's under it keeps its place |
-| `hanging` | The same box, round lettering the screen draws itself (cut to fit, say) |
+| `title`, `lettered` | A screen's title as a `fine_sign` hanging from the top edge on wires, its lettering in the fine face (`LETTERING`) where titles always were (`LETTERING_AT`), so what's under it keeps its place; `lettered` in an ink of its own, for a sign that's off |
+| `hanging`, `lettering_width` | The same box, round lettering the screen draws itself (cut to fit, say), its width in canvas pixels |
 | `sign`, `SIGN_H` | The canvas's sign, a tube a canvas pixel thick: only the music's marquee, which scrolls ten times a second, still has it |
 | `fine_moon` | The moon: a real circle, lit from the right by a share (the terminator a half-ellipse), its seas greyed, its dark side ringed faintly. The battery (`clock::moon`), the charge glance, the full charge's, Last night's |
 | `disc`, `in_disc`, `glow` | A filled circle on the canvas (a lamp's lens, the record) and a dithered halo round a light |
@@ -213,7 +216,7 @@ canvas's grid, for the screens that need them so (see each).
 | `local_now`, `hour_of` | The local time now, for a screen not handed it, and a local second's hour |
 | `board` | A station board: a dark panel in a slate frame (on the canvas, so a ticking row on it stays coarse), on thin rods |
 | `led_digit`, `led_colon`, `LED_H` | A board's big digits, each dot a 3×3 of LEDs of 2×2 panel pixels; or, for a running timer's, a canvas square |
-| `fine_noren`, `NOREN_SLIT` | A shop's noren: panels in a neon, slit, a fold under the rail and a hem, a letter dyed on each; in the dim look, outlines |
+| `fine_noren`, `NOREN_SLIT` | A shop's noren: panels in a neon, slit, a fold under the rail and a hem, a letter dyed on each in the fine face; in the dim look, outlines |
 
 More at the panel's resolution:
 
