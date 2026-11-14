@@ -93,6 +93,7 @@ mod firmware;
 #[cfg(feature = "flash-stress")]
 mod flash_stress;
 mod font;
+mod game;
 mod gb;
 mod gb_buckets;
 mod geo;

@@ -767,6 +767,13 @@ impl<'a> Follower<'a> {
     fn follow(&mut self, boot: &compare::Boot) -> Result<(), String> {
         time::set(Instant::from_ticks(boot.at));
         self.app = boot_app(boot);
+        // The hidden puzzle (`crate::game`) isn't in the boot export, which
+        // would cost the `compare` build 16 bytes of RAM it hasn't to
+        // spare; so it's read from the storage the dev kit booted with
+        // (nothing saves it until the wearer has played and left it). As
+        // `check-storage` does, this also sets the simulator's storage to
+        // the dev kit's.
+        self.app.game = booted_from(self.devkit.read_storage()?)?.game;
         self.replayed = 0;
         (self.connected, self.air, self.daytime) = (false, false, false);
         self.charger = false;

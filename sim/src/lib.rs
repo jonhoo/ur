@@ -73,6 +73,8 @@ mod desk;
 #[path = "../../src/font.rs"]
 #[allow(dead_code)]
 mod font;
+#[path = "../../src/game.rs"]
+mod game;
 #[path = "../../src/gb.rs"]
 #[allow(dead_code)]
 mod gb;

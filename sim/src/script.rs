@@ -119,8 +119,11 @@ Output:
                              clock (the clock face, for someone to read),
                              charging (the charge screen, woken on the
                              charger), charged (the full charge's
-                             screen), or touch-asleep (the touch
-                             controller, so touches go unnoticed)
+                             screen), game (the hidden puzzle, 2^),
+                             idle (the panel in idle mode, at the lowest
+                             backlight, as the dim look has it), or
+                             touch-asleep (the touch controller, so
+                             touches go unnoticed)
   expect steps N             fail unless today's steps are N, on the clock
                              face and the Today screen alike
   expect theme NAME          fail unless the colour scheme the UI picks is
@@ -624,6 +627,11 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
                 "clock" => watch.app.showing_clock(),
                 "charged" => watch.app.showing_charged(),
                 "charging" => watch.app.showing_charge(),
+                "game" => watch.app.showing_game(),
+                "idle" => {
+                    crate::display::PANEL.with_borrow(|panel| panel.idle)
+                        && watch.backlight == crate::brightness::Level::LOW
+                }
                 other => return Err(format!("expect: {other}? (try `help`)")),
             };
             if actual == negated {

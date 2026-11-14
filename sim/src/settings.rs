@@ -115,6 +115,27 @@ async fn read() -> Vec<String> {
         });
     lines.push(format!("phone alarms: {value}"));
 
+    let value = storage::load(key::GAME).await.map_or_else(none, |bytes| {
+        let game = crate::game::Game::from_bytes(bytes);
+        let cells: Vec<String> = (0..crate::game::CELLS)
+            .map(|i| match game.board.cell(i) {
+                0 => ".".to_owned(),
+                exponent => (1u32 << exponent).to_string(),
+            })
+            .collect();
+        let rows: Vec<String> = cells
+            .chunks(crate::game::SIDE)
+            .map(|r| r.join(" "))
+            .collect();
+        format!(
+            "score {}, best {}; {}",
+            game.score,
+            game.best,
+            rows.join(" / ")
+        )
+    });
+    lines.push(format!("game: {value}"));
+
     let value = storage::load(key::LOCATION)
         .await
         .map_or_else(none, |bytes| {

@@ -1,0 +1,143 @@
+# 2^, the hidden puzzle (see src/game.rs): opened by a double tap on
+# Info, played by swipes, left by the button or the screen going off, and
+# kept in flash once left. Also the simulator's test (see
+# tests/scripts.rs): the `expect`s check it behaves, and its screenshots
+# are approved, in shots/game/.
+#
+#     cargo run -- --out ../tmp/game game.txt
+#
+# Boards to show come from flash: `store 45 HEX` (the rows, a u16 each, a
+# cell a nibble, the leftmost the lowest; then the score and the best, a
+# u32 each, all little-endian), then a reboot through storage mode, which
+# loads it as the watch boots.
+
+version 1.0.0+1a2b3c4
+battery 3990
+time 2026-11-09 21:42:10 +01:00
+location 59.91 10.75
+connect
+wait 1.5s
+
+# ==============================================================================
+# Finding it
+# ==============================================================================
+
+# Left of the clock: Alarms, the two settings screens, then Info.
+left
+left
+left
+left
+wait 1s
+# A lone tap does nothing, not even a buzz, so it gives nothing away.
+tap
+wait 1s
+expect not buzzed
+expect not game
+# A double tap opens it: a new game, two tiles. Always in the dim look,
+# by day too: the panel in idle mode, the backlight at its lowest.
+expect not idle
+double 40,40
+wait 1s
+expect game
+expect dim
+expect idle
+shot 01-new.png
+
+# ==============================================================================
+# Playing
+# ==============================================================================
+
+# Swipes move the tiles, not the screens.
+left
+down
+right
+down
+left
+down
+right
+down
+left
+down
+left
+down
+expect game
+wait 1s
+shot 02-playing.png
+
+# ==============================================================================
+# Leaving it, and finding it again after a reboot
+# ==============================================================================
+
+# The button leaves it, to the clock, out of the dim look; it's saved
+# as it goes.
+button
+wait 1s
+expect clock
+expect not dim
+expect not idle
+settings
+# Storage mode (a long press on Info, then a tap) switches the watch
+# off; the button boots it again, from what the flash holds.
+left
+left
+left
+left
+long
+tap
+expect off
+button
+wait 2s
+left
+left
+left
+left
+double 40,40
+wait 1s
+expect game
+# The same board, score and best as it was left.
+shot 03-resumed.png
+
+# A long press starts again, with a buzz; the best stays.
+long
+wait 1s
+expect buzzed
+expect game
+# The screen going off, after the usual 10 s, leaves it too, saving
+# the new game.
+wait 11s
+expect not screen-on
+settings
+
+# ==============================================================================
+# Game over, and the best score
+# ==============================================================================
+
+# A full board with no pair (2 4 2 4 / 8 16 32 8 / 2 128 64 4 /
+# 4 8 512 2), scored 5432, the best 24680: over as it loads.
+store 45 21214335712632193815000068600000
+button
+wait 1s
+left
+left
+left
+left
+long
+tap
+expect off
+button
+wait 2s
+left
+left
+left
+left
+double 40,40
+wait 1s
+shot 04-over.png
+# Swipes do nothing; a tap starts again, and the best stays.
+left
+tap
+wait 1s
+expect buzzed
+shot 05-again.png
+button
+wait 1s
