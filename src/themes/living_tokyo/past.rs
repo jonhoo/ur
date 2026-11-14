@@ -7,7 +7,7 @@ use core::fmt::Write as _;
 
 use super::{BACKGROUND, street};
 use crate::canvas::{Canvas, Color};
-use crate::day::Day;
+use crate::day::{Day, HOURS};
 use crate::font;
 use crate::font::fine::Style;
 use crate::themes::helpers::hhmm;
@@ -256,56 +256,69 @@ fn building(canvas: &mut Canvas, x: i32, top: i32, hour: u32, lit: Option<u32>) 
 /// Drawn a column at a time, each edge joined to the next column's, so
 /// that a steep bend stays a line.
 fn tube(canvas: &mut Canvas, day: &Day) {
+    // Only in the passes that draw its rows (see `Canvas::refine`): its
+    // columns' walk is most of the screen's drawing.
+    let rows = canvas.fine_rows();
+    if rows.end <= TUBE_TOP || rows.start >= TUBE_TOP + TUBE_H {
+        return;
+    }
     let Some((low, high)) = day.heart_range() else {
         return;
     };
     let floor = i32::from(low) / 10 * 10;
     let ceiling = ((i32::from(high) + 9) / 10 * 10).max(floor + TUBE_BPM);
-    // The row `bpm` is drawn in.
-    let y = |bpm: u8| {
-        TUBE_TOP + TUBE_H - 1 - (i32::from(bpm) - floor) * (TUBE_H - 1) / (ceiling - floor)
-    };
-    // Hour `i`'s readings: its lot's middle, and its highest and lowest.
+    // Each hour's highest and lowest readings' rows, worked out once.
+    let mut readings = [None; HOURS];
+    for (reading, hour) in readings.iter_mut().zip(&day.hours) {
+        let y = |bpm: u8| {
+            TUBE_TOP + TUBE_H - 1 - (i32::from(bpm) - floor) * (TUBE_H - 1) / (ceiling - floor)
+        };
+        if hour.heart_max > 0 {
+            *reading = Some((y(hour.heart_max), y(hour.heart_min)));
+        }
+    }
     let at = |i: i32| {
         usize::try_from(i)
             .ok()
-            .and_then(|i| day.hours.get(i))
-            .filter(|hour| hour.heart_max > 0)
-            .map(|hour| (centre(i), y(hour.heart_max), y(hour.heart_min)))
+            .and_then(|i| readings.get(i)?.as_ref())
     };
     // The tube's edges at column `x`: between two hours' middles, from
     // one's to the other's; past the last of a run, flat, for 3 columns.
     let edges = |x: i32| {
         let i = (x - centre(0)).div_euclid(LOT);
+        let from = centre(i);
         match (at(i), at(i + 1)) {
-            (Some((from, top, bottom)), Some((_, next_top, next_bottom))) => {
+            (Some(&(top, bottom)), Some(&(next_top, next_bottom))) => {
                 let along = |a: i32, b: i32| a + (b - a) * (x - from) / LOT;
                 Some((along(top, next_top), along(bottom, next_bottom)))
             }
-            (Some((from, top, bottom)), None) if x - from <= 3 => Some((top, bottom)),
-            (None, Some((to, top, bottom))) if to - x <= 3 => Some((top, bottom)),
+            (Some(&edges), None) if x - from <= 3 => Some(edges),
+            (None, Some(&edges)) if from + LOT - x <= 3 => Some(edges),
             _ => None,
         }
     };
-    for x in STREET_LEFT..STREET_LEFT + LOT * day.hours.len() as i32 {
-        let Some((top, bottom)) = edges(x) else {
-            continue;
-        };
-        let (next_top, next_bottom) = edges(x + 1).unwrap_or((top, bottom));
-        let (high, low) = (top.min(next_top), bottom.max(next_bottom));
-        canvas.fine_tone(x, high, 1, low - high + 1, 1, Color::HEART);
-        canvas.fine_rect(x, high, 1, (top - next_top).abs() + 1, Color::HEART);
-        canvas.fine_rect(
-            x,
-            bottom.min(next_bottom),
-            1,
-            (bottom - next_bottom).abs() + 1,
-            Color::HEART,
-        );
-        // A run's ends, closed.
-        if edges(x - 1).is_none() || edges(x + 1).is_none() {
-            canvas.fine_rect(x, top, 1, bottom - top + 1, Color::HEART);
+    let (mut before, mut here) = (None, edges(STREET_LEFT));
+    for x in STREET_LEFT..STREET_LEFT + LOT * HOURS as i32 {
+        let after = edges(x + 1);
+        if let Some((top, bottom)) = here {
+            let (next_top, next_bottom) = after.unwrap_or((top, bottom));
+            let (high, low) = (top.min(next_top), bottom.max(next_bottom));
+            let low_edge = bottom.min(next_bottom);
+            canvas.fine_tone(x, high, 1, low - high + 1, 1, Color::HEART);
+            canvas.fine_rect(x, high, 1, (top - next_top).abs() + 1, Color::HEART);
+            canvas.fine_rect(
+                x,
+                low_edge,
+                1,
+                (bottom - next_bottom).abs() + 1,
+                Color::HEART,
+            );
+            // A run's ends, closed.
+            if before.is_none() || after.is_none() {
+                canvas.fine_rect(x, top, 1, bottom - top + 1, Color::HEART);
+            }
         }
+        (before, here) = (here, after);
     }
 }
 
