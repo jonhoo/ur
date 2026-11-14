@@ -197,8 +197,8 @@ canvas's grid, for the screens that need them so (see each).
 | Piece | What it is |
 |---|---|
 | `fine_sign`, `fine_sign_in` | A sign's box: dark inside a neon tube a pixel thick, a pixel in from its edge, its corners rounded, a glow either side of it; in the canvas `sign`'s footprint, three times over. `fine_sign_in` with `dim`: the glow solid, a tube two pixels thick and no checkerboard (the route glance's street plate) |
-| `title`, `lettered` | A screen's title as a `fine_sign` hanging from the top edge on wires, its lettering in the fine face (`LETTERING`) where titles always were (`LETTERING_AT`), so what's under it keeps its place; `lettered` in an ink of its own, for a sign that's off |
-| `hanging`, `lettering_width` | The same box, round lettering the screen draws itself (cut to fit, say), its width in canvas pixels |
+| `title`, `lettered`, `sign_title` | A screen's title as a `fine_sign` hanging from the top edge on wires, its lettering in the fine face (`LETTERING`) where titles always were (`LETTERING_AT`), so what's under it keeps its place; `lettered` in an ink of its own, for a sign that's off; `sign_title` either, in the dim look if asked: its tube solid, two pixels thick, without the glow's checker, which flickers at idle mode's refresh |
+| `hanging`, `lettering_width` | The same box (in the dim look if asked), round lettering the screen draws itself (cut to fit, say), its width in canvas pixels |
 | `SIGN_H` | A sign's height on the canvas's grid: a line of the small font, and a tube above and below |
 | `fine_moon`, `moon` | The moon: a real circle, lit from the right by a share (the terminator a half-ellipse), its seas greyed, its dark side ringed faintly. The battery (`clock::moon`), the charge glance, the full charge's, Last night's. `moon` with `dim`: its dark side outlined in red, the lit share solid, no seas, and no tones (the dim charge glance) |
 | `fine_stars` | Single panel pixels at the middles of canvas pixels, every third brighter; given the seconds, one twinkling every third second as a small cross |

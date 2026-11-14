@@ -45,7 +45,19 @@ pub(super) fn title(canvas: &mut Canvas, text: &str, tube: Color) -> i32 {
 /// A [`title`] lettered in `ink` rather than its tube's colour: a sign
 /// that's off, its lettering still legible.
 pub(super) fn lettered(canvas: &mut Canvas, text: &str, tube: Color, ink: Color) -> i32 {
-    let end = hanging(canvas, lettering_width(text), tube);
+    sign_title(canvas, text, tube, ink, false)
+}
+
+/// A [`lettered`] title, in the dim look if `dim`: its sign's tube solid
+/// and without its glow (see [`hanging`]).
+pub(super) fn sign_title(
+    canvas: &mut Canvas,
+    text: &str,
+    tube: Color,
+    ink: Color,
+    dim: bool,
+) -> i32 {
+    let end = hanging(canvas, lettering_width(text), tube, dim);
     let (x, y) = LETTERING_AT;
     canvas.fine_type(x, y, text, LETTERING, ink, None);
     end
@@ -60,13 +72,13 @@ pub(super) fn lettering_width(text: &str) -> i32 {
 
 /// The box of a [`title`]'s sign, round `width` pixels of lettering from
 /// (4, 3), for lettering the caller draws (cut to fit, say). Returns the
-/// x just past the box. The box is a [`fine_sign`] on the canvas's grid,
-/// and its wires the panel's pixels.
-pub(super) fn hanging(canvas: &mut Canvas, width: i32, tube: Color) -> i32 {
+/// x just past the box. The box is a [`fine_sign`] on the canvas's grid
+/// (in the dim look if `dim`), and its wires the panel's pixels.
+pub(super) fn hanging(canvas: &mut Canvas, width: i32, tube: Color, dim: bool) -> i32 {
     const X: i32 = 2;
     const Y: i32 = 1;
     let w = width + 4;
-    fine_sign(canvas, 3 * X, 3 * Y, 3 * w, 3 * SIGN_H, tube);
+    fine_sign_in(canvas, (3 * X, 3 * Y, 3 * w, 3 * SIGN_H), tube, dim);
     for x in [X + 2, X + w - 3] {
         // Down to the tube, a pixel in from the box's edge.
         canvas.fine_rect(3 * x + 1, 0, 1, 3 * Y + 1, Color::TEXT_FAINT);
@@ -84,9 +96,10 @@ pub(super) fn hanging(canvas: &mut Canvas, width: i32, tube: Color) -> i32 {
 /// the caller's.
 ///
 /// Glowing outwards only: a glow inside too blurred the tube into the
-/// lettering, where the dark keeps it crisp. And it stays in the dim
-/// look: it's still (idle mode's limit is motion and colours, and the
-/// tube's are its own), and without it the tube is a hairline.
+/// lettering, where the dark keeps it crisp. In the dim look (see
+/// [`hanging`]), the glow is solid instead, a tube two pixels thick:
+/// its checker flickers at idle mode's refresh (the panel's dot
+/// inversion), and without it the tube is a hairline.
 pub(super) fn fine_sign(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, tube: Color) {
     fine_sign_in(canvas, (x, y, w, h), tube, false);
 }

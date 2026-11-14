@@ -157,7 +157,7 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str,
     };
     // The box round the lettering, in the canvas's pixels, a pixel of
     // the panel's or two clear of its end.
-    street::hanging(canvas, (width + 2) / 3, tube);
+    street::hanging(canvas, (width + 2) / 3, tube, dim);
     if width > 0 {
         let (x, y) = street::LETTERING_AT;
         canvas.line(x, y, app, line[0], sign, tube);
@@ -646,7 +646,7 @@ pub(super) fn render_call(canvas: &mut Canvas, call: &Call, dim: bool) {
 
     // The corner's sign, then who's calling: lettered if it fits, else
     // scrolling at 2×.
-    street::title(canvas, "INCOMING CALL", Color::GOOD);
+    street::sign_title(canvas, "INCOMING CALL", Color::GOOD, Color::GOOD, dim);
     match caller_style(call.caller) {
         Some(style) => {
             let w = font::Face::Fine(style).width(call.caller);
@@ -899,11 +899,11 @@ pub(super) fn render_music(canvas: &mut Canvas, music: &Music, dim: bool) {
 
     // The sign: lit in the bar's neon unless the music is paused, then
     // dark (and still legible).
-    if music.playing == Some(false) {
-        street::lettered(canvas, "MUSIC", Color::TRACK, Color::TEXT_FAINT);
-    } else {
-        street::title(canvas, "MUSIC", Color::REM);
-    }
+    let (tube, ink) = match music.playing {
+        Some(false) => (Color::TRACK, Color::TEXT_FAINT),
+        _ => (Color::REM, Color::REM),
+    };
+    street::sign_title(canvas, "MUSIC", tube, ink, dim);
 
     // The marquee: a dark box in a dull frame, what's playing lit on it,
     // all on the canvas (see above).

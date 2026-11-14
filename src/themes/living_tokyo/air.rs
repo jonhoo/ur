@@ -94,7 +94,7 @@ const SMALL_Y: i32 = 3 * 54 + 2;
 pub(super) fn render_air(canvas: &mut Canvas, sighting: &Sighting, now: Instant, dim: bool) {
     canvas.clear(BACKGROUND);
     let night = street::Night::now();
-    street::title(canvas, "AIR", Color::ACCENT);
+    street::sign_title(canvas, "AIR", Color::ACCENT, Color::ACCENT, dim);
     let reading = &sighting.reading;
     let age = sighting.age(now.as_millis());
     let mut text = heapless::String::<12>::new();
