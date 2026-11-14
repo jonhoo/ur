@@ -205,7 +205,7 @@ canvas's grid, for the screens that need them so (see each).
 | `fine_stars` | Single panel pixels at the middles of canvas pixels, every third brighter; given the seconds, one twinkling every third second as a small cross |
 | `steam` | Two wisps rising and swaying with a tick (canvas) |
 | `fine_skyline` | The far city along a horizon, any height: `fine_building`s in slate, a few with a water tank or a mast, windows lit by a share |
-| `fine_building`, `Roof`, `Windows`, `lit_window` | A building: its wall, a parapet, what's on its roof, and windows of 2×2 pixels 3 apart across and 4 down, lit by their index (`lit_window`: a share of every 256), the dark ones as a tone of glass if shown. The clock face's near buildings too |
+| `fine_building`, `Roof`, `Windows`, `lit_window` | A building: its wall, a parapet, what's on its roof, and windows of 2×2 pixels 3 apart across and 4 down, lit by their index (`lit_window`: a share of every 256), the dark ones as a tone of glass if shown |
 | `city_lights` | How many of the city's windows are lit at an hour |
 | `fine_rain` | Thin streaks, a pixel wide and leaning, falling with a tick |
 | `reflection` | A light broken up in the puddles below it (canvas) |
@@ -230,8 +230,11 @@ More at the panel's resolution:
 | `fine_reflection` | A light broken up in a wet street below it |
 
 The clock face's moon (the battery) is `clock::moon` (a `fine_moon`),
-and its city `clock::city`: its far buildings on the canvas, which
-keeps the beacon's rows coarse, and its near ones `fine_building`s. A
+and its city `clock::city`: a `fine_skyline` behind five near towers of
+its own, each a different silhouette (a setback, a mast, a tank) and
+glazing, with few, big windows. Its beacon blinks on the canvas, in
+rows nothing else is drawn finely in, so that the second's change is a
+few coarse pixels rather than a fine band (see Resolution). A
 screen handed the time (`Status::local_second`, an `Instant`) uses
 that; one that isn't, `local_now`.
 
@@ -259,7 +262,7 @@ it stays the night's city under the full dawn glow, with no stars.
 
 | Method | Weight | The scene | What lives |
 |---|---|---|---|
-| `clock` | elaborate | *Done.* The skyline at night, the time over it | Windows lit by the steps, the moon by the battery, the beacon by the heart rate, the billboard while notifications are unseen |
+| `clock` | elaborate | *Done, at the panel's resolution but for the time.* The skyline at night, the time over it: five dark towers in front, each its own silhouette (a low block, an office tower set back, the tall one with a mast, an old block with its tank, the billboard's) and glazing, few big warm windows; the far city behind; the heart rate on a red neon sign on the left roof, MAIL on a magenta billboard on the right | The towers' windows lit by the steps, the moon by the battery, the beacon by the heart rate, the billboard while notifications are unseen (its tube out for a second about once a minute); the hour in the far city's windows, the dawn's glow behind it from 04:00 and the stars going out; rainy, no stars and the rain past the roofs, placed afresh each minute (a still, as a fine row that moves each second costs its whole row's SPI). Dim: the towers outlined, their lit windows, the signs, the moon and stars; no far city, glow or rain |
 | `glance` (time) | subtle, dim | *Done.* The hours over the minutes, big, as before; at the foot, the far city's lit windows, a row of them | Still (dim): the windows lit are the day's steps' share of the goal (only the lit ones show) |
 | `glance` (timers) | subtle, dim | *Done.* The time, and an hourglass and the time left a timer | The time left |
 | `glance` (route) | subtle, dim | *Done.* The turn's arrow and the distance; the street's name on a street plate | The turn, the distance |

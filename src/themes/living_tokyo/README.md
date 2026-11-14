@@ -3,12 +3,14 @@
 [Try it live](https://jonhoo.github.io/ur/sim/?theme=living_tokyo): the simulator, in your browser.
 
 A city at night on the clock face, in [Tokyo Night]'s colours: the time
-and its seconds across the top, the moon as the battery, windows lit by
-the day's steps, a beacon blinking and a sign showing the heart rate
-(OFF, unlit, on the charger, where it isn't measured), and a billboard
-for notifications nobody has seen. It's drawn once a
-second and stays still in the dim look. No weather.
-(`theme-living_tokyo`.)
+and its seconds across the top, the moon as the battery, the towers'
+windows lit by the day's steps, a beacon blinking and a sign showing the
+heart rate (OFF, unlit, on the charger, where it isn't measured), and a
+billboard for notifications nobody has seen. Behind the towers, the far
+city's windows are lit as its people are up, the dawn's glow rises from
+04:00, and the stars go out; on a rainy night (a third of them), it
+rains past the roofs instead. It's drawn once a second and stays still
+in the dim look. (`theme-living_tokyo`.)
 
 Its other screens are the same city at street level (see
 [DESIGN.md](DESIGN.md)), and live as the clock face does, on the hour,
@@ -38,7 +40,7 @@ screen, the quiet night) is white and red on black in both.
 
 | LIVING TOKYO | LIVING STORM |
 |---|---|
-| <img src="shots/clock-living-tokyo.png" width="120" alt="The clock face in LIVING TOKYO: blue-white on near-black indigo, the windows yellow, cyan and magenta"> | <img src="shots/clock-living-storm.png" width="120" alt="The clock face in LIVING STORM: the same, on a lighter, bluer slate"> |
+| <img src="shots/clock-living-tokyo.png" width="120" alt="The clock face in LIVING TOKYO: blue-white on near-black indigo, five dark towers with warm yellow windows in front of a slate far city under a dusk glow, a mast with a beacon on the tallest, and the heart rate on a red neon sign"> | <img src="shots/clock-living-storm.png" width="120" alt="The clock face in LIVING STORM: the same, on a lighter, bluer slate"> |
 
 It has no schemes for the day: it's a city at night. Tokyo Night's Day
 is one of Retro's schemes instead, TOKYO DAY, beside Retro's TOKYO NIGHT
