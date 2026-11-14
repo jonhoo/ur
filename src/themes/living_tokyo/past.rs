@@ -34,14 +34,16 @@ use crate::ui::Fits;
 // proportion to its steps, so the street's lit windows add up as the
 // steps do.
 //
-// It lives on the hour. The hour now has a mast on its roof, its beacon
-// blinking with the seconds; the hours to come are empty lots behind a
+// It lives on the hour. The hour now has a slender tower on its roof up
+// to a beacon blinking with the seconds over the city; the hours to come
+// are empty lots behind a
 // fence. After dark (by `street::daylight`) the windows light; by day
 // they're dark glass. The night's weather (`street::rainy`) is quiet
 // behind it: a few stars, fewer as the day comes, or a fine rain in the
 // far buildings' slate. In the dim look the buildings and the tube keep
 // their shapes, and so the data, and stand still: no rain, lit window,
-// nor blinking beacon.
+// nor blinking beacon; and no tones, which flicker at idle mode's refresh
+// (see `Palette::columns`).
 
 /// Where the hours' lots are: one an hour from midnight, [`LOT`] wide from
 /// [`STREET_LEFT`], each with a building [`BUILDING_W`] wide on it (two
@@ -83,6 +85,10 @@ const FOOT: [(i32, i32, i32, i32); 6] = [
     (13, 9, 15, 15),
     (15, 25, 11, 10),
 ];
+/// The canvas row of the hour now's beacon: between the tube's bottom
+/// (row 42) and the top of a water tank on the tallest roof (row 44), and
+/// clear of the stars, so that nothing in it is drawn finely.
+const BEACON_ROW: i32 = 43;
 /// The hours' labels, under the street (the canvas's rows).
 const HOURS_Y: i32 = 71;
 
@@ -128,9 +134,14 @@ pub(super) fn render_today(canvas: &mut Canvas, day: Option<&Day>, steps: Option
         };
         canvas.fine_rect(x, GROUND, LOT, 1, pavement);
         // An hour to come: an empty lot, fenced, its mesh a faint tone
-        // between a post at either end.
+        // between a post at either end; in the dim look, a rail (a tone
+        // there flickers at idle mode's refresh, see `Palette::columns`).
         if to_come {
-            canvas.fine_tone(x + 1, GROUND - 6, BUILDING_W - 2, 6, 1, Color::TEXT_FAINT);
+            if dim {
+                canvas.fine_rect(x, GROUND - 6, BUILDING_W, 1, Color::TRACK);
+            } else {
+                canvas.fine_tone(x + 1, GROUND - 6, BUILDING_W - 2, 6, 1, Color::TEXT_FAINT);
+            }
             for post in [x, x + BUILDING_W - 1] {
                 canvas.fine_rect(post, GROUND - 7, 1, 7, Color::TRACK);
             }
@@ -153,25 +164,25 @@ pub(super) fn render_today(canvas: &mut Canvas, day: Option<&Day>, steps: Option
                 canvas.fine_rect(x + 5, roof - 2, 1, 2, Color::TRACK);
             }
         }
-        // The hour now: a lattice mast on its roof (or its bare lot), its
-        // legs leaning in to the top, and the beacon on it, lit every
-        // other second (always, in the dim look, which holds still),
-        // hazing when it is.
+        // The hour now: a lattice tower on its roof (or its bare lot), its
+        // legs leaning in to its top over the city, and the beacon on it,
+        // lit every other second (always, in the dim look, which holds
+        // still).
+        //
+        // The beacon is the canvas's, in a row nothing draws finely in
+        // ([`BEACON_ROW`]): a fine row that changes is sent whole each
+        // second (see `Canvas::refine`), where a canvas pixel goes alone,
+        // as the clock face's beacon does. So the tower reaches up to
+        // that row, however low the hour's building.
         if hour.is_some_and(|now| i == usize::from(now)) {
             let base = roof.min(GROUND) - 1;
-            let top = base - 12;
-            for leg in [x + 1, x + 5] {
-                street::fine_line(canvas, (leg, base), (x + 3, top), Color::TEXT_FAINT);
+            for leg in [x + 1, x + 6] {
+                let top = (x + 4, 3 * BEACON_ROW + 3);
+                street::fine_line(canvas, (leg, base), top, Color::TEXT_FAINT);
             }
-            if dim || tick.is_multiple_of(2) {
-                if !dim {
-                    canvas.fine_tone(x, top - 6, 7, 7, 1, Color::HEART);
-                }
-                canvas.fine_rect(x + 2, top - 3, 3, 2, Color::HEART);
-                canvas.fine_rect(x + 3, top - 4, 1, 4, Color::HEART);
-            } else {
-                canvas.fine_pixel(x + 3, top - 2, Color::TEXT_FAINT);
-            }
+            let lit = dim || tick.is_multiple_of(2);
+            let lamp = if lit { Color::HEART } else { Color::TEXT_FAINT };
+            canvas.pixel((x + 4) / 3, BEACON_ROW, lamp);
         }
     }
     for hour in [0, 6, 12, 18] {
@@ -185,7 +196,7 @@ pub(super) fn render_today(canvas: &mut Canvas, day: Option<&Day>, steps: Option
         );
     }
 
-    tube(canvas, &day);
+    tube(canvas, &day, dim);
 
     // The steps, big: the step counter's total (which, unlike the hours,
     // counts steps from before the phone set the clock), a footprint
@@ -252,10 +263,12 @@ fn building(canvas: &mut Canvas, x: i32, top: i32, hour: u32, lit: Option<u32>) 
 /// readings start and stop, half a lot on. Its edges are the tube's glass,
 /// lit; between them a faint tone of the same pink, the gas's glow, so
 /// that a steady hour is a bright line and a wild one a wide, hazy tube.
+/// In the dim look, the edges alone: a tone flickers at idle mode's
+/// refresh (see `Palette::columns`).
 ///
 /// Drawn a column at a time, each edge joined to the next column's, so
 /// that a steep bend stays a line.
-fn tube(canvas: &mut Canvas, day: &Day) {
+fn tube(canvas: &mut Canvas, day: &Day, dim: bool) {
     // Only in the passes that draw its rows (see `Canvas::refine`): its
     // columns' walk is most of the screen's drawing.
     let rows = canvas.fine_rows();
@@ -305,7 +318,9 @@ fn tube(canvas: &mut Canvas, day: &Day) {
             let (next_top, next_bottom) = after.unwrap_or((top, bottom));
             let (high, low) = (top.min(next_top), bottom.max(next_bottom));
             let low_edge = bottom.min(next_bottom);
-            canvas.fine_tone(x, high, 1, low - high + 1, 1, Color::HEART);
+            if !dim {
+                canvas.fine_tone(x, high, 1, low - high + 1, 1, Color::HEART);
+            }
             canvas.fine_rect(x, high, 1, (top - next_top).abs() + 1, Color::HEART);
             canvas.fine_rect(
                 x,
@@ -422,8 +437,17 @@ pub(super) fn render_last_night(
         // The moon, a crescent, setting: between the signs for a night
         // that ended by 04:00, a pixel lower every ten minutes after,
         // behind the train by 10:00.
+        // In the dim look, an untoned crescent: a disc, its left part
+        // cut by the sky's, as `fine_moon`'s ring and seas are tones,
+        // which flicker at idle mode's refresh (see `Palette::columns`).
         let set = (minute as i32 - 4 * 60).clamp(0, 6 * 60) / 10;
-        street::fine_moon(canvas, 102, BOARD_Y + set, 27, 25, Color::TEXT_DIM);
+        let y = BOARD_Y + set;
+        if dim {
+            street::fine_ellipse(canvas, 102, y, 27, 27, Color::TEXT_DIM);
+            street::fine_ellipse(canvas, 94, y - 2, 27, 31, BACKGROUND);
+        } else {
+            street::fine_moon(canvas, 102, y, 27, 25, Color::TEXT_DIM);
+        }
     }
     if rain && !dim {
         street::fine_rain(canvas, 0, TRAIN_Y, tick, Color::TRACK);
@@ -470,7 +494,14 @@ pub(super) fn render_last_night(
                 let foot = BOARD_Y + BOARD_H;
                 canvas.fine_rect(post, foot, 2, TRAIN_Y - foot, Color::TEXT_FAINT);
             }
-            street::fine_sign(canvas, x, BOARD_Y, BOARD_W, BOARD_H, Color::TEXT_FAINT);
+            // In the dim look, a plain frame: the sign's glow is a tone.
+            if dim {
+                let (w, h) = (BOARD_W - 2, BOARD_H - 2);
+                canvas.fine_rect(x + 1, BOARD_Y + 1, w, h, Color::TEXT_FAINT);
+                canvas.fine_rect(x + 2, BOARD_Y + 2, w - 2, h - 2, Color::SHADOW);
+            } else {
+                street::fine_sign(canvas, x, BOARD_Y, BOARD_W, BOARD_H, Color::TEXT_FAINT);
+            }
             let time = hhmm(minute(second));
             let w = font::Face::Fine(street::LETTERING).width(&time);
             let y = BOARD_Y + (BOARD_H - street::LETTERING.height()) / 2;
