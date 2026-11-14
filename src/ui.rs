@@ -58,6 +58,18 @@
 //!   on the info screen, offer storage mode (see [`crate::system_off`]),
 //!   which a tap then confirms, and anything else cancels. Elsewhere,
 //!   nothing.
+//! - On the info screen, a double tap (the clock face's: its second tap
+//!   starting within [`wake::DOUBLE_TAP_MS`] of the first's lift) opens
+//!   2^, a hidden sliding-tile puzzle (see [`crate::game`]); a lone tap
+//!   does nothing. There, every touch is the game's: swipes slide the
+//!   tiles, and a long press starts again, as does a tap once no move is
+//!   left. It's always in the dim look, to spare the battery (see
+//!   [`App::dim`]). The button leaves it, to the clock, as from any
+//!   screen; so does the screen going off. A call, an alarm and the rest take the
+//!   screen over it as over any screen, and give it back as it was. It's
+//!   kept while the wearer is away, saved to flash once they've left it
+//!   (see [`App::take_game_save`]), and a double tap on Info picks it up
+//!   again.
 //! - On the settings screens, tap a row for its next value. On the
 //!   look's: the theme ("THEME": the next colour scheme, of every theme
 //!   built in, for the side of the day showing, night after sunset, day
@@ -90,7 +102,7 @@
 //!   or the button, cancels what's waiting.
 //! - Screens that take over (the alarm editor, a ringing alarm, a call,
 //!   "find my watch", pairing, an update, the storage prompt) get every
-//!   touch: swipes there don't navigate.
+//!   touch: swipes there don't navigate. Nor do they on the puzzle.
 //! - While the screen is off, a button press, a deliberate tap (see
 //!   [`wake::deliberate`]), or a retry (a second tap, however light,
 //!   starting too late for a double tap, but within
@@ -246,6 +258,7 @@
 
 use core::num::NonZeroU32;
 
+use core::fmt::Write as _;
 use embassy_time::{Duration, Instant};
 use heapless::String;
 
@@ -260,12 +273,13 @@ use crate::bthome::Identity;
 use crate::buttons::{self, Press};
 use crate::canvas::{Canvas, Sweep, marquee_cycle};
 use crate::clock::DateTime;
+use crate::game::{self, Game};
 use crate::gb::{CallAction, MusicCommand, Outgoing};
 use crate::motor::{self, Pattern};
 use crate::nav::{self, Place, Side};
 // Defined apart from the UI, so that `gb` (which decodes them) builds
 // without it, in host tests; see `phone`.
-use crate::palette::Palette;
+use crate::palette::{self, Color, Palette};
 use crate::phone::Text;
 pub use crate::phone::{PhoneEvent, Unpaired};
 use crate::route::Route;
@@ -381,6 +395,9 @@ enum Screen {
     HaQr,
     /// The same, as text, with the watch's address: a tap on the QR code.
     HaKey,
+    /// The hidden puzzle (see [`crate::game`]): in no line, only reached
+    /// by a double tap on the info screen.
+    Game,
 }
 
 /// The most screens in a line: the notifications', or the one on the
@@ -667,6 +684,13 @@ pub struct App {
     /// woken on the charger, and nothing since (see
     /// [`App::woke_on_charger`]).
     charge_screen: bool,
+    /// The hidden puzzle, and its best score: loaded at boot, kept while
+    /// the wearer is away from it, and saved once they leave it (see
+    /// [`App::take_game_save`]).
+    pub game: Game,
+    /// Whether [`App::game`] changed since it was saved. Here, rather
+    /// than in `Game`, where it would pad 16 bytes to 20.
+    game_unsaved: bool,
 }
 
 /// The full charge's screen (see [`App::on_charged`]).
@@ -749,6 +773,8 @@ impl App {
             charged: Charged::None,
             on_charger: false,
             charge_screen: false,
+            game: Game::new(),
+            game_unsaved: false,
         }
     }
 
@@ -938,9 +964,10 @@ impl App {
 
     /// Whether the screen shows the dim white-on-black look (a glance, a
     /// notification that arrived with the screen off, or anything in the
-    /// quiet night), for the backlight.
+    /// quiet night), for the backlight; and the hidden puzzle, always (see
+    /// [`render_game`]).
     pub fn dim(&self) -> bool {
-        self.glancing() || self.quiet_notification() || self.night.quiet()
+        self.glancing() || self.quiet_notification() || self.night.quiet() || self.showing_game()
     }
 
     /// Whether the clock face is on screen for someone to read: awake, and
@@ -993,6 +1020,38 @@ impl App {
         self.screen == Screen::Storage
     }
 
+    /// Whether the hidden puzzle is what the screen shows: not under a
+    /// call, an alarm, the full charge or the rest (as `render` has them;
+    /// bar pairing and updates, which `Status` says, not `App`: those
+    /// show in the puzzle's palette, still legible, as its roles mean
+    /// what every theme's do).
+    pub fn showing_game(&self) -> bool {
+        self.awake
+            && self.screen == Screen::Game
+            && !self.glancing()
+            && !self.quiet_notification()
+            && !self.showing_charged()
+            && self.call.is_none()
+            && self.ringing.is_none()
+            && self.finding.is_none()
+    }
+
+    /// The game to save, if it changed since it was last saved and the
+    /// wearer has left it (the button, or the screen going off): `main`
+    /// saves it then (see `ui_loop::save_changes`). Not while it's
+    /// played: a save a move would be a flash write each, wearing the
+    /// storage pages, which the Bluetooth bonds share. So a reset, a
+    /// crash, an update or a flat battery mid-game loses the moves since
+    /// it was opened; the best score with them, if they raised it.
+    /// TODO: save it too before switching off for a flat battery.
+    pub fn take_game_save(&mut self) -> Option<[u8; Game::BYTES]> {
+        if !self.game_unsaved || self.awake && self.screen == Screen::Game {
+            return None;
+        }
+        self.game_unsaved = false;
+        Some(self.game.to_bytes())
+    }
+
     /// Whether the Air screen is on screen, for a scan to refresh it.
     pub fn showing_air(&self) -> bool {
         self.awake
@@ -1019,6 +1078,10 @@ impl App {
     /// The palette the screen shows in: the chosen scheme's, or in the
     /// dim look, its dim one.
     pub fn palette(&self) -> &'static Palette {
+        // The puzzle looks the same in every theme, by day and by night.
+        if self.showing_game() {
+            return &GAME_PALETTE;
+        }
         let theme = self.theme();
         if self.dim() {
             theme.dim()
@@ -1142,7 +1205,7 @@ impl App {
     /// screen it came from, and the key as the settings.
     fn place(&self) -> Place {
         let screen = match self.screen {
-            Screen::Storage => Screen::Info,
+            Screen::Storage | Screen::Game => Screen::Info,
             Screen::HaQr | Screen::HaKey => Screen::Settings(Page::Grid),
             screen => screen,
         };
@@ -1791,6 +1854,9 @@ impl App {
                     self.go_to(Screen::Settings(Page::Grid), Sweep::LeftToRight)
                 }
                 (Gesture::Tap | Gesture::LongPress, Screen::Buttons) => self.on_grid(touch, now),
+                // Every touch on the game is the game's: swipes move the
+                // tiles rather than the screens.
+                (_, Screen::Game) => self.on_game(touch),
                 (Gesture::SwipeLeft, _) => self.navigate(nav::Swipe::Left),
                 (Gesture::SwipeRight, _) => self.navigate(nav::Swipe::Right),
                 (Gesture::SwipeUp, _) => self.navigate(nav::Swipe::Up),
@@ -1831,9 +1897,21 @@ impl App {
                         self.change(setting, now);
                     }
                 }
-                // TODO: remove once something real uses the motor; for now
-                // this is how we check it works.
-                (Gesture::Tap, Screen::Info) => motor::buzz(Pattern::NOTIFY),
+                // A double tap opens the hidden puzzle, as the clock
+                // face's double tap plays or pauses: its second tap
+                // starting within `wake::DOUBLE_TAP_MS` of the first's
+                // lift. A lone tap does nothing (it used to buzz, to try
+                // the motor), so the first gives nothing away.
+                (Gesture::Tap, Screen::Info) => match first_tap {
+                    Some(_) => {
+                        let entropy =
+                            game::entropy(touch.start_ms, touch.held_ms, touch.x, touch.y);
+                        self.game_unsaved |= self.game.open(entropy);
+                        defmt::info!("2^: opened, score {=u32}", self.game.score);
+                        self.go_to(Screen::Game, Sweep::RightToLeft);
+                    }
+                    None => self.last_tap = Some(ended(touch, now)),
+                },
                 // A media gesture begun with the screen off or on a glance,
                 // whose first tap woke the screen (see `woken`, above).
                 (_, Screen::Clock) if !notification_shown && woken.is_some() => {
@@ -1869,6 +1947,32 @@ impl App {
                 _ => {}
             },
         }
+    }
+
+    /// A touch on the hidden puzzle (see [`crate::game`]): a swipe is a
+    /// move; a long press starts again, with a buzz, as long presses
+    /// have, and so does a tap once no move is left. Starting again
+    /// takes no "are you sure?": a long press is hard to make by
+    /// accident here, where every other touch is a swipe, and a prompt
+    /// was a screen and its strings more for every theme to draw.
+    fn on_game(&mut self, touch: crate::touch::Touch) {
+        let entropy = game::entropy(touch.start_ms, touch.held_ms, touch.x, touch.y);
+        let direction = match touch.gesture {
+            Gesture::SwipeLeft => game::Direction::Left,
+            Gesture::SwipeRight => game::Direction::Right,
+            Gesture::SwipeUp => game::Direction::Up,
+            Gesture::SwipeDown => game::Direction::Down,
+            Gesture::LongPress | Gesture::Tap
+                if touch.gesture == Gesture::LongPress || self.game.over() =>
+            {
+                self.game.restart(entropy);
+                self.game_unsaved = true;
+                motor::buzz(Pattern::NOTIFY);
+                return;
+            }
+            _ => return,
+        };
+        self.game_unsaved |= self.game.swipe(direction, entropy);
     }
 
     /// A tap or hold on the button grid.
@@ -2926,6 +3030,7 @@ impl App {
             }
             Screen::Info => theme.info(canvas, status, dim),
             Screen::Storage => theme.storage_prompt(canvas, dim),
+            Screen::Game => render_game(canvas, &self.game),
             Screen::HaQr => theme.bthome_qr(canvas, status.bthome.as_ref(), dim),
             Screen::HaKey => theme.bthome_key(canvas, status.bthome.as_ref(), dim),
         }
@@ -2935,7 +3040,10 @@ impl App {
             // the layout from.
             Place::Clock if self.notifications.unseen => theme.handles(canvas, Handles::Unseen),
             Place::Line { side, index }
-                if !matches!(self.screen, Screen::Storage | Screen::HaQr | Screen::HaKey) =>
+                if !matches!(
+                    self.screen,
+                    Screen::Storage | Screen::HaQr | Screen::HaKey | Screen::Game
+                ) =>
             {
                 let count = self.line(side).len();
                 theme.handles(canvas, Handles::Line { side, index, count });
@@ -3006,6 +3114,113 @@ fn sweep(towards: Side) -> Sweep {
         Side::Right => Sweep::RightToLeft,
         Side::Above => Sweep::TopToBottom,
         Side::Below => Sweep::BottomToTop,
+    }
+}
+
+// ==============================================================================
+// The hidden puzzle's look
+// ==============================================================================
+//
+// 2^ (see `crate::game`) is drawn here, once, rather than by each theme:
+// it's hidden, so what it costs in flash should be as little as can be,
+// and a theme's own take on it was kilobytes (a neon apartment block, in
+// Living Tokyo's). So it looks the same in every theme, by day and by
+// night: numbers on tiles, in a palette of its own.
+//
+// And always in the dim look (see `App::dim`), as glances and the quiet
+// night are: the panel in idle mode, and the backlight low. A game is
+// minutes of the screen on, where a look at the time is seconds, so it
+// takes the least battery the screen can: idle mode's ~8 Hz refresh and 8
+// colours, and the lowest backlight (`brightness::Level::LOW`, ~1.8 mA
+// rather than ~19.6 by day). It costs nothing to keep: the palette is
+// only idle mode's colours anyway, the dim look's path through the UI
+// loop is the glance's, and the dim backlight is enough to read big
+// digits by. Into the game and out of it, the UI loop darkens the
+// backlight for the redraw, as for any change of look.
+
+/// The puzzle's palette (see [`App::palette`]): idle mode's 8 colours
+/// (red, green and blue each fully on or off), as the puzzle is always
+/// dim. Tiles go from white through yellow and cyan to green as their
+/// values grow (see [`TILES`]), with black digits; empty cells are a grey
+/// outline, the score white, and the best yellow. Every role means what it does in a theme's, for whatever else
+/// shows over the puzzle (a notification's banner).
+static GAME_PALETTE: Palette = palette::palette(
+    "2^",
+    [
+        0x000000, // BACKGROUND, and a tile's digits
+        0x000000, // SHADOW
+        0xFFFFFF, // TEXT: the score, "GAME OVER", and 2 to 8
+        0xFFFFFF, // TEXT_DIM (half-toned)
+        0x0000FF, // TEXT_FAINT
+        0xFFFFFF, // TRACK (half-toned, a grey): an empty cell's edge
+        0xFFFF00, // ACCENT: the best, and 16 to 64
+        0xFFFFFF, // DITHER_A
+        0x000000, // DITHER_B
+        0xFF0000, // HEART
+        0xFFFFFF, // HEART_SHINE
+        0x00FF00, // GOOD: 1024 and up
+        0xFF0000, // BAD
+        0xFF00FF, // DEEP
+        0x00FFFF, // REM: 128 to 512
+        0xFFFFFF, // GREY (half-toned)
+    ],
+)
+.halftone(1 << Color::TEXT_DIM.0 | 1 << Color::TRACK.0 | 1 << Color::GREY.0);
+const _: () = assert!(
+    GAME_PALETTE.idle_mode_safe(),
+    "2^: idle mode's colours only"
+);
+
+/// The tiles' colours, by how many digits their values have: 2 to 8, 16
+/// to 64, 128 to 512, and 1024 and up. Only idle mode's lightest four,
+/// so black digits read on every one at the dim backlight (red and
+/// magenta, tried, were too dark for them, and white on them too faint).
+const TILES: [Color; 4] = [Color::TEXT, Color::ACCENT, Color::REM, Color::GOOD];
+
+/// Draws the puzzle: the score at the top left and the best at the top
+/// right, then the board, 4 rows of 4 cells, 18 × 16 each with 2 between,
+/// filling the rest of the canvas. A tile's value is in the medium face up
+/// to 512, and in the small one from 1024, as four digits are all that fit
+/// (16384 and 32768 run a pixel into the gap: they'd take record play).
+/// Nothing marks what the last move merged, or where its new tile went:
+/// that was more drawing for each theme, and the numbers say it anyway.
+fn render_game(canvas: &mut Canvas, game: &Game) {
+    canvas.clear(Color::BACKGROUND);
+    let mut number = String::<12>::new();
+    write!(number, "{}", game.score).fits();
+    canvas.text(1, 2, &number, Color::TEXT);
+    number.clear();
+    write!(number, "HI {}", game.best).fits();
+    canvas.text_right(80, 2, &number, Color::ACCENT);
+    for i in 0..game::CELLS {
+        let (x, y) = (
+            1 + 20 * (i % game::SIDE) as i32,
+            10 + 18 * (i / game::SIDE) as i32,
+        );
+        let exponent = game.board.cell(i);
+        if exponent == 0 {
+            // Only its edge.
+            canvas.fill_rect(x, y, 18, 16, Color::TRACK);
+            canvas.fill_rect(x + 1, y + 1, 16, 14, Color::BACKGROUND);
+            continue;
+        }
+        let tile = TILES[((usize::from(exponent) - 1) / 3).min(TILES.len() - 1)];
+        canvas.fill_rect(x, y, 18, 16, tile);
+        let value = 1u32 << exponent;
+        number.clear();
+        write!(number, "{value}").fits();
+        if value < 1000 {
+            let width = crate::font::Face::Medium.width(&number);
+            canvas.text_medium(x + (18 - width) / 2, y + 5, &number, Color::BACKGROUND);
+        } else {
+            canvas.text_centered(x + 9, y + 6, &number, Color::BACKGROUND);
+        }
+    }
+    // Over the second row, rather than the score (which the wearer will
+    // want to see then): the board needn't be read any more.
+    if game.over() {
+        canvas.fill_rect(0, 28, 80, 16, Color::BACKGROUND);
+        canvas.text_centered(40, 33, "GAME OVER", Color::TEXT);
     }
 }
 

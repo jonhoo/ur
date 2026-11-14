@@ -204,6 +204,20 @@ fn the_tour() {
     });
 }
 
+/// The hidden puzzle, 2^ (see src/game.rs): finding it, playing it, the
+/// best score, leaving it and finding it again after a reboot, and a
+/// game over, from a board in flash. Drawn the same in every theme, so
+/// once, in the default one.
+#[test]
+fn the_game() {
+    check_shots(Shots {
+        name: "game",
+        script: "game.txt",
+        approved: "shots/game",
+        unchecked: &[],
+    });
+}
+
 /// The README's own screenshots, so it can't go stale: approving these
 /// updates it. Only its PNGs: the GIFs beside them are readme-gifs.txt's
 /// (see tests/record.rs), which this neither checks nor touches.

@@ -81,6 +81,9 @@ pub mod key {
     /// Settings' FORCE: which side's schemes the theme shows (see
     /// [`crate::ui::Force`]).
     pub const FORCE: u8 = 44;
+    /// 2^, the hidden puzzle: its board, score and best (see
+    /// [`crate::game::Game::to_bytes`]), saved as the wearer leaves it.
+    pub const GAME: u8 = 45;
     /// Written only by builds with the `flash-stress` feature (see
     /// `flash_stress.rs`); a dev kit that ran one may hold it.
     #[allow(dead_code)] // Used only by those builds.

@@ -62,6 +62,13 @@ pub struct Canvas {
     /// False until the panel has received one full frame (or after a palette
     /// change); until then, `front` says nothing about the panel's contents.
     front_valid: bool,
+    /// While set, drawing only touches these columns (for [`Canvas::marquee`]).
+    /// In bytes, as columns fit one, and here, in the 3 bytes `palette`'s
+    /// alignment would otherwise leave as padding, rather than as an
+    /// `i32` range at the end: that made the canvas 12 bytes bigger, of
+    /// RAM the `compare` build is short of. (`front`, `palette` and `qr`
+    /// stay where `scripts/screenshot.py` reads them.)
+    clip: Option<Range<u8>>,
     /// Resolves colour roles to pixel bytes when pushing.
     palette: &'static Palette,
     /// The bytes to show over the canvas as a QR code this frame (see
@@ -72,8 +79,6 @@ pub struct Canvas {
     qr_shown: bool,
     /// Pixel bytes waiting to be sent; see [`stream`].
     batch: [u8; BATCH],
-    /// While set, drawing only touches these columns (for [`Canvas::marquee`]).
-    clip: Option<Range<i32>>,
     /// The rows drawn at the panel's resolution. Last, so that
     /// `scripts/screenshot.py` and the dev kit compare find the rest
     /// where they always were.
@@ -89,12 +94,12 @@ impl Canvas {
             back: [0; BYTES],
             front: [0; BYTES],
             front_valid: false,
+            clip: None,
             palette,
             qr: [0; 16],
             qr_wanted: false,
             qr_shown: false,
             batch: [0; BATCH],
-            clip: None,
             #[cfg(feature = "theme-living_tokyo")]
             fine: Fine::NONE,
         }
@@ -170,7 +175,11 @@ impl Canvas {
         if !(0..WIDTH as i32).contains(&x) || !(0..HEIGHT as i32).contains(&y) {
             return;
         }
-        if self.clip.as_ref().is_some_and(|clip| !clip.contains(&x)) {
+        if self
+            .clip
+            .as_ref()
+            .is_some_and(|clip| !(i32::from(clip.start)..i32::from(clip.end)).contains(&x))
+        {
             return;
         }
         // Redrawing rows finely (see `refine`): a canvas pixel is
@@ -466,7 +475,12 @@ impl Canvas {
             text.as_bytes(),
         );
         let left = columns.start;
-        self.clip = Some(columns);
+        // Columns on the canvas, so each fits a byte.
+        debug_assert!(
+            columns.start >= 0 && columns.end <= WIDTH as i32,
+            "a marquee off the canvas"
+        );
+        self.clip = Some(columns.start as u8..columns.end as u8);
         self.text_scaled(left - offset, y, text, color, scale);
         self.clip = None;
     }
@@ -1214,8 +1228,8 @@ impl Canvas {
         let (mut left, mut right) = (x.max(0), (x + w).min(FINE));
         if let Some(clip) = &self.clip {
             let scale = SCALE as i32;
-            left = left.max(clip.start * scale);
-            right = right.min(clip.end * scale);
+            left = left.max(i32::from(clip.start) * scale);
+            right = right.min(i32::from(clip.end) * scale);
         }
         if top >= bottom || left >= right {
             return;
@@ -1374,8 +1388,8 @@ impl Canvas {
         let (mut left, mut right) = (0, FINE);
         if let Some(clip) = &self.clip {
             let scale = SCALE as i32;
-            left = clip.start * scale;
-            right = clip.end * scale;
+            left = i32::from(clip.start) * scale;
+            right = i32::from(clip.end) * scale;
         }
         // How near a pixel's centre is: 2 within `core`, 1 within
         // `outer`, else 0. Past either end, from that end, by distances

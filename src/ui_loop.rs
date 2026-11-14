@@ -38,6 +38,7 @@ use crate::bthome::{self, Identity};
 use crate::buttons::Press;
 use crate::canvas::{self, Canvas, Sweep};
 use crate::display::Display;
+use crate::game::Game;
 use crate::heart_reading as heart;
 use crate::system_off::Reason;
 use crate::touch::Touch;
@@ -201,6 +202,8 @@ pub struct Stored {
     settings: Settings,
     phone_alarms: alarm::Phone,
     calibration: temperature::Calibration,
+    /// The hidden puzzle, as last saved (see `App::take_game_save`).
+    game: Game,
 }
 
 impl Stored {
@@ -255,6 +258,10 @@ impl Stored {
             .await
             .map(temperature::Calibration::from_bytes)
             .unwrap_or_default();
+        let game = storage::load(storage::key::GAME)
+            .await
+            .map(Game::from_bytes)
+            .unwrap_or_default();
         Self {
             settings: Settings {
                 themes,
@@ -266,6 +273,7 @@ impl Stored {
             },
             phone_alarms,
             calibration,
+            game,
         }
     }
 }
@@ -317,6 +325,11 @@ pub async fn save_changes(before: Settings, app: &mut App) {
     // what the watch has always done, and cheap (syncs are rare).
     if app.take_phone_alarms_changed() {
         storage::save(storage::key::PHONE_ALARMS, &app.phone_alarms.to_bytes()).await;
+    }
+    // The hidden puzzle, once the wearer has left it: not after every
+    // move (see `App::take_game_save`).
+    if let Some(game) = app.take_game_save() {
+        storage::save(storage::key::GAME, &game).await;
     }
 }
 
@@ -388,6 +401,7 @@ impl UiLoop {
         let now = Instant::now();
         let mut app = stored.settings.apply(now);
         app.phone_alarms = stored.phone_alarms;
+        app.game = stored.game;
         #[cfg(feature = "compare")]
         crate::compare::boot(now, &app);
         let ui = Self {
@@ -604,7 +618,7 @@ impl UiLoop {
             let daytime = board.daytime();
             app.set_daytime(daytime);
             // Into or out of the dim white-on-black look (a glance, a quiet
-            // notification) with the panel lit: go dark for the redraw.
+            // notification, the hidden puzzle) with the panel lit: go dark for the redraw.
             // Otherwise the old frame (often a light theme, at full
             // backlight) flashes up while the new one is drawn over it.
             let relighting = self.panel_awake && app.dim() != self.was_dim;
@@ -629,7 +643,11 @@ impl UiLoop {
             match app.take_transition() {
                 // Waking straight into a transition would animate over a
                 // stale frame; just show the new one.
-                Some(sweep) if self.panel_awake => canvas.transition(board.display(), sweep).await,
+                // Nor one redrawn in the dark, for a change of look (see
+                // `relighting`): no one would see it sweep.
+                Some(sweep) if self.panel_awake && !relighting => {
+                    canvas.transition(board.display(), sweep).await
+                }
                 _ if self.first_frame => {
                     canvas.transition(board.display(), Sweep::LeftToRight).await
                 }

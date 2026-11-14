@@ -767,6 +767,13 @@ impl<'a> Follower<'a> {
     fn follow(&mut self, boot: &compare::Boot) -> Result<(), String> {
         time::set(Instant::from_ticks(boot.at));
         self.app = boot_app(boot);
+        // The hidden puzzle (`crate::game`) isn't in the boot export, which
+        // would cost the `compare` build 16 bytes of RAM it hasn't to
+        // spare; so it's read from the storage the dev kit booted with
+        // (nothing saves it until the wearer has played and left it). As
+        // `check-storage` does, this also sets the simulator's storage to
+        // the dev kit's.
+        self.app.game = booted_from(self.devkit.read_storage()?)?.game;
         self.replayed = 0;
         (self.connected, self.air, self.daytime) = (false, false, false);
         self.charger = false;
@@ -2340,7 +2347,7 @@ mod tests {
     /// on a `compare` build gives `UR_COMPARE`'s size.)
     #[test]
     fn the_export_is_laid_out_as_on_the_watch() {
-        assert_eq!(size_of::<Export>(), 0x910);
+        assert_eq!(size_of::<Export>(), 0x908);
         assert_eq!(size_of::<Event>(), 32);
         assert_eq!(size_of::<Music>(), 84);
         let music = std::mem::offset_of!(Export, music);
@@ -2348,6 +2355,6 @@ mod tests {
             std::mem::offset_of!(Export, events),
             music - compare::EVENTS * size_of::<Event>()
         );
-        assert_eq!(music + size_of::<Music>(), 0x910 - 4, "and padding");
+        assert_eq!(music + size_of::<Music>(), 0x908 - 4, "and padding");
     }
 }
