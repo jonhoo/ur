@@ -68,7 +68,8 @@ says.)
 
 | Screen | At night (LIVING TOKYO) |
 |---|---|
-| Last night | <img src="shots/night-last-night.png" width="120" alt="Last night: LAST NIGHT on a blue neon sign, 7:20 big, ASLEEP, and a sleeper train from 23:20 to 06:55, the times on station signs over its ends, its carriages the deep, REM and light sleep in cyan, violet and grey, with their times under it; between the signs, a crescent moon setting towards the rails, and a few stars in the dark sky"> |
+| Today | <img src="shots/night-today.png" width="120" alt="Today at 21:30: TODAY on a blue neon sign, RESTING 53 across from it, a footprint and 16531, big, in a smooth rounded lettering; under them the heart rate's range as a thin pink neon tube, rising to a peak at 19:00; and the day's steps as a street of slate buildings, one an hour from midnight, their windows lit warm yellow: low houses through the day, two taller ones in the morning and the late afternoon, a tower at 19:00, a small lattice mast with a red beacon on the hour now, and two fenced empty lots for the hours still to come; 0, 6, 12 and 18 under the street"> |
+| Last night | <img src="shots/night-last-night.png" width="120" alt="Last night: LAST NIGHT on a blue neon sign, 7:20 big in a smooth rounded lettering, its colon blue, ASLEEP, and a sleeper train on the rails from 23:20 to 06:55, the times on station signs on posts behind its ends; its carriages the deep, REM and light sleep in cyan, violet and grey, two of grey, with rounded roofs, rows of dark windows, bogies, and a sloped nose with a headlight; their times under it; between the signs, a crescent moon setting towards the train, and a few stars in the dark sky"> |
 | A notification's banner | <img src="shots/night-banner.png" width="120" alt="The clock face with a banner over its bottom: a dark sign outlined in the app's cyan neon, SIGNAL in cyan and Nora Lindqvist in white"> |
 | A notification | <img src="shots/night-notification.png" width="120" alt="A notification in the history at 21:30: SIGNAL in fine neon lettering on a cyan sign top left, the time top right, Nora Lindqvist big in the middle, in a smooth rounded sans in capitals and lowercase, over two lines; under it, drawn finer, a ramen stall: a cyan noren under its roof, a small bowl crest dyed on its middle panel, a red lantern at each end, a warmly lit inside with a stock pot and a steaming bowl on the counter, four red stools along it, and a menu board on the street"> |
 | A long name | <img src="shots/night-notification-long.png" width="120" alt="A notification at dawn: TELEGRAM on a green neon sign, and Øyvind Åsheim-Brekke in the same rounded lettering, smaller, over two balanced lines, the ring over the Å clear of it; under it the ramen stall shut, its shutter down and its lanterns out"> |
@@ -92,9 +93,10 @@ city's windows are lit as its people are up, most in the evening and
 hardly any at 02:00, and from 04:00 the sky behind it glows, higher
 each hour. The ramen stall is lit in the evening, its bowl steaming,
 dimmer in the small hours, and shuttered, its lanterns out, from 04:00; the record bar's lamp keeps
-the same hours. The sleeper train has a window lit for every share of
-the night spent lying awake, and the later the wearer woke, the lower
-the moon. A notification's noren and sign are in its app's own colour,
+the same hours. Today's buildings light their windows after dark, its
+hour now has a beacon blinking, and the hours to come are empty lots.
+The sleeper train has a window lit for every share of the night spent
+lying awake, and the later the wearer woke, the lower the moon. A notification's noren and sign are in its app's own colour,
 the same on the banner, so the colour says which app before the
 letters do. The alarms (and the phone's) are a departure board: the
 next to ring is flagged and counts down, a running timer ticks, and an

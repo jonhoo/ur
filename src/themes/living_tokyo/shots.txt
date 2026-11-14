@@ -222,3 +222,19 @@ wait 1s
 shot night-notification-long.png
 button
 wait 1s
+
+# Today, that evening: the day's steps as a street of buildings, one an
+# hour, the evening run at 19:00 a tower, lit after dark; the hour now's
+# beacon on its mast, the hours to come empty lots; and the heart rate's
+# range as a neon tube over the roofs. (No smart wake to ring on the way.)
+smart off
+until 21:30
+demo-day
+button
+wait 1s
+expect clock
+right
+wait 2s
+shot night-today.png
+button
+wait 1s
