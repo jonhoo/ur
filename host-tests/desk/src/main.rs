@@ -19,6 +19,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::desk::*;
+    use super::sleep::Rest;
 
     /// How often the accelerometer polls, as in `activity`.
     const POLL: u32 = 2;
@@ -175,7 +176,41 @@ mod tests {
         assert!(desk.on());
     }
 
-    // ==========================================================================
+    #[test]
+    fn stirring_lasts_a_while() {
+        assert!(stirring(100, 100));
+        assert!(stirring(100 + STIR_CALM - 1, 100));
+        assert!(!stirring(100 + STIR_CALM, 100));
+        // A clock that hasn't moved on yet (a stir after `now` was read).
+        assert!(stirring(99, 100));
+    }
+
+    #[test]
+    fn the_touch_controller_sleeps_in_bed_and_on_a_desk() {
+        let rests = [None, Some(Rest::Night), Some(Rest::Nap), Some(Rest::Doze)];
+        for awake in [false, true] {
+            for quiet in rests {
+                for desk in [false, true] {
+                    for stirring in [false, true] {
+                        let expected = !awake
+                            && !stirring
+                            && (desk || matches!(quiet, Some(Rest::Night | Rest::Doze)));
+                        assert_eq!(
+                            touch_sleeps(awake, quiet, desk, stirring),
+                            expected,
+                            "awake {awake}, {quiet:?}, desk {desk}, stirring {stirring}"
+                        );
+                    }
+                }
+            }
+        }
+        // The cases that matter, spelled out: a nap keeps it awake, a desk
+        // puts it to sleep, a stir wakes it.
+        assert!(!touch_sleeps(false, Some(Rest::Nap), false, false));
+        assert!(touch_sleeps(false, None, true, false));
+        assert!(touch_sleeps(false, Some(Rest::Night), false, false));
+        assert!(!touch_sleeps(false, Some(Rest::Night), false, true));
+    }
 
     // ==========================================================================
     // The field logs

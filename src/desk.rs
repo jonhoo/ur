@@ -1,4 +1,5 @@
-//! The watch lying on a desk, off the wrist.
+//! The watch lying on a desk, off the wrist; and the wrist stirring, which
+//! wakes the touch controller.
 //!
 //! **A desk** (or a table, a nightstand, the charger's cradle) holds the
 //! watch perfectly still, which sleep tracking otherwise takes for a
@@ -48,6 +49,8 @@
 //! rate sensor finds no skin, so they're never sleep, and the minutes
 //! before can't borrow their stillness to fall asleep in (see
 //! [`crate::sleep::still_among`]); Gadgetbridge gets them as not worn.
+//! And the touch controller sleeps on it, as in the night's quiet (see
+//! [`touch_sleeps`]).
 //!
 //! Only face up: a watch lying on its side or face down isn't recognised
 //! (a sleeping wrist lies on its side, level, now and then), and nor is
@@ -56,8 +59,22 @@
 //! TODO: the heart rate sensor's "no reading" on a calm wrist, session
 //! after session, may tell those too.
 //!
+//! **A stir** is a poll moving more than [`STIR`]: lifting the watch,
+//! putting it on, turning the wrist to look (99% of the field logs' 1 293
+//! glances had a poll over it in the 4 s before). Sleep twitches less:
+//! across the field logs' nights, a stir came about 10 times an hour
+//! asleep (turning over, mostly), against 12 at a threshold of 150 and 7
+//! at 1 000. The touch controller wakes at a stir, rather than when sleep
+//! tracking sees the wearer awake (6 minutes of movement), and sleeps
+//! again [`STIR_CALM`] after the last one if it should (see
+//! [`touch_sleeps`]). In the night's quiet, that keeps it awake about 70
+//! times, 75 minutes all told, a night: some 10 µAh, at the 6–10 µA it
+//! draws awake but untouched, against a µA or two asleep.
+//!
 //! This module knows nothing about the hardware or the clock, so it can
 //! be tested on a computer (see `host-tests/desk`).
+
+use crate::sleep::Rest;
 
 /// How far from level (in the accelerometer's 1024-per-g counts, on each
 /// horizontal axis) a desk lies: about 3.6°. The desks and charger in the
@@ -83,6 +100,10 @@ pub const QUIET: u16 = 34;
 
 /// How long, in seconds, a spell must last to be a desk.
 pub const SETTLE: u32 = 10 * 60;
+
+/// How long after the last stir, in seconds, the touch controller may
+/// sleep again: long enough to look, and tap.
+pub const STIR_CALM: u32 = 60;
 
 /// A change in whether the watch lies on a desk.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -174,4 +195,29 @@ impl Desk {
             _ => None,
         }
     }
+}
+
+/// Whether the wrist stirred (see [`STIR`]) within [`STIR_CALM`] of `now`,
+/// given when it last did (seconds, on the same clock).
+pub fn stirring(now: u32, stirred: u32) -> bool {
+    now.saturating_sub(stirred) < STIR_CALM
+}
+
+/// Whether the touch controller should sleep: with the screen off (not
+/// `awake`), in the quiet (`quiet`, if it's quiet now) of a night or a doze,
+/// or on a desk; but never while the wrist is `stirring`.
+///
+/// Not in a nap: taps work as by day then (see `crate::ui`), and so must
+/// the controller. A doze sleeps as the night: it's in bed, after an alarm
+/// or the button, where bedding and pillows tap the screen as they do all
+/// night.
+///
+/// A stir wakes it, as the wearer may be about to tap: picking the watch
+/// up off a desk, say, which ends the desk anyway. In the night's quiet,
+/// the screen still ignores taps with the screen off (bedding moves with
+/// the wrist that turns in it), so there, it's only ready for when the
+/// button wakes the screen.
+pub fn touch_sleeps(awake: bool, quiet: Option<Rest>, desk: bool, stirring: bool) -> bool {
+    let bedding = matches!(quiet, Some(Rest::Night | Rest::Doze));
+    !awake && !stirring && (bedding || desk)
 }

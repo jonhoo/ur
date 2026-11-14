@@ -34,6 +34,8 @@ struct State {
     last_sleep: Option<Sleep>,
     asleep: bool,
     movement: u16,
+    /// As `activity::on_desk`.
+    desk: bool,
     /// As `activity::light`: the minutes before were light sleep.
     light: bool,
     /// A dev kit's day, which `today` shows instead (see `devkit`).
@@ -47,6 +49,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     last_sleep: None,
     asleep: false,
     movement: 0,
+    desk: false,
     light: false,
     today_from_devkit: None,
 });
@@ -70,6 +73,17 @@ pub fn still() -> bool {
 
 pub fn movement() -> u16 {
     state().movement
+}
+
+/// Whether the watch lies on a desk, off the wrist, as `desk` (the
+/// command) says: the simulator has no accelerometer to find one.
+pub fn on_desk() -> bool {
+    state().desk
+}
+
+/// Whether the wrist stirred lately: here, while `movement` is a stir's.
+pub fn stirring() -> bool {
+    state().movement > crate::desk::STIR
 }
 
 pub fn light() -> bool {
@@ -226,6 +240,10 @@ pub fn set_asleep(asleep: bool) {
 
 pub fn set_movement(movement: u16) {
     state().movement = movement;
+}
+
+pub fn set_desk(desk: bool) {
+    state().desk = desk;
 }
 
 pub fn set_light(light: bool) {

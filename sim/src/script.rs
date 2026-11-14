@@ -79,7 +79,10 @@ The wearer and the watch:
   asleep on|off | movement N | light-sleep on|off
                              what sleep tracking says (the quiet night;
                              smart wake rings at movement 120 or more in
-                             light sleep)
+                             light sleep; over 300 is a stir, which wakes
+                             the touch controller)
+  desk on|off                whether the watch lies on a desk, off the
+                             wrist (the touch controller sleeps there)
   last-night HH:MM HH:MM [deep=MIN] [rem=MIN] [awake=MIN]
   demo-day                   fill today's history so far with a typical day
   alarm 1|2 HH:MM [on|off] | smart on|off [HH:MM [HH:MM]] | timer 1|2 MIN
@@ -115,8 +118,9 @@ Output:
                              the last check of it), off (switched off),
                              clock (the clock face, for someone to read),
                              charging (the charge screen, woken on the
-                             charger), or charged (the full charge's
-                             screen)
+                             charger), charged (the full charge's
+                             screen), or touch-asleep (the touch
+                             controller, so touches go unnoticed)
   expect steps N             fail unless today's steps are N, on the clock
                              face and the Today screen alike
   expect theme NAME          fail unless the colour scheme the UI picks is
@@ -458,6 +462,10 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
             activity::set_movement(number(need(0, "N")?)?);
             watch.refresh();
         }
+        "desk" => {
+            activity::set_desk(on_off(need(0, "on|off")?, "on", "off")?);
+            watch.refresh();
+        }
         "light-sleep" => {
             activity::set_light(on_off(need(0, "on|off")?, "on", "off")?);
             watch.refresh();
@@ -609,6 +617,7 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
                 "screen-on" => watch.backlight != crate::brightness::Level::OFF,
                 "dim" => watch.app.dim(),
                 "quiet-night" => watch.app.quiet_night(),
+                "touch-asleep" => crate::touch::asleep(),
                 "buzzing" => watch.buzzing(),
                 "buzzed" => std::mem::take(&mut watch.buzzed),
                 "off" => watch.off.is_some(),

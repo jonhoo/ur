@@ -986,6 +986,27 @@ pub fn still() -> bool {
 
 static STILL: AtomicBool = AtomicBool::new(false);
 
+/// Whether the watch lies on a desk, off the wrist (see [`desk`]), as of
+/// the last poll.
+pub fn on_desk() -> bool {
+    DESK.load(Ordering::Relaxed)
+}
+
+static DESK: AtomicBool = AtomicBool::new(false);
+
+/// Whether the wrist stirred lately (see [`desk::stirring`]): more than a
+/// twitch in the last minute, for the touch controller.
+pub fn stirring() -> bool {
+    desk::stirring(
+        embassy_time::Instant::now().as_secs() as u32,
+        STIRRED.load(Ordering::Relaxed),
+    )
+}
+
+/// When the wrist last stirred (see [`desk::STIR`]), in seconds of
+/// uptime. Boot counts as one.
+static STIRRED: AtomicU32 = AtomicU32::new(0);
+
 // ==============================================================================
 // Motion and glances
 // ==============================================================================
@@ -1449,10 +1470,13 @@ pub async fn activity_task(i2c: Device) {
         );
         STEPLESS_POLLS.update(Ordering::Relaxed, Ordering::Relaxed, run(new_steps == 0));
 
-        // Whether the watch lies on a desk, from how this poll's last
-        // sample lies (see `desk`). Since when, should it have just been
-        // found to.
+        // A stir, which wakes the touch controller; and whether the watch
+        // lies on a desk, from how this poll's last sample lies (see
+        // `desk`). Since when, should it have just been found to.
         let now = uptime();
+        if recent > desk::STIR {
+            STIRRED.store(now, Ordering::Relaxed);
+        }
         let pulse = crate::heart_reading::latest().map(|(_, at)| at.as_secs() as u32);
         let landed = match previous.and_then(|sample| lying.poll(now, recent, sample, pulse)) {
             Some(desk::Change::Down { since }) => {
@@ -1465,6 +1489,7 @@ pub async fn activity_task(i2c: Device) {
             }
             None => None,
         };
+        DESK.store(lying.on(), Ordering::Relaxed);
 
         // Per-minute history needs wall-clock time.
         let Some(utc_second) = clock::now_utc_seconds() else {

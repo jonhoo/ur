@@ -26,10 +26,12 @@ heart rate, alarms, timers, music control, "find my watch"), and these
 on top:
 
 - **Quiet nights:** once you fall asleep, or nap, notifications neither
-  buzz nor light the screen, and touches don't wake it, until your alarm
-  or you're up. Alarms, timers, calls, and "find my watch" still ring.
-  Woken with the button, the screen works as usual (dimly) while you use
-  it, and stays on while you hold a finger on it.
+  buzz nor light the screen, and touches don't wake it (in a nap, they
+  do), until your alarm or you're up. Alarms, timers, calls, and "find
+  my watch" still ring. Woken with the button, the screen works as usual
+  (dimly) while you use it, and stays on while you hold a finger on it.
+  A watch lying level on a desk, face up, isn't asleep: after 10 minutes
+  there, touches don't wake it either, until you pick it up.
 - **Sleep stages and smart wake:** light, deep, and REM sleep, from
   movement and heart rate. Smart wake rings in the half hour before your
   time when you stir after ten minutes of light sleep (not deep or REM),
@@ -509,7 +511,9 @@ The watch thinks you're asleep: it's a quiet night. It ends with the
 morning's first alarm, or once you've been up for 22 minutes (7 after a
 nap, which is sleep between 09:00 and 20:00, or after dozing off again
 before noon once an alarm has rung or you've double-pressed). If you're
-up before either, double-press the button.
+up before either, double-press the button. A watch left lying still off
+your wrist can pass for asleep too, unless it lies level and face up (on
+a desk, or the charger), which it recognises.
 
 ### N02: The watch says "TEXT AS BITMAPS"
 

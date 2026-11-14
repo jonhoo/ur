@@ -455,6 +455,7 @@ pub fn last_sleep(minutes: usize, kind: impl Fn(usize) -> Kind) -> Option<(usize
 /// daytime ([`nap_hours`]) ends after [`NAP_AWAKE`] minutes awake, not
 /// [`QUIET_AWAKE`]. Waking from a nap is waking up, not a trip to the
 /// bathroom; and noon, which ends any night, would cut a nap short anyway.
+/// (Taps work in a nap, too: see `crate::desk::touch_sleeps`.)
 ///
 /// So does a **doze** after getting up: once an alarm has rung, or the
 /// wearer has ended the night with the button, before noon ([`morning`]),
@@ -491,9 +492,10 @@ pub struct Night {
     /// When the wearer was last asleep. Meaningful only while quiet: it's
     /// set on falling asleep, which starts the night.
     last_asleep: u32,
-    /// Whether this is a nap (see [`nap_hours`]) or a doze after getting
-    /// up, which end sooner.
-    nap: bool,
+    /// Which quiet it is: a nap (see [`nap_hours`]) or a doze after
+    /// getting up end sooner, and only a nap lets taps through (see
+    /// `crate::ui`).
+    rest: Rest,
     /// Whether the wearer got up this morning (an alarm or the button, see
     /// [`Night::end`]), until noon: falling asleep is then a doze. (In
     /// what was `Night`'s padding: it stays 8 bytes.)
@@ -533,9 +535,10 @@ pub fn morning(local_second: Option<i64>) -> bool {
 }
 
 /// Which quiet starts as the wearer falls asleep.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Rest {
     /// A night, which ends after [`QUIET_AWAKE`] minutes awake.
+    #[default]
     Night,
     /// A nap ([`nap_hours`]), which ends after [`NAP_AWAKE`].
     Nap,
@@ -568,6 +571,11 @@ impl Night {
     /// Whether it's the quiet night now.
     pub fn quiet(&self) -> bool {
         self.quiet
+    }
+
+    /// Which quiet it is now, if it's quiet.
+    pub fn rest(&self) -> Option<Rest> {
+        self.quiet.then_some(self.rest)
     }
 
     /// Call regularly (every second or minute; it only compares times) with
@@ -608,10 +616,14 @@ impl Night {
                 Rest::Night
             };
             self.quiet = fell_asleep;
-            self.nap = rest != Rest::Night;
+            self.rest = rest;
             return fell_asleep.then_some(Change::Quiet(rest));
         }
-        let awake_limit = if self.nap { NAP_AWAKE } else { QUIET_AWAKE };
+        let awake_limit = if self.rest == Rest::Night {
+            QUIET_AWAKE
+        } else {
+            NAP_AWAKE
+        };
         let over = if noon {
             Over::Noon
         } else if now.wrapping_sub(self.last_asleep) > awake_limit as u32 * 60 {

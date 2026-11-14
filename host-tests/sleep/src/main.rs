@@ -1765,6 +1765,8 @@ mod proofs {
         let mut night = Night::default();
         // What the night should be, kept alongside.
         let (mut quiet, mut was_asleep, mut last_asleep, mut nap) = (false, false, 0u32, false);
+        // Which quiet it is, while it is.
+        let mut rest = Rest::Night;
         let mut up_this_morning = false;
         let mut now = 0u32;
         for _ in 0..4 {
@@ -1794,7 +1796,7 @@ mod proofs {
                 sleep::QUIET_AWAKE
             } as u32
                 * 60;
-            let rest = if up_this_morning {
+            let starts = if up_this_morning {
                 Rest::Doze
             } else if nap_hours {
                 Rest::Nap
@@ -1802,7 +1804,7 @@ mod proofs {
                 Rest::Night
             };
             let expected = if !quiet {
-                (asleep && !was_asleep).then_some(Change::Quiet(rest))
+                (asleep && !was_asleep).then_some(Change::Quiet(starts))
             } else if noon {
                 Some(Change::Over(Over::Noon))
             } else if now - last_asleep > limit {
@@ -1812,12 +1814,15 @@ mod proofs {
             };
             assert_eq!(change, expected);
             match change {
-                Some(Change::Quiet(rest)) => (quiet, nap) = (true, rest != Rest::Night),
+                Some(Change::Quiet(started)) => {
+                    (quiet, nap, rest) = (true, started != Rest::Night, started)
+                }
                 Some(Change::Over(_)) => quiet = false,
                 None => {}
             }
             was_asleep = asleep;
             assert_eq!(night.quiet(), quiet);
+            assert_eq!(night.rest(), quiet.then_some(rest));
         }
     }
 }
