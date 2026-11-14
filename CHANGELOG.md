@@ -16,13 +16,17 @@ missing below were test builds for the dev kit.
 
 ### Changed
 
-- Draw Living Tokyo's notification card's noodle bar as a ramen stall at the panel's full resolution, finer than the rest of the screen: the app's noren lettered RAMEN over the counter, a red lantern at each end of the eaves, a steaming bowl and a stock pot on the counter, four red stools, and a menu board on the street; lit and steaming in the evening, dimmer in the small hours, shuttered with its lanterns out from 04:00, its lights broken up in the wet street on a rainy night; in the dim look, its outlines and the lettered noren (28d93db)
+- Draw every Living Tokyo screen as its city at street level, in place of Retro's screens in its colours: Today as a street of buildings, one an hour, under the heart rate's neon tube; Last night as an overnight sleeper train; a notification as a ramen stall under the app's noren; an alarm ringing as a level crossing at night; the alarms as a station's departure board; Settings as wooden menu tags; Info as a station's information board; the music as a record turning in a small bar; the air as a bowl steaming in a small room; a call as a phone booth; finding the watch as HERE in a puddle; the button grid as a drinks machine; and pairing, an update, storage mode and switching off in the same city. Lettering and finer detail are drawn at the panel's full resolution, each screen keeps one calm moving detail, and rain stands still, re-placed each minute, to spare the battery; a screen that isn't moving costs next to nothing to keep showing (5a5d9f0, 7f048b1)
+- Hold about 2½ days of a worn watch in the logging build's (`ur-logging`) field log, rather than under one (about 20 hours since 0.11.0): it now packs its busiest lines, the accelerometer's every 2 s and the heart-rate sensor's samples, so decode a fetched log with `defmt-print` and then `scripts/expand_log.py`, which writes them back as before (logs from older builds pass through unchanged). Log times are now in milliseconds rather than microseconds. The `ur` build is unchanged (bf66d61, e357323)
 
 ### Deprecated
 
 ### Removed
 
 ### Fixed
+
+- Stop counting a watch lying on a desk as a nap (or a night): a watch that has lain level and face up (on a desk, a table, or the charger) for 10 minutes, without a heart rate reading, is now off the wrist back to when it was set down, so it never starts a quiet night or nap, and Gadgetbridge gets those minutes as not worn rather than as sleep, and the still minutes just before taking the watch off no longer count as sleep either; every night and nap in the field logs keeps exactly the sleep it had, and a watch lying on its side or face down still passes for asleep (24a6e4b, ce28f19)
+- Wake the touch controller as soon as the watch is picked up, put on, or the wrist turns, rather than leaving taps dead until sleep tracking sees the wearer up; keep it on through a nap, where taps now wake the screen and play music as by day; and let it sleep on a desk, where taps do nothing until the watch is picked up; in a night's (or a morning doze's) quiet, taps with the screen off still do nothing, as bedding makes them (39561bc)
 
 ### Security
 

@@ -8,7 +8,9 @@
 //! later fetches them over Bluetooth (`scripts/fetch-log.py`, through the
 //! service in [`crate::ble`]) and decodes them with `defmt-print` and the
 //! ELF of the build that wrote them. So the field log costs no formatting
-//! code on the watch, and holds exactly what the probe would have shown.
+//! code on the watch, and holds what the probe would have shown, but for
+//! its busiest lines, which a field build packs (see [`crate::log_pack`];
+//! `scripts/expand_log.py` unpacks them after decoding).
 //!
 //! Not for builds read through a probe: the probe and this module would
 //! each take whatever the other didn't.
@@ -39,8 +41,10 @@ use crate::rtt_ring;
 use crate::spi_flash::{self, SpiFlash};
 use crate::spi_flash::{FLASH, SECTOR};
 
-/// The top half of the 4 MiB SPI flash: about 20 hours of a worn watch's
-/// debug-level logs (0.11.0-rc.2's, ~110 KB an hour awake and ~70 asleep).
+/// The top half of the 4 MiB SPI flash: about 2.7 days of a worn watch's
+/// debug-level logs, at ~40 KB an hour awake and ~16 asleep (0.11.1's
+/// log, packed as 0.12 logs it: see [`crate::log_pack`]). It was ~108 and
+/// ~75, under a day, before the packing.
 pub const REGION: core::ops::Range<u32> = 0x20_0000..0x40_0000;
 pub const SECTORS: u32 = (REGION.end - REGION.start) / SECTOR;
 

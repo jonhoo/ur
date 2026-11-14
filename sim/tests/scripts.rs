@@ -871,6 +871,37 @@ fn a_double_press_ends_the_quiet_night() {
     assert!(ok, "{log}");
 }
 
+/// Taps go to the touch controller in a nap, as by day; on a desk, it
+/// sleeps, as in the night's quiet, until the watch is picked up; and in
+/// the night, a stir wakes it, though the night still ignores taps with
+/// the screen off (see `desk::touch_sleeps`). A touch through the
+/// recogniser (`press`, `lift`), as the controller would report it.
+#[test]
+fn the_touch_controller_sleeps_in_bed_and_on_a_desk() {
+    let dir = out("touch-sleeps");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    let tap = "press 40,40\nwait 150ms\nlift\nwait 1s\n";
+    std::fs::write(
+        &script,
+        format!(
+            "time 2026-11-14 15:00 +01:00\nasleep on\nwait 30s\nexpect quiet-night\n\
+             expect not screen-on\nexpect not touch-asleep\n{tap}expect screen-on\nexpect dim\n\
+             asleep off\nwait 10m\nexpect not quiet-night\n\
+             until 17:00\nexpect not screen-on\ndesk on\nwait 1s\nexpect touch-asleep\n\
+             {tap}expect not screen-on\ndesk off\nwait 1s\nexpect not touch-asleep\n\
+             {tap}expect screen-on\n\
+             until 23:00\nasleep on\nwait 30s\nexpect quiet-night\nexpect not screen-on\n\
+             expect touch-asleep\n{tap}expect not screen-on\n\
+             movement 1000\nwait 1s\nexpect not touch-asleep\n{tap}expect not screen-on\n\
+             movement 30\nwait 1s\nexpect touch-asleep\n"
+        ),
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+}
+
 /// Dozing off again after a morning alarm is quiet, as the night was, but
 /// ends after `sleep::NAP_AWAKE` (7) minutes up, not `QUIET_AWAKE` (22).
 #[test]

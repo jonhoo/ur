@@ -50,8 +50,9 @@
 //! [`LONG_PRESS`]: crate::gesture::LONG_PRESS
 //! [`HOLD_LIMIT`]: crate::gesture::HOLD_LIMIT
 //!
-//! When touches can't do anything (the screen is off in the quiet night;
-//! see [`set_asleep`]), the chip goes into deep sleep, as InfiniTime puts
+//! When touches can't do anything (the screen is off in the quiet night,
+//! or the watch lies on a desk; see [`crate::desk::touch_sleeps`]), the
+//! chip goes into deep sleep, as InfiniTime puts
 //! it to sleep with the screen: it stops scanning the panel, and sends no
 //! interrupts for bedding to set off. Only a reset (P0.10) wakes it, which
 //! then needs configuring again, as at boot. A touch in progress then is

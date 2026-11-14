@@ -721,8 +721,15 @@ impl UiLoop {
         }
         glance::set_screen_on(app.awake);
         // Taps don't wake the screen in the quiet night (see `ui`), so the
-        // touch controller can sleep while it's off.
-        touch::set_asleep(app.quiet_night() && !app.awake);
+        // touch controller can sleep while it's off; and on a desk, where
+        // no one taps it. Not in a nap, and never while the wrist stirs
+        // (see `desk::touch_sleeps`).
+        touch::set_asleep(crate::desk::touch_sleeps(
+            app.awake,
+            app.quiet_rest(),
+            activity::on_desk(),
+            activity::stirring(),
+        ));
         board.pet_watchdog();
         clock::checkpoint();
         None

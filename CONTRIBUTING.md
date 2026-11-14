@@ -609,16 +609,34 @@ contribution (as `scripts/run-<probe>.sh`).
 ## Field logs
 
 A sealed watch has no debug probe. The `ur-logging` build instead keeps
-everything it logs in the watch's 4 MB SPI flash (2 MB of it, about a day), and serves it over Bluetooth. Install it like any update (see
+everything it logs in the watch's 4 MB SPI flash (2 MB of it, about 2½
+days), and serves it over Bluetooth. Install it like any update (see
 the README), wear the watch, then, from a computer paired with it (the
 phone can stay connected), fetch the log with `scripts/fetch-log.py`
-(which needs [bleak]) and decode it with that build's ELF and
-[`defmt-print`][defmt-print]:
+(which needs [bleak]), decode it with that build's ELF and
+[`defmt-print`][defmt-print], and expand it:
 
 ```sh
 python3 scripts/fetch-log.py --address <MAC> --out logs
-defmt-print -e ur-logging-0.9.0.elf < logs/field-log-0.9.0.defmt > decoded.log
+defmt-print -e ur-logging-0.9.0.elf < logs/field-log-0.9.0.defmt \
+  | python3 -I scripts/expand_log.py > decoded.log
 ```
+
+The first fetch from a watch reads all of it (a couple of minutes); later
+ones read only the sectors written since, from a cache of what was fetched
+before (`--cache`, by default under `~/.cache/ur/field-log/`), so they take
+seconds. `--full` reads everything again.
+
+A field build packs its busiest lines, which were most of the log (see
+`src/log_pack.rs`): a minute of the accelerometer's polls to a line, and
+the heart rate sensor's samples as differences, with each second's level
+check on the same line. `scripts/expand_log.py` writes them back as the
+lines other builds log, which is what every script and replay here
+reads: each poll at its time to within ~0.1 s, with the step counter as
+it was then and the minute's last orientation. Everything else, and an
+older build's log, passes through as it is. `python3 -I
+scripts/expand_log_test.py [decoded.log]` tests it (on an older build's
+log too, if given one: packed and expanded, it comes back).
 
 Every build also logs why the chip last reset, and, after a panic or a
 watchdog reset, where the previous run was, with a backtrace: the call
@@ -699,13 +717,16 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   cadence and the readings that lock onto it. That's ~46 bytes a second
   of session, plus the longer sessions' own lines. On 0.11.0-rc.2's
   first night on a worn watch, the log took ~110 KB an hour awake and
-  ~70 asleep, so the 2 MB holds about 20 hours. Fetch the log at least
-  twice a day.
+  ~70 asleep, so the 2 MB held about 20 hours. Packed (see above),
+  0.11.1's worn day takes ~40 KB an hour awake and ~16 asleep, so the 2
+  MB holds about 2½ days of 16 waking hours (or 52 waking hours, or 130
+  asleep). Fetch the log at least every other day.
 
 Steps come from the accelerometer's own counter, which a log can't
 replay. A capture build, `UR_ACTIVITY_LOG=trace scripts/release.sh --pre
 accel tmp/accel`, also logs the accelerometer's samples while the wrist
-moves (about twice the log on a busy day, so fetch it twice a day), and
+moves, and each poll's own line besides the minute's (several times the
+packed log on a busy day, so fetch it twice a day), and
 `scripts/accel_samples.py decoded.log samples.txt [export.db]` extracts
 them, with the counter's steps and a Garmin's, for tuning a step counter
 of our own.

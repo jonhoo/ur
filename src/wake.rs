@@ -103,7 +103,7 @@
 //!   tolerance), or it's a swipe, which does nothing here.
 //! - In the quiet night (see [`crate::sleep::Night`]), nothing: bedding
 //!   and pillows press and tap all night, and the touch controller sleeps
-//!   anyway.
+//!   anyway. (A nap's quiet isn't the night's here: see `ui`.)
 //!
 //! What still gets through: a pair of light taps the arm made 9–10 canvas
 //! pixels from the bottom edge, 117 ms apart, which skipped with the

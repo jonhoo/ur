@@ -22,6 +22,10 @@
 //!   its length) matters: rolling over in bed changes the direction of
 //!   gravity but not its strength.
 //!
+//! The last sample of each poll also says which way up the watch lies,
+//! which tells a desk (see [`crate::desk`]): its minutes are off the
+//! wrist, so never sleep.
+//!
 //! Both are kept per minute for the last day ([`History`]), which is what
 //! Gadgetbridge fetches as activity samples, and today's step total is
 //! shown on the clock face. The history also holds each minute's heart
@@ -49,7 +53,7 @@ use embedded_hal_async::i2c::I2c;
 
 use crate::i2c::Device;
 use crate::step_counter::{Read, StepCounter};
-use crate::{clock, minute_ring, sleep, sleep_hold, stages};
+use crate::{clock, desk, minute_ring, sleep, sleep_hold, stages};
 
 // ==============================================================================
 // The BMA421
@@ -552,6 +556,14 @@ impl Sample {
         self.flags = (self.flags & 0x0F) | Self::SEEN | (worn << 4);
     }
 
+    /// Marks a recorded minute off the wrist, as found on a desk after
+    /// the fact (see [`desk`]).
+    fn set_off_wrist(&mut self) {
+        if self.seen() {
+            self.set_seen(Some(false));
+        }
+    }
+
     fn set_sleep(&mut self, kind: sleep::Kind) {
         self.flags = (self.flags & 0xF0) | kind as u8;
     }
@@ -667,6 +679,18 @@ impl History {
                 }
             }
             _ => *self.at(minute) = sample,
+        }
+    }
+
+    /// Marks the minutes from `first` to the newest off the wrist (see
+    /// [`Sample::set_off_wrist`]), as far as the history holds them.
+    fn off_wrist_since(&mut self, first: i64) {
+        let Some(newest) = self.newest else {
+            return;
+        };
+        let oldest = newest - HISTORY_MINUTES as i64 + 1;
+        for minute in first.max(oldest)..=newest {
+            self.samples[Self::slot(minute)].set_off_wrist();
         }
     }
 
@@ -962,6 +986,27 @@ pub fn still() -> bool {
 
 static STILL: AtomicBool = AtomicBool::new(false);
 
+/// Whether the watch lies on a desk, off the wrist (see [`desk`]), as of
+/// the last poll.
+pub fn on_desk() -> bool {
+    DESK.load(Ordering::Relaxed)
+}
+
+static DESK: AtomicBool = AtomicBool::new(false);
+
+/// Whether the wrist stirred lately (see [`desk::stirring`]): more than a
+/// twitch in the last minute, for the touch controller.
+pub fn stirring() -> bool {
+    desk::stirring(
+        embassy_time::Instant::now().as_secs() as u32,
+        STIRRED.load(Ordering::Relaxed),
+    )
+}
+
+/// When the wrist last stirred (see [`desk::STIR`]), in seconds of
+/// uptime. Boot counts as one.
+static STIRRED: AtomicU32 = AtomicU32::new(0);
+
 // ==============================================================================
 // Motion and glances
 // ==============================================================================
@@ -1218,6 +1263,55 @@ fn trace_samples(frames: &Frames, movement: u64) {
     defmt::trace!("activity: samples {=[?]}", raw[..3 * frames.len()]);
 }
 
+/// Logs a poll in a field build: a minute's polls to a line (see
+/// [`crate::log_pack::Polls`]), which `scripts/expand_log.py` turns back
+/// into a line a poll, as other builds log them. That line a poll was
+/// 60% of a worn day's field log, nearly all of it the timestamp and
+/// argument tags each line carries. A partly filled minute is lost if the
+/// watch resets or switches off.
+///
+/// A capture build (this module at trace) also logs each poll as before,
+/// at trace: `scripts/accel_samples.py` pairs each poll's samples (see
+/// [`trace_samples`]) with its steps, by time. (The expander then leaves
+/// the minute's line alone, rather than repeat its polls.)
+#[cfg(feature = "field-log")]
+fn log_poll(
+    polls: &mut crate::log_pack::Polls,
+    samples: u32,
+    movement: u64,
+    steps: u32,
+    count: u32,
+    [x, y, z]: [i16; 3],
+) {
+    defmt::trace!(
+        "activity: {} samples, movement {}, {} new steps (counter {}), last ({}, {}, {})",
+        samples,
+        movement,
+        steps,
+        count,
+        x,
+        y,
+        z
+    );
+    let now = embassy_time::Instant::now().as_millis();
+    if polls.push(now, samples, movement, steps) {
+        // Samples as counted from 24, so that each is nearly always a 0,
+        // which costs a bit. The expander knows the line by its start.
+        defmt::debug!(
+            "activity: polls over {=u32} ms: movement {=[?]}, steps {=[?]}, samples-24 {=[u8]}, counter {=u32}, last ({=i16}, {=i16}, {=i16})",
+            polls.span_ms(now),
+            polls.movement(),
+            polls.steps(),
+            polls.samples(),
+            count,
+            x,
+            y,
+            z
+        );
+        polls.clear();
+    }
+}
+
 #[embassy_executor::task]
 pub async fn activity_task(i2c: Device) {
     restore_today();
@@ -1270,8 +1364,13 @@ pub async fn activity_task(i2c: Device) {
     let mut counter = StepCounter::new(uptime());
     // The previous sample, to measure movement against.
     let mut previous: Option<[i16; 3]> = None;
+    // Whether the watch lies on a desk (see `desk`).
+    let mut lying = desk::Desk::default();
     // Movement accumulated within the current minute.
     let (mut minute, mut movement_sum, mut movement_samples) = (None::<i64>, 0u64, 0u32);
+    // The polls not yet in the field log (see `log_poll`).
+    #[cfg(feature = "field-log")]
+    let mut polls = crate::log_pack::Polls::new();
 
     loop {
         Timer::after_secs(POLL_SECONDS).await;
@@ -1328,6 +1427,16 @@ pub async fn activity_task(i2c: Device) {
         // the sensor's own axes), for orientation questions such as how
         // it's mounted, or sleep position.
         let [x, y, z] = previous.unwrap_or_default();
+        #[cfg(feature = "field-log")]
+        log_poll(
+            &mut polls,
+            samples,
+            moved * 8 / u64::from(samples.max(1)),
+            new_steps,
+            count,
+            [x, y, z],
+        );
+        #[cfg(not(feature = "field-log"))]
         defmt::debug!(
             "activity: {} samples, movement {}, {} new steps (counter {}), last ({}, {}, {})",
             samples,
@@ -1361,10 +1470,32 @@ pub async fn activity_task(i2c: Device) {
         );
         STEPLESS_POLLS.update(Ordering::Relaxed, Ordering::Relaxed, run(new_steps == 0));
 
+        // A stir, which wakes the touch controller; and whether the watch
+        // lies on a desk, from how this poll's last sample lies (see
+        // `desk`). Since when, should it have just been found to.
+        let now = uptime();
+        if recent > desk::STIR {
+            STIRRED.store(now, Ordering::Relaxed);
+        }
+        let pulse = crate::heart_reading::latest().map(|(_, at)| at.as_secs() as u32);
+        let landed = match previous.and_then(|sample| lying.poll(now, recent, sample, pulse)) {
+            Some(desk::Change::Down { since }) => {
+                info!("desk: lying still for {} s", now.saturating_sub(since));
+                Some(since)
+            }
+            Some(desk::Change::Up) => {
+                info!("desk: moved");
+                None
+            }
+            None => None,
+        };
+        DESK.store(lying.on(), Ordering::Relaxed);
+
         // Per-minute history needs wall-clock time.
-        let Some(utc_minute) = clock::now_utc_seconds().map(|s| s.div_euclid(60)) else {
+        let Some(utc_second) = clock::now_utc_seconds() else {
             continue;
         };
+        let utc_minute = utc_second.div_euclid(60);
         let new_minute = minute != Some(utc_minute);
         if new_minute {
             (minute, movement_sum, movement_samples) = (Some(utc_minute), 0, 0);
@@ -1381,7 +1512,18 @@ pub async fn activity_task(i2c: Device) {
                 .steps
                 .saturating_add(new_steps.min(u32::from(u16::MAX)) as u16);
             sample.movement = movement;
-            sample.set_seen(crate::heart::worn());
+            // Off the wrist on a desk, whatever the heart rate sensor
+            // last made of it (often nothing: a desk reflects its LED).
+            sample.set_seen(if lying.on() {
+                Some(false)
+            } else {
+                crate::heart::worn()
+            });
+            // And so it was since the desk's spell began: never asleep.
+            if let Some(since) = landed {
+                let seconds = i64::from(now.saturating_sub(since));
+                history.off_wrist_since((utc_second - seconds).div_euclid(60));
+            }
         });
         // Once a minute: revise the recent past's sleep, its stages, and the
         // summary.

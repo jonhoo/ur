@@ -67,6 +67,9 @@ jobs:
       - name: python syntax
         if: ${{ !cancelled() }}
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
+      - name: field log expander
+        if: ${{ !cancelled() }}
+        run: python3 -I scripts/expand_log_test.py
   clippy:
     runs-on: ubuntu-latest
     name: clippy

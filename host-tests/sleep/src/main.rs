@@ -13,6 +13,9 @@
 //! minute agrees with classifying the whole night at once), not that the
 //! thresholds match real wrists; field logs decide that.
 
+#[path = "../../../src/desk.rs"]
+#[allow(dead_code)]
+mod desk;
 #[path = "../../../src/sleep.rs"]
 #[allow(dead_code)]
 mod sleep;
@@ -380,6 +383,13 @@ fn asleep_minutes(kinds: &[Kind]) -> usize {
 /// the firmware does, to tune the thresholds on real nights. Uptimes become
 /// wall-clock time via the `clock:` lines.
 ///
+/// The watch lying on a desk is found as `activity` finds it (see
+/// [`desk`]), from each poll's last sample, and its minutes, back to the
+/// spell's start, are off the wrist; unless `UR_DESK=off`, to compare.
+/// (The firmware's are, only once the desk is found, up to 10 minutes
+/// on; the classifier here sees them so from the start.) Each sleep is
+/// listed after the timeline.
+///
 /// With `reference`, a file of `<UTC minute> <stage>` lines (`awake`,
 /// `light`, `deep`, or `rem`; see `scripts/hc-stages.py` for a Garmin's,
 /// from a Health Connect export), also prints those stages under ours, and
@@ -392,6 +402,10 @@ fn replay(path: &str, reference: Option<&str>) {
         Default::default();
     let mut heart: std::collections::BTreeMap<i64, u8> = Default::default();
     let mut worn: Option<bool> = None;
+    let desks = std::env::var("UR_DESK").as_deref() != Ok("off");
+    let mut lying = desk::Desk::default();
+    // When the latest heart rate reading was taken (seconds of uptime).
+    let mut pulse: Option<u32> = None;
     for line in text.lines() {
         let Some((uptime, rest)) = line.split_once(' ') else {
             continue;
@@ -413,6 +427,7 @@ fn replay(path: &str, reference: Option<&str>) {
         if let Some(rest) = message.strip_prefix("heart: ") {
             if message.contains(" BPM") && !message.contains("window") {
                 worn = Some(true);
+                pulse = Some(uptime as u32);
                 // "heart: 56 BPM after 24 s (...)", or "heart: 56 BPM" for
                 // the readings after the first: what the history records.
                 if let Some((bpm, _)) = rest.split_once(" BPM")
@@ -445,7 +460,30 @@ fn replay(path: &str, reference: Option<&str>) {
         let [samples, movement, steps, ..] = numbers[..] else {
             continue;
         };
+        // "…, last (-20, 14, -1031)": the poll's last sample, for the desk.
+        let sample = rest.split_once("last (").and_then(|(_, axes)| {
+            let axes: Vec<i16> = axes
+                .trim_end_matches(')')
+                .split(", ")
+                .filter_map(|axis| axis.parse().ok())
+                .collect();
+            <[i16; 3]>::try_from(axes).ok()
+        });
+        let poll = movement.min(u64::from(u16::MAX)) as u16;
+        let landed = match sample.filter(|_| desks) {
+            Some(sample) => match lying.poll(uptime as u32, poll, sample, pulse) {
+                Some(desk::Change::Down { since }) => Some(since),
+                _ => None,
+            },
+            None => None,
+        };
         let Some(minute) = minute else { continue };
+        if let (Some(since), Some((at, utc))) = (landed, anchor) {
+            let first = (utc + (f64::from(since) - at) as i64).div_euclid(60);
+            for (_, entry) in minutes.range_mut(first..minute) {
+                entry.3 = Some(false);
+            }
+        }
         let entry = minutes.entry(minute).or_insert((0, 0, 0, None));
         entry.0 += movement * samples;
         entry.1 += samples;
@@ -453,7 +491,7 @@ fn replay(path: &str, reference: Option<&str>) {
         entry.2 = entry
             .2
             .saturating_add(steps.min(u64::from(u16::MAX)) as u16);
-        entry.3 = worn;
+        entry.3 = if lying.on() { Some(false) } else { worn };
     }
     let (Some(&first), Some(&last)) = (minutes.keys().next(), minutes.keys().last()) else {
         println!("no activity lines with wall-clock anchors in {path}");
@@ -553,6 +591,22 @@ fn replay(path: &str, reference: Option<&str>) {
     }
     if let Some(reference) = &reference {
         compare(&kinds, reference);
+    }
+    // Each sleep, as `activity` would summarise it at its end: UTC
+    // minutes, and minutes asleep.
+    let mut until = kinds.len();
+    let mut sleeps = Vec::new();
+    while let Some((start, end, asleep)) = last_sleep(&kinds[..until]) {
+        sleeps.push((start, end, asleep));
+        until = start;
+    }
+    for (start, end, asleep) in sleeps.into_iter().rev() {
+        println!(
+            "sleep: minutes {}..{} (UTC), {} asleep",
+            first + start as i64,
+            first + end as i64,
+            asleep
+        );
     }
 }
 
@@ -1220,9 +1274,44 @@ mod tests {
         assert!(!kinds.iter().any(|k| k.is_sleep()));
     }
 
+    /// Sitting still, then taking the watch off and setting it down on a
+    /// desk (which `desk` finds, after the fact, back to when it was set
+    /// down): the minutes before can't borrow its stillness, as they did,
+    /// to make a nap (here, of the 15 minutes before it), neither in the
+    /// end nor at any pass on the way, nor be held back as a sleep that
+    /// may yet begin.
+    #[test]
+    fn still_before_a_desk_is_not_sleep() {
+        let worn = |movement| Minute {
+            seen: true,
+            movement,
+            steps: 0,
+            worn: Some(true),
+        };
+        let mut minutes = vec![worn(30); 15];
+        // Taking it off: a stir, as far as stillness goes.
+        minutes.push(worn(800));
+        minutes.extend(
+            [Minute {
+                worn: Some(false),
+                ..worn(25)
+            }; 60],
+        );
+        let (kinds, asleep) = firmware(&minutes, &[]);
+        assert!(!kinds.iter().any(|k| k.is_sleep()), "{}", timeline(&kinds));
+        assert!(!asleep.iter().any(|&a| a));
+        assert!(kinds[16..].iter().all(|&k| k == Kind::NotWorn));
+        // Nor does a stillness that ends on the desk hold anything back.
+        let n = minutes.len();
+        assert_eq!(
+            sleep::unsettled_onset(&minutes[n - sleep::ONSET_SPAN..]),
+            None
+        );
+    }
+
     /// Without the heart rate sensor's verdict (it hasn't looked yet), a
     /// motionless watch reads as sleep: a known limitation, pinned here so
-    /// a change is noticed.
+    /// a change is noticed. (A level one, face up, is found by `desk`.)
     #[test]
     fn off_the_wrist_without_heart_rate_looks_like_sleep() {
         let mut rng = Rng::new(1);
@@ -1676,6 +1765,8 @@ mod proofs {
         let mut night = Night::default();
         // What the night should be, kept alongside.
         let (mut quiet, mut was_asleep, mut last_asleep, mut nap) = (false, false, 0u32, false);
+        // Which quiet it is, while it is.
+        let mut rest = Rest::Night;
         let mut up_this_morning = false;
         let mut now = 0u32;
         for _ in 0..4 {
@@ -1705,7 +1796,7 @@ mod proofs {
                 sleep::QUIET_AWAKE
             } as u32
                 * 60;
-            let rest = if up_this_morning {
+            let starts = if up_this_morning {
                 Rest::Doze
             } else if nap_hours {
                 Rest::Nap
@@ -1713,7 +1804,7 @@ mod proofs {
                 Rest::Night
             };
             let expected = if !quiet {
-                (asleep && !was_asleep).then_some(Change::Quiet(rest))
+                (asleep && !was_asleep).then_some(Change::Quiet(starts))
             } else if noon {
                 Some(Change::Over(Over::Noon))
             } else if now - last_asleep > limit {
@@ -1723,12 +1814,15 @@ mod proofs {
             };
             assert_eq!(change, expected);
             match change {
-                Some(Change::Quiet(rest)) => (quiet, nap) = (true, rest != Rest::Night),
+                Some(Change::Quiet(started)) => {
+                    (quiet, nap, rest) = (true, started != Rest::Night, started)
+                }
                 Some(Change::Over(_)) => quiet = false,
                 None => {}
             }
             was_asleep = asleep;
             assert_eq!(night.quiet(), quiet);
+            assert_eq!(night.rest(), quiet.then_some(rest));
         }
     }
 }

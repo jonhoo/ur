@@ -206,7 +206,8 @@
 //!   still does, and so does turning the wrist, bar while sleep tracking
 //!   says the wearer is asleep (see `activity::motion_task`), and setting
 //!   the watch on its charger (dimly, without a buzz, as the button).
-//!   Once it's on, touches work as usual.
+//!   Once it's on, touches work as usual. Not in a nap: there, touches
+//!   work as by day (see `App::bedding`).
 //! - The charge finishing neither buzzes nor lights the screen: its
 //!   screen waits for the first proper wake after the night, and shows
 //!   then without the buzz (see [`App::on_charged`]).
@@ -216,8 +217,9 @@
 //! - Everything shows in the dim look (white, and red for what comes
 //!   second, on black, in retro; see [`crate::themes`]), at the glance's low
 //!   backlight.
-//! - With the screen off, the touch controller sleeps (see
-//!   [`crate::touch::set_asleep`]).
+//! - With the screen off, the touch controller sleeps, but for a nap's,
+//!   or while the wrist stirs (see [`crate::desk::touch_sleeps`]). It
+//!   sleeps on a desk too, by day or night.
 //! - Alarms (which end the night), timers, "find my watch", and calls still
 //!   ring and buzz.
 //!
@@ -231,8 +233,8 @@
 //! | The quiet night | While the wearer uses the screen | Why |
 //! |---|---|---|
 //! | Screen off [`SCREEN_TIMEOUT`] after the last input | Yields: a long press held on is input until it lifts (up to [`crate::gesture::HOLD_LIMIT`], a minute), so a grid hold's release comes at the lift. The same by day | It's input that lasts; the screen going off put the touch controller to sleep, ending the hold 10 s in |
-//! | The touch controller sleeps | Yields: only while the screen is off | A touch with the screen off is as likely bedding |
-//! | Touches don't wake the screen, nor do the media gestures with it off | Kept | As above; the button wakes it. A touch that woke it from a glance doesn't hold it on either |
+//! | The touch controller sleeps | Yields: only while the screen is off, and the wrist doesn't stir | A touch with the screen off is as likely bedding |
+//! | Touches don't wake the screen, nor do the media gestures with it off | Kept (not in a nap, which is as by day) | As above; the button wakes it. A touch that woke it from a glance doesn't hold it on either |
 //! | No glances while asleep (as sleep tracking says) | Kept | That's turning over in bed; and the screen's on anyway |
 //! | The dim look, at the low backlight | Kept | Eyes adapted to the dark, and maybe someone asleep alongside; a double press of the button ends the night for the full look |
 //! | Notifications don't buzz or light the screen | Yields already: one waiting shows as a banner while the screen is on. Still no buzz | The banner is seen; the buzz would only wake someone alongside |
@@ -894,6 +896,19 @@ impl App {
         self.night.quiet()
     }
 
+    /// Which quiet it is, if it's quiet now (see [`sleep::Night::rest`]).
+    pub fn quiet_rest(&self) -> Option<Rest> {
+        self.night.rest()
+    }
+
+    /// Whether a touch with the screen off may be bedding: in the quiet of
+    /// a night or a doze, in bed. Not in a nap, where taps work as by day
+    /// (the touch controller stays awake for them: see
+    /// `desk::touch_sleeps`).
+    fn bedding(&self) -> bool {
+        matches!(self.night.rest(), Some(Rest::Night | Rest::Doze))
+    }
+
     /// How bright the backlight should be now, while the screen is on.
     pub fn backlight(&self, now: Instant) -> brightness::Level {
         let waking = self
@@ -1490,9 +1505,9 @@ impl App {
         // its pair's, wakes the screen at once. Not in the quiet night,
         // when bedding presses on a wrist that turned in sleep could
         // otherwise start the music; there any touch only wakes the screen
-        // at once, as before.
+        // at once, as before. (A nap's quiet is as by day.)
         if let Some(until) = self.glance_until {
-            let media = self.connected && !self.night.quiet();
+            let media = self.connected && !self.bedding();
             let waking = core::mem::take(&mut self.glance_wake);
             // When a tap here lifted, for a second touch to be timed from.
             let tapped = match event {
@@ -1570,14 +1585,15 @@ impl App {
         // In the quiet night, no touch does anything: bedding and pillows
         // make deliberate-looking taps, and pairs of them (one night, a
         // 193 ms tap mid-screen, and two taps 150 ms apart, both lit the
-        // screen). The button and a glance still wake it.
+        // screen). The button and a glance still wake it. Not in a nap:
+        // there, taps work as by day (see `bedding`).
         let mut wake_tap = None;
         if !self.awake
             && let InputEvent::Touch(touch) = event
         {
             let kind = wake_kind(touch.gesture);
             let after = after(self.last_tap, touch, now);
-            let quiet = self.night.quiet();
+            let quiet = self.bedding();
             self.last_tap = None;
             let command = match wake::screen_off(
                 kind,
