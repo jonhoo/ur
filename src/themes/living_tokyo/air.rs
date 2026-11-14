@@ -228,7 +228,9 @@ fn render_window(canvas: &mut Canvas, humidity: Option<u8>, night: street::Night
             // Drops running down the glass, a pane's width apart.
             for i in 0..5 {
                 let dx = 6 + 12 * i;
-                let dy = (night.tick as i32 * 7 + i * 11).rem_euclid(bottom - top - 5);
+                // Where they are each minute, as the rain is (see
+                // `street::fine_rain`).
+                let dy = ((night.tick / 60) as i32 * 7 + i * 11).rem_euclid(bottom - top - 5);
                 canvas.fine_rect(inside + dx, top + dy, 1, 5, Color::TEXT_FAINT);
             }
         } else {

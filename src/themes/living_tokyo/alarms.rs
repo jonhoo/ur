@@ -671,9 +671,9 @@ pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &St
         canvas.fill_rect(3, 14, 56, 18, BACKGROUND);
         canvas.fill_rect(3, 37, 50, 15, BACKGROUND);
     }
-    let lit = render_crossing(canvas, tick.is_multiple_of(2), dim);
+    render_crossing(canvas, tick.is_multiple_of(2), dim);
     if !dim {
-        render_road(canvas, lit, rain, tick);
+        render_road(canvas, rain, tick);
     }
 
     let title = match kind {
@@ -708,24 +708,28 @@ pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &St
 }
 
 /// The road in front of the crossing, under the rails. Wet on a rainy
-/// night: the lit lamp (its middle at the panel's column `lit`) broken
-/// up in the road under it, and the rain splashing, moving with `tick`.
-/// Dry on a clear one: the lit lamp's red light pooled on it.
-fn render_road(canvas: &mut Canvas, lit: i32, rain: bool, tick: u64) {
-    // From the canvas's band of rows under the far city's (see
-    // `Canvas::refine`), so that a second's change of the light on it
-    // sends only the road's rows.
+/// night: the lamps' red broken up in the road under them, and the rain
+/// splashing, somewhere new each minute of `tick` (as the rain falls:
+/// see `street::fine_rain`). Dry on a clear one: their red light pooled
+/// on it.
+///
+/// Under both lamps, still, rather than under the lit one: following it
+/// from side to side every second drew the road's two bands again and
+/// sent their rows (see `Canvas::refine`), half as much again as the
+/// lamps' own flashing.
+fn render_road(canvas: &mut Canvas, rain: bool, tick: u64) {
     let road = 3 * (CROSSING_GROUND + 3);
+    let [l, r] = LAMPS;
     if !rain {
-        street::fine_glow(canvas, lit - 30, road - 2, 60, 12, Color::HEART);
+        street::fine_glow(canvas, l - 30, road - 2, r - l + 60, 12, Color::HEART);
         return;
     }
-    street::fine_reflection(canvas, lit - 12, 24, road, 6, Color::HEART);
-    // Splashes: a drop's crown, here and there, somewhere new each
-    // second.
+    street::fine_reflection(canvas, l - 12, r - l + 24, road, 6, Color::HEART);
+    // Splashes: a drop's crown, here and there.
+    let minute = tick / 60;
     for i in 0..6_u64 {
-        let x = ((i * 67 + tick * 53) % 160) as i32 + 8;
-        let y = road + 5 + ((i * 7 + tick * 3) % 19) as i32;
+        let x = ((i * 67 + minute * 53) % 160) as i32 + 8;
+        let y = road + 5 + ((i * 7 + minute * 3) % 19) as i32;
         canvas.fine_rect(x - 1, y, 3, 1, Color::TEXT_FAINT);
         canvas.fine_pixel(x - 2, y - 1, Color::TEXT_FAINT);
         canvas.fine_pixel(x + 2, y - 1, Color::TEXT_FAINT);
@@ -735,9 +739,8 @@ fn render_road(canvas: &mut Canvas, lit: i32, rain: bool, tick: u64) {
 
 /// The crossing: the crossbuck, the post, the lamps (the left one lit if
 /// `left`, else the right), the boom with its own small lamps and its
-/// gate's box, and the rail. Returns the lit lamp's middle, for its
-/// light on the road.
-fn render_crossing(canvas: &mut Canvas, left: bool, dim: bool) -> i32 {
+/// gate's box, and the rail.
+fn render_crossing(canvas: &mut Canvas, left: bool, dim: bool) {
     let ground = 3 * CROSSING_GROUND;
     // The post, up from the rail into the crossbuck, striped at its
     // foot as the boom is. Plain, it's on the canvas's grid, two of its
@@ -807,7 +810,6 @@ fn render_crossing(canvas: &mut Canvas, left: bool, dim: bool) -> i32 {
     canvas.fine_rect(POST - 6, BOOM - 6, 18, 1, Color::TEXT_FAINT);
 
     rails(canvas, ground);
-    LAMPS[lit]
 }
 
 /// A run of a crossing's yellow and black, `w` by `h` from the panel's
@@ -837,17 +839,17 @@ fn striped(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
 // ==============================================================================
 
 // "Find my watch" is HERE, big, lying in a puddle in the street at
-// night, with a drop falling into it each second and its ripples
-// spreading round the word: what catches the eye from across a room
+// night, a drop gathering over it and its ripples spreading round the
+// word: what catches the eye from across a room
 // (or from under a cushion). The title on a red sign, as what rings is,
 // and how to stop it under the puddle.
 //
 // Its one living thing is the water: a ring a second spreads round
 // HERE, one to three at once, each fainter as it spreads. On a clear
-// night, a drop gathers on the corner of an eave over the street and
-// falls, a second each; on a rainy one it rains, and the longer the
-// phone looks the harder it rains, the puddle pocked with more drops
-// each second. The hour is quiet: the far city's windows, low on the
+// night, a drop gathers on the corner of an eave over the street; on a
+// rainy one it rains (a still, placed afresh each minute: see
+// `street::fine_rain`), and the longer the phone looks the harder it
+// rains, the puddle pocked with more drops each second. The hour is quiet: the far city's windows, low on the
 // horizon, lit as its people are up. In the dim look, the rings still
 // spread (it's calling for someone), but there's no weather or city.
 //
@@ -867,7 +869,7 @@ const HERE: Style = Style {
 };
 /// The ripples' middle, and HERE's, in the panel's pixels.
 const RIPPLE: (i32, i32) = (120, 153);
-/// The corner of the eave the drop falls from on a clear night, the
+/// The corner of the eave the drop gathers under on a clear night, the
 /// panel's (the eave runs from it to the right edge): its gutter's end,
 /// over the ripples' middle.
 const EAVE: (i32, i32) = (118, 45);
@@ -888,7 +890,9 @@ pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration, dim: bool) {
             // Harder the longer it looks: another fall of it at 20 s,
             // and a third at 40, each a few rows behind the last.
             for fall in 0..(1 + seconds / 20).min(3) {
-                let tick = night.tick + fall * 2;
+                // Two of the rain's minutes apart (see
+                // `street::fine_rain`), each a few rows behind the last.
+                let tick = night.tick + fall * 2 * 60;
                 street::fine_rain(canvas, 0, ground, tick, Color::TEXT_FAINT);
             }
         } else {
@@ -906,16 +910,12 @@ pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration, dim: bool) {
     }
     eave(canvas, dim);
     if !dim && !night.rain {
-        // The drop: gathering under the gutter's end, then falling;
-        // both within one band of the canvas's rows (see
-        // `Canvas::refine`), so that it sends only that band's.
+        // The drop, gathering under the gutter's end. Still: falling, a
+        // second in two, it drew its band again and sent its rows every
+        // second (see `Canvas::refine`), beside the rings that already
+        // move.
         let ey = EAVE.1 + 3;
-        if seconds.is_multiple_of(2) {
-            street::fine_ellipse(canvas, cx - 1, ey, 3, 4, Color::TEXT);
-        } else {
-            canvas.fine_rect(cx, ey + 10, 1, 3, Color::TEXT_FAINT);
-            street::fine_ellipse(canvas, cx - 1, ey + 13, 3, 5, Color::TEXT);
-        }
+        street::fine_ellipse(canvas, cx - 1, ey, 3, 4, Color::TEXT);
     }
 
     street::title(canvas, "FIND MY WATCH", Color::HEART);
@@ -987,8 +987,8 @@ fn eave(canvas: &mut Canvas, dim: bool) {
             street::fine_ring(canvas, (tx, y - 5, 6, 8), 1, 2, Color::TEXT_FAINT);
         }
     }
-    // The gutter along its edge, a half-round lit along its lip, from
-    // whose end the drop falls.
+    // The gutter along its edge, a half-round lit along its lip, under
+    // whose end the drop gathers.
     canvas.fine_rect(x, y, 240 - x, 1, Color::TEXT_FAINT);
     if !dim {
         canvas.fine_rect(x, y + 1, 240 - x, 2, Color::TRACK);

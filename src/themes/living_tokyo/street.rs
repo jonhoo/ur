@@ -277,16 +277,19 @@ const FINE_DROPS: u32 = 28;
 /// rows with the wind, in `color`: the far buildings' ([`Color::TRACK`])
 /// where it's texture behind text, the hints' ([`Color::TEXT_FAINT`])
 /// where it's weather to be seen. Drawn first, so whatever's in front
-/// covers it. `tick` moves it on, 33 rows a second, which isn't a
-/// multiple of the drops' spacing, so they don't seem to stand still: a
-/// screen drawn every second passes the seconds, and the rain falls; one
-/// that isn't, a constant.
+/// covers it. Placed afresh each minute of `tick` (seconds), 33 rows on,
+/// as the clock's rain is: a still, which reads as rain at a glance as
+/// well as falling rain does, where rain falling a step a second changed
+/// every fine row it crosses every second, and so drew their bands again
+/// and sent them whole (see `Canvas::refine`): on a rainy night, two to
+/// six bands and 10 to 50 rows a second, more than the screens' own
+/// motion.
 ///
 /// The canvas's streaks, a canvas pixel wide, were stripes; a hairline
 /// reads as rain, and leaves the sky round it dark.
 pub(super) fn fine_rain(canvas: &mut Canvas, top: i32, bottom: i32, tick: u64, color: Color) {
     let height = (bottom - top).max(1) as u32;
-    let fall = (tick % u64::from(height)) as u32 * 33;
+    let fall = ((tick / 60) % u64::from(height)) as u32 * 33;
     for i in 0..FINE_DROPS {
         // Odd multipliers spread the drops over every column and row
         // before any repeats.
