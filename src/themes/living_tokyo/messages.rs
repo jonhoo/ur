@@ -991,8 +991,11 @@ fn render_turntable(canvas: &mut Canvas, on: bool, lamp: Shop, step: usize, dim:
     // it's bright.
     canvas.fine_rect(px, py, pw, ph, Color::TEXT_FAINT);
     canvas.fine_rect(px + 1, py + 1, pw - 2, ph - 2, Color::SHADOW);
-    for y in (py + 4..py + ph - 2).step_by(6) {
-        canvas.fine_rect(px + 3, y, pw - 6, 1, Color::TRACK);
+    // Its grain is a half-tone in the dim look, which keeps to shapes.
+    if !dim {
+        for y in (py + 4..py + ph - 2).step_by(6) {
+            canvas.fine_rect(px + 3, y, pw - 6, 1, Color::TRACK);
+        }
     }
     for (x, y) in [
         (px, py),
