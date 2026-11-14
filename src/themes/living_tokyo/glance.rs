@@ -273,14 +273,7 @@ fn render_charge_glance(canvas: &mut Canvas, status: &Status, to_full: ToFull) {
         let time = hhmm(i64::from(t.hour) * 60 + i64::from(t.minute));
         centred(canvas, TIME_Y, &time, 2, Color::TEXT_DIM);
     }
-    for (i, &(x, y)) in STARS.iter().enumerate() {
-        let color = if i % 3 == 0 {
-            Color::TEXT_DIM
-        } else {
-            Color::TEXT_FAINT
-        };
-        canvas.pixel(x, y, color);
-    }
+    super::street::stars(canvas, &STARS);
     super::clock::moon(canvas, 40 - MOON_D / 2, MOON_Y, MOON_D, status.battery);
     centred(
         canvas,
@@ -340,15 +333,8 @@ pub(super) fn render_charged(canvas: &mut Canvas, status: &Status) {
     const SIGN_Y: i32 = 56;
     const SIGN_H: i32 = 5 * SCALE + 6;
     canvas.clear(BACKGROUND);
-    for (i, &(x, y)) in CHARGED_STARS.iter().enumerate() {
-        let color = if i % 3 == 0 {
-            Color::TEXT_DIM
-        } else {
-            Color::TEXT_FAINT
-        };
-        canvas.pixel(x, y, color);
-    }
-    super::clock::disc(canvas, MOON_X, MOON_Y, MOON_D, Color::TEXT);
+    super::street::stars(canvas, &CHARGED_STARS);
+    super::street::disc(canvas, MOON_X, MOON_Y, MOON_D, Color::TEXT);
     super::clock::city(canvas, status.steps);
     // The lightning: a white-hot core in a glow of the windows' yellow,
     // three pixels across, so it reads at a glance; its fork thinner.

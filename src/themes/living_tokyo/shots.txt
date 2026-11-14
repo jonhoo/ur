@@ -1,7 +1,7 @@
 # Living Tokyo's screenshots, for its README: its clock face in each
-# scheme, Last night and LOOK at night (in LIVING TOKYO: it's a theme for
-# the night only), and the dim look's glance and notification. From
-# sim/:
+# scheme, Last night, LOOK, a notification and its banner, and an alarm
+# ringing, at night (in LIVING TOKYO: it's a theme for the night only),
+# and the dim look's glance and notification. From sim/:
 #
 #     cargo run --release --features theme-living_tokyo -- --out ../src/themes/living_tokyo/shots ../src/themes/living_tokyo/shots.txt
 #
@@ -122,3 +122,26 @@ glance
 wait 1s
 expect dim
 shot dim-glance-timers.png
+
+# A notification, lit: its banner over the clock face, then its page of
+# the history, on the wet street. After the timers, so that their
+# gestures don't move the shots above.
+button
+wait 1s
+notify Signal "Nora Lindqvist"
+wait 1s
+shot night-banner.png
+wait 6s
+down
+wait 1s
+shot night-notification.png
+button
+wait 1s
+
+# An alarm ringing towards dawn: the level crossing's lamps, under a sky
+# that has started to lighten.
+alarm 1 05:30 on
+until 05:30
+wait 1s
+expect buzzing
+shot night-ringing.png

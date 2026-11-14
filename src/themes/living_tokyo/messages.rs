@@ -1,18 +1,21 @@
 //! Living Tokyo's notifications, calls, and music.
 
-use super::BACKGROUND;
 use super::layout::{CALL_BUTTONS_Y, CALL_TEXT_WIDTH, MUSIC_CONTROLS_Y, MUSIC_TEXT_WIDTH};
+use super::{BACKGROUND, street};
 use crate::canvas::{Canvas, Color};
 use crate::font;
 use crate::themes::helpers::fitted;
 use crate::themes::{Call, Music};
 
-// Notifications look like the watch's other screens: their app is the
-// title, top left in the accent colour, as TODAY's or ALARMS' is, with
-// when it arrived top right in the history, as MUSIC's state is. Then a
-// rule, and who it's from, centred below, in a face that makes it the
-// most important thing on the screen. The banner is the same in short,
-// over the bottom of whatever shows.
+// A notification is a message from somewhere else in the city: its app
+// is a neon sign hanging where the other screens hang their titles, lit
+// in the app's own colour (see `neon`), with when it arrived top right
+// in the history, as MUSIC's state is. Who it's from is under it, centred,
+// in a face that makes it the most important thing on the screen, on a
+// wet street: the sign broken up in a puddle at the bottom, the rain
+// falling, and towards dawn, the sky lightening (all but the sign and
+// its reflection left out in the dim look, which holds still). The
+// banner is the same sign in short, over the bottom of whatever shows.
 //
 // Who it's from is the 3×5 at 2× if it fits on one line (up to about 9
 // letters), or on two of about the same width (see `large`): a poster,
@@ -24,6 +27,20 @@ use crate::themes::{Call, Music};
 // balanced lines read as a block, and a short name doesn't sit in a
 // corner. (The banner, which has to be compact, is the exception: see
 // `render_banner`.)
+
+/// The neon an app's sign is lit in, on the card and the banner alike:
+/// one of four, by a hash of its name (FNV-1a), so that the wearer comes
+/// to know an app's sign by its colour before reading it, as a street's
+/// regulars know its signs. No app is picked out by name: which colour
+/// an app gets is the hash's, and two may share one. Not the accent
+/// (the watch's own titles) nor the red (what rings).
+fn neon(app: &str) -> Color {
+    const NEONS: [Color; 4] = [Color::REM, Color::DEEP, Color::GOOD, Color::HEART_SHINE];
+    let hash = app.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+    });
+    NEONS[hash as usize % NEONS.len()]
+}
 
 /// Text columns of the banner and the notification card, as of a call:
 /// four columns (12 of the panel's pixels) clear of each edge, for a
@@ -83,30 +100,43 @@ fn large(who: &str, lines: &mut [font::Line; CARD_LINES]) -> usize {
 }
 
 /// A notification, with the whole screen (one that arrived with the screen
-/// off, in the dim look, or a page of the history): the app top left in
-/// the accent colour, and `time` top right (when it arrived, in the
-/// history; nothing on a notification that has just come, as that's now),
-/// a rule under them, as on Today, and who it's from below, centred, big
-/// if it's short (see [`large`]).
+/// off, in the dim look, or a page of the history): the app on its sign
+/// top left, and `time` top right (when it arrived, in the history;
+/// nothing on a notification that has just come, as that's now), and
+/// who it's from below, centred, big if it's short (see [`large`]), on
+/// the wet street.
 pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str) {
     canvas.clear(BACKGROUND);
-    // The app gives way to the time: 4 px between them, and an ellipsis.
-    let time_width = font::small_text_width(time);
-    let gap = if time.is_empty() { 0 } else { time_width + 4 };
-    fitted(
-        canvas,
-        (BANNER_TEXT.start, 3),
-        app,
-        font::Face::Small,
-        BANNER_TEXT_WIDTH - gap,
-        Color::ACCENT,
-    );
-    canvas.text_right(BANNER_TEXT.end, 3, time, Color::TEXT_DIM);
-    // Dashed, 2 px on and 1 off: Today's chart baselines, in a colour
-    // that shows in every look.
-    for x in (BANNER_TEXT.start..BANNER_TEXT.end).step_by(3) {
-        canvas.fill_rect(x, 11, 2, 1, Color::TEXT_FAINT);
+    let tube = neon(app);
+    // The street, lit: rain falling with the seconds, and towards dawn,
+    // the sky lightening behind it (see `street::daylight`): its first
+    // two levels only, a strip under the sign's reflection, as more would
+    // crowd it. Dim (a notification that came with the screen off), none
+    // of it: the sign, its reflection and the name, still.
+    if !street::dim(canvas) {
+        street::horizon(canvas, 0, 80, 80, street::daylight_now().min(2));
+        let tick = crate::clock::now().map_or(0, |t| u64::from(t.second));
+        street::rain(canvas, 14, 80, tick, Color::TRACK);
     }
+
+    // The app gives way to the time: 4 px between them (after the sign's
+    // tube), and an ellipsis.
+    let time_width = font::small_text_width(time);
+    let gap = if time.is_empty() { 0 } else { time_width + 6 };
+    let mut line = [font::Line::default()];
+    let room = BANNER_TEXT_WIDTH - gap;
+    let width = match font::wrap(app, font::Face::Small, room, &mut line) {
+        0 => 0,
+        _ => line[0].width(app, font::Face::Small),
+    };
+    street::hanging(canvas, width, tube);
+    if width > 0 {
+        canvas.line(BANNER_TEXT.start, 3, app, line[0], font::Face::Small, tube);
+    }
+    canvas.text_right(BANNER_TEXT.end, 3, time, Color::TEXT_DIM);
+    // The sign, as broken up in the wet street at the bottom: as wide as
+    // the app's name, and in its colour.
+    street::reflection(canvas, 2, width + 4, 70, 4, tube);
 
     // At 2× (pitch, capitals' height, and accents' rows, all doubled),
     // or in the medium face.
@@ -128,8 +158,8 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str)
         ),
     };
     // The capitals centred on the screen, which is where the eye expects
-    // a name (centring the space below the rule put them 6 px low), but
-    // no nearer the rule than two clear rows above the accents. Accents
+    // a name (centring the space below the header put them 6 px low), but
+    // no nearer the sign than two clear rows above the accents. Accents
     // above the first line are left out of the centring, as most names
     // have none.
     let block = pitch * (count as i32 - 1) + height;
@@ -151,8 +181,9 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str)
 const SMALL_PITCH: i32 = 5 + font::ACCENT_ROWS + 1;
 
 /// Over the bottom of the screen, as compact as it was before the
-/// redesign: an accent rule, the app (or what happened) small in the
-/// accent colour, and who it's from (or what to do) small too, on one
+/// redesign: a sign the width of the screen, lit in the app's neon (see
+/// [`neon`]), the app (or what happened) small in it, and who it's from
+/// (or what to do) small too, in the text's colour, on one
 /// line or two, ending in an ellipsis if even two won't do. The history
 /// has the rest. One line is 17 px, over the clock face's steps, leaving
 /// the heart rate and the next alarm in view; two, 25, from just under
@@ -162,23 +193,23 @@ const SMALL_PITCH: i32 = 5 + font::ACCENT_ROWS + 1;
 /// Small, not in the medium face that names are given on a screen of
 /// their own: its 7 px capitals, their accents, and a row clear of the
 /// app above them make 9 rows to the small font's 7, and the 17 px can't
-/// spare them without the app crowding the rule or the text the bottom
-/// edge. Rows, from the rule: 1 clear, the app's 5, 1 clear (so Å's ring
+/// spare them without the app crowding the tube or the text the bottom
+/// edge. Rows, from the tube: 1 clear, the app's 5, 1 clear (so Å's ring
 /// never touches it), 2 for accents, 5 for the capitals, and 2 clear at
 /// the bottom.
 pub(super) fn render_banner(canvas: &mut Canvas, app: &str, who: &str) {
     let mut lines = [font::Line::default(); 2];
     let count = font::wrap(who, font::Face::Small, BANNER_TEXT_WIDTH, &mut lines).max(1);
     let top = 63 - SMALL_PITCH * (count as i32 - 1);
-    canvas.fill_rect(0, top, 80, 80 - top, BACKGROUND);
-    canvas.fill_rect(0, top, 80, 1, Color::ACCENT);
+    let tube = neon(app);
+    street::sign(canvas, 0, top, 80, 80 - top, tube);
     fitted(
         canvas,
         (BANNER_TEXT.start, top + 2),
         app,
         font::Face::Small,
         BANNER_TEXT_WIDTH,
-        Color::ACCENT,
+        tube,
     );
     for (i, &line) in lines[..count].iter().enumerate() {
         let y = top + 2 + 5 + 1 + font::ACCENT_ROWS + SMALL_PITCH * i as i32;

@@ -34,6 +34,7 @@
 
 use core::fmt::Write as _;
 
+use super::street::{self, disc, in_disc};
 use crate::battery::Battery;
 use crate::canvas::{Canvas, Color, HEIGHT};
 use crate::font;
@@ -224,15 +225,7 @@ pub(super) fn render_clock(canvas: &mut Canvas, face: &Face) {
 }
 
 fn render_sky(canvas: &mut Canvas, battery: &Battery) {
-    for (i, &(x, y)) in STARS.iter().enumerate() {
-        let color = if i % 3 == 0 {
-            Color::TEXT_DIM
-        } else {
-            Color::TEXT_FAINT
-        };
-        canvas.pixel(x, y, color);
-    }
-
+    street::stars(canvas, &STARS);
     moon(canvas, MOON_X, MOON_Y, MOON_D, battery);
 }
 
@@ -258,25 +251,6 @@ pub(super) fn moon(canvas: &mut Canvas, left: i32, top: i32, d: i32, battery: &B
         for x in 0..d {
             let inner = |x: i32, y: i32| in_disc(x - 1, y - 1, d - 2);
             if in_disc(x, y, d) && !inner(x, y) {
-                canvas.pixel(left + x, top + y, color);
-            }
-        }
-    }
-}
-
-/// Whether `(x, y)` is in the disc of diameter `d` whose bounding box
-/// starts at the origin, measured from pixel centres.
-fn in_disc(x: i32, y: i32, d: i32) -> bool {
-    let (dx, dy) = (2 * x + 1 - d, 2 * y + 1 - d);
-    dx * dx + dy * dy <= d * d
-}
-
-/// A disc `d` across, from `(left, top)`: the moon's, and the full
-/// charge's full moon.
-pub(super) fn disc(canvas: &mut Canvas, left: i32, top: i32, d: i32, color: Color) {
-    for y in 0..d {
-        for x in 0..d {
-            if in_disc(x, y, d) {
                 canvas.pixel(left + x, top + y, color);
             }
         }
