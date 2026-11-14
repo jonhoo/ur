@@ -13,6 +13,9 @@
 //! minute agrees with classifying the whole night at once), not that the
 //! thresholds match real wrists; field logs decide that.
 
+#[path = "../../../src/desk.rs"]
+#[allow(dead_code)]
+mod desk;
 #[path = "../../../src/sleep.rs"]
 #[allow(dead_code)]
 mod sleep;
@@ -380,6 +383,13 @@ fn asleep_minutes(kinds: &[Kind]) -> usize {
 /// the firmware does, to tune the thresholds on real nights. Uptimes become
 /// wall-clock time via the `clock:` lines.
 ///
+/// The watch lying on a desk is found as `activity` finds it (see
+/// [`desk`]), from each poll's last sample, and its minutes, back to the
+/// spell's start, are off the wrist; unless `UR_DESK=off`, to compare.
+/// (The firmware's are, only once the desk is found, up to 10 minutes
+/// on; the classifier here sees them so from the start.) Each sleep is
+/// listed after the timeline.
+///
 /// With `reference`, a file of `<UTC minute> <stage>` lines (`awake`,
 /// `light`, `deep`, or `rem`; see `scripts/hc-stages.py` for a Garmin's,
 /// from a Health Connect export), also prints those stages under ours, and
@@ -392,6 +402,10 @@ fn replay(path: &str, reference: Option<&str>) {
         Default::default();
     let mut heart: std::collections::BTreeMap<i64, u8> = Default::default();
     let mut worn: Option<bool> = None;
+    let desks = std::env::var("UR_DESK").as_deref() != Ok("off");
+    let mut lying = desk::Desk::default();
+    // When the latest heart rate reading was taken (seconds of uptime).
+    let mut pulse: Option<u32> = None;
     for line in text.lines() {
         let Some((uptime, rest)) = line.split_once(' ') else {
             continue;
@@ -413,6 +427,7 @@ fn replay(path: &str, reference: Option<&str>) {
         if let Some(rest) = message.strip_prefix("heart: ") {
             if message.contains(" BPM") && !message.contains("window") {
                 worn = Some(true);
+                pulse = Some(uptime as u32);
                 // "heart: 56 BPM after 24 s (...)", or "heart: 56 BPM" for
                 // the readings after the first: what the history records.
                 if let Some((bpm, _)) = rest.split_once(" BPM")
@@ -445,7 +460,30 @@ fn replay(path: &str, reference: Option<&str>) {
         let [samples, movement, steps, ..] = numbers[..] else {
             continue;
         };
+        // "…, last (-20, 14, -1031)": the poll's last sample, for the desk.
+        let sample = rest.split_once("last (").and_then(|(_, axes)| {
+            let axes: Vec<i16> = axes
+                .trim_end_matches(')')
+                .split(", ")
+                .filter_map(|axis| axis.parse().ok())
+                .collect();
+            <[i16; 3]>::try_from(axes).ok()
+        });
+        let poll = movement.min(u64::from(u16::MAX)) as u16;
+        let landed = match sample.filter(|_| desks) {
+            Some(sample) => match lying.poll(uptime as u32, poll, sample, pulse) {
+                Some(desk::Change::Down { since }) => Some(since),
+                _ => None,
+            },
+            None => None,
+        };
         let Some(minute) = minute else { continue };
+        if let (Some(since), Some((at, utc))) = (landed, anchor) {
+            let first = (utc + (f64::from(since) - at) as i64).div_euclid(60);
+            for (_, entry) in minutes.range_mut(first..minute) {
+                entry.3 = Some(false);
+            }
+        }
         let entry = minutes.entry(minute).or_insert((0, 0, 0, None));
         entry.0 += movement * samples;
         entry.1 += samples;
@@ -453,7 +491,7 @@ fn replay(path: &str, reference: Option<&str>) {
         entry.2 = entry
             .2
             .saturating_add(steps.min(u64::from(u16::MAX)) as u16);
-        entry.3 = worn;
+        entry.3 = if lying.on() { Some(false) } else { worn };
     }
     let (Some(&first), Some(&last)) = (minutes.keys().next(), minutes.keys().last()) else {
         println!("no activity lines with wall-clock anchors in {path}");
@@ -553,6 +591,22 @@ fn replay(path: &str, reference: Option<&str>) {
     }
     if let Some(reference) = &reference {
         compare(&kinds, reference);
+    }
+    // Each sleep, as `activity` would summarise it at its end: UTC
+    // minutes, and minutes asleep.
+    let mut until = kinds.len();
+    let mut sleeps = Vec::new();
+    while let Some((start, end, asleep)) = last_sleep(&kinds[..until]) {
+        sleeps.push((start, end, asleep));
+        until = start;
+    }
+    for (start, end, asleep) in sleeps.into_iter().rev() {
+        println!(
+            "sleep: minutes {}..{} (UTC), {} asleep",
+            first + start as i64,
+            first + end as i64,
+            asleep
+        );
     }
 }
 

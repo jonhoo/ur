@@ -84,6 +84,7 @@ mod compare;
 mod day;
 mod debug;
 mod decimal;
+mod desk;
 mod dfu;
 mod dfu_slot;
 mod display;
