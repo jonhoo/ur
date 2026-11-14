@@ -96,18 +96,6 @@ impl Canvas {
         }
     }
 
-    /// The palette the canvas is in: for a theme to tell whether it's
-    /// drawing in its dim look (its `Theme::dim`, by address) on a screen
-    /// it isn't told so, such as a notification that came with the screen
-    /// off, or any screen in the quiet night.
-    #[allow(
-        dead_code,
-        reason = "offered to every theme, but Retro draws its dim look as its lit one"
-    )]
-    pub fn palette(&self) -> &'static Palette {
-        self.palette
-    }
-
     // ==========================================================================
     // Drawing
     // ==========================================================================

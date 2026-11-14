@@ -2729,14 +2729,16 @@ impl App {
     /// [`crate::themes`]).
     pub fn render(&self, canvas: &mut Canvas, status: &Status, now: Instant) {
         let theme = self.theme();
+        // Whether it's the dim look, for the theme to draw stiller there.
+        let dim = self.dim();
         // Updates, pairing, then calls take over the screen until they're
         // done.
         if let Some(percent) = status.update_progress {
-            theme.update(canvas, percent, now);
+            theme.update(canvas, percent, now, dim);
             return;
         }
         if let Some(passkey) = status.passkey {
-            theme.pairing(canvas, passkey);
+            theme.pairing(canvas, passkey, dim);
             return;
         }
         if let Some(call) = &self.call {
@@ -2745,15 +2747,15 @@ impl App {
                 elapsed: now - call.since,
                 silenced: call.silenced,
             };
-            theme.call(canvas, &call);
+            theme.call(canvas, &call, dim);
             return;
         }
         if let Some(ringing) = &self.ringing {
-            theme.ringing(canvas, ringing.kind, status);
+            theme.ringing(canvas, ringing.kind, status, dim);
             return;
         }
         if let Some(since) = self.finding {
-            theme.find(canvas, now - since);
+            theme.find(canvas, now - since, dim);
             return;
         }
         if self.showing_charged() {
@@ -2769,6 +2771,7 @@ impl App {
                 timers: core::array::from_fn(|t| {
                     self.alarm_state.remaining(t, status.uptime_secs as i64)
                 }),
+                dim,
             };
             theme.glance(canvas, &glance);
             return;
@@ -2782,7 +2785,7 @@ impl App {
             // alone. A tap wakes it to the clock, with the notification as
             // a banner, for the time.
             self.banner_text(banner.shows, &mut app, &mut who);
-            theme.notification(canvas, &app, &who, "");
+            theme.notification(canvas, &app, &who, "", dim);
             return;
         }
         if let Some(editing) = self.editing {
@@ -2792,7 +2795,7 @@ impl App {
                 state: &self.alarm_state,
                 uptime_secs: status.uptime_secs as i64,
             };
-            theme.editor(canvas, &editor);
+            theme.editor(canvas, &editor, dim);
             return;
         }
         let next_alarm = status.local_second.and_then(|second| {
@@ -2829,6 +2832,7 @@ impl App {
                     charge: Some(charge),
                     // The charge's drawing shows none.
                     timers: [None; alarm::TIMERS],
+                    dim,
                 };
                 theme.glance(canvas, &glance);
             }
@@ -2845,10 +2849,12 @@ impl App {
             // From the day's history, only while it shows: walking it
             // costs a little time, while keeping it up to date would cost
             // RAM.
-            Screen::Today => theme.today(canvas, crate::activity::today().as_ref(), status.steps),
-            Screen::LastNight => theme.last_night(canvas, status.sleep),
-            Screen::Alarms => theme.alarms(canvas, &self.alarms, &self.alarm_state, status),
-            Screen::PhoneAlarms => theme.phone_alarms(canvas, &self.phone_alarms),
+            Screen::Today => {
+                theme.today(canvas, crate::activity::today().as_ref(), status.steps, dim)
+            }
+            Screen::LastNight => theme.last_night(canvas, status.sleep, dim),
+            Screen::Alarms => theme.alarms(canvas, &self.alarms, &self.alarm_state, status, dim),
+            Screen::PhoneAlarms => theme.phone_alarms(canvas, &self.phone_alarms, dim),
             // As a notification that arrived with the screen off shows,
             // with when it arrived in its corner, and the handles.
             Screen::Notification(i) => match self.notifications.list.get(usize::from(i)) {
@@ -2864,7 +2870,7 @@ impl App {
                     }
                     n.app.write_to(&mut app);
                     n.who.write_to(&mut who);
-                    theme.notification(canvas, &app, &who, &arrived);
+                    theme.notification(canvas, &app, &who, &arrived, dim);
                 }
                 None => clock(canvas, None),
             },
@@ -2876,12 +2882,12 @@ impl App {
                         playing: music.playing,
                         elapsed: now - music.since,
                     };
-                    theme.music(canvas, &music);
+                    theme.music(canvas, &music, dim);
                 }
                 None => clock(canvas, None),
             },
             Screen::Air => match &status.air {
-                Some(sighting) => theme.air(canvas, sighting, now),
+                Some(sighting) => theme.air(canvas, sighting, now, dim),
                 None => clock(canvas, None),
             },
             Screen::Buttons => {
@@ -2900,12 +2906,12 @@ impl App {
                     title: page.title(),
                     rows: &rows,
                 };
-                theme.settings(canvas, &shown);
+                theme.settings(canvas, &shown, dim);
             }
-            Screen::Info => theme.info(canvas, status),
-            Screen::Storage => theme.storage_prompt(canvas),
-            Screen::HaQr => theme.bthome_qr(canvas, status.bthome.as_ref()),
-            Screen::HaKey => theme.bthome_key(canvas, status.bthome.as_ref()),
+            Screen::Info => theme.info(canvas, status, dim),
+            Screen::Storage => theme.storage_prompt(canvas, dim),
+            Screen::HaQr => theme.bthome_qr(canvas, status.bthome.as_ref(), dim),
+            Screen::HaKey => theme.bthome_key(canvas, status.bthome.as_ref(), dim),
         }
         match self.place() {
             // Notifications nobody has seen. The clock face has no other
@@ -2922,7 +2928,7 @@ impl App {
         }
         if let Some(banner) = &self.banner {
             self.banner_text(banner.shows, &mut app, &mut who);
-            theme.banner(canvas, &app, &who);
+            theme.banner(canvas, &app, &who, dim);
         }
     }
 
@@ -2930,7 +2936,7 @@ impl App {
     /// off (see `ui_loop`), drawn by the chosen scheme in whatever palette
     /// the canvas is in.
     pub fn render_off(&self, canvas: &mut Canvas, reason: crate::system_off::Reason) {
-        self.theme().off(canvas, reason);
+        self.theme().off(canvas, reason, self.dim());
     }
 }
 

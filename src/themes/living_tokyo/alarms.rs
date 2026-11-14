@@ -215,60 +215,96 @@ pub(super) fn render_editor(canvas: &mut Canvas, editor: &Editor) {
 // A level crossing at night, its two red lamps flashing in turn and its
 // boom down across the screen: what rings and won't stop until it's
 // dealt with. The crossing stands on the right; the time and what to do
-// read down the left, the title on a red sign, and the boom between the
-// time and the hints. It lives: the lamps take turns each second, the
-// rain falls, and the sky behind it lightens towards dawn (see
-// `street::daylight`), losing its stars, so an alarm at 06:30 rings
-// under another sky than one at 02:00.
+// read down the left, the title on a red sign, the time above the boom
+// and the hints below it. Behind, the far city along the horizon, and
+// the road in front.
+//
+// It lives on the hour and the night. The city's windows are lit as its
+// people are up (`street::city_lights`: most in the evening, hardly any
+// at 02:00), and from 04:00 the sky behind it glows, higher each hour
+// (`street::horizon`), so 02:00, 05:00 and 06:30 are three skies at a
+// glance. On a rainy night (`street::rainy`, a third of them) the rain
+// falls and the road is wet, the lit lamp and the windows broken up in
+// it; on a clear one, the stars are out, one twinkling. The lamps take
+// turns each second. In the dim look (the quiet night), no weather, no
+// glow, no twinkle: the lamps alone flash.
 
-/// The rails, and the ground the crossing stands on.
-const CROSSING_GROUND: i32 = 72;
+/// The horizon: the rails, the far city's ground, and the road's top.
+const CROSSING_GROUND: i32 = 69;
 /// The post's left column (it's 2 px wide), under the crossbuck.
 const CROSSING_POST: i32 = 69;
 /// The boom's top row: down, across the screen to the post.
-const CROSSING_BOOM: i32 = 40;
+const CROSSING_BOOM: i32 = 33;
 /// The lamps' lenses, each 6 across in a dark backplate 8 across, either
 /// side of the post: their left edges, and their top.
 const CROSSING_LENSES: [i32; 2] = [60, 73];
 const CROSSING_LENS_Y: i32 = 17;
 const LENS: i32 = 6;
+/// The far city's tallest building.
+const CROSSING_CITY: i32 = 15;
 
 /// Stars over the crossing, clear of the title, the time, the hints and
 /// the crossbuck; as the sky lightens, the last go first.
-const CROSSING_STARS: [(i32, i32); 8] = [
+const CROSSING_STARS: [(i32, i32); 10] = [
     (58, 3),
-    (6, 34),
-    (40, 33),
-    (62, 33),
-    (24, 35),
+    (6, 31),
+    (40, 30),
+    (24, 52),
+    (62, 36),
     (59, 11),
-    (54, 47),
+    (55, 44),
+    (12, 54),
+    (36, 50),
     (64, 49),
 ];
 
 /// The title, the time, big, and how to stop it, beside the crossing.
-pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &Status) {
+pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &Status, dim: bool) {
     canvas.clear(BACKGROUND);
     // The seconds it's been up, for the lamps and the rain; the hour,
-    // for the sky.
+    // for the sky and the city; the evening, for the weather.
     let tick = status.uptime_secs;
-    let minute = status
+    let hour = status.local_second.map_or(0, street::hour_of);
+    let rain = status
         .local_second
-        .map(|second| second.div_euclid(60).rem_euclid(24 * 60));
-    let light = minute.map_or(0, |minute| street::daylight((minute / 60) as u8));
-    let shown =
-        CROSSING_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-    street::stars(canvas, &CROSSING_STARS[..shown]);
-    // Dim (in the quiet night), no weather: the lamps alone flash.
-    if !street::dim(canvas) {
-        street::horizon(canvas, 0, 80, CROSSING_GROUND, light);
+        .is_some_and(|second| street::rainy(street::evening(second)));
+    let light = street::daylight(hour);
+
+    // The sky: the dawn's glow, then the stars still out on a clear
+    // night (one brighter, a second in three), then the rain on a wet
+    // one; and the far city in front of the glow.
+    if !dim {
+        // Three levels at most: the fourth's would reach the hints.
+        street::horizon(canvas, 0, 80, CROSSING_GROUND, light.min(3));
+    }
+    if !rain {
+        let shown =
+            CROSSING_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
+        street::stars(canvas, &CROSSING_STARS[..shown]);
+        if !dim && shown > 0 && tick.is_multiple_of(3) {
+            let (x, y) = CROSSING_STARS[(tick / 3) as usize % shown];
+            canvas.pixel(x, y, Color::TEXT);
+        }
+    }
+    street::skyline(
+        canvas,
+        0,
+        80,
+        CROSSING_GROUND,
+        CROSSING_CITY,
+        street::city_lights(hour),
+    );
+    if rain && !dim {
         street::rain(canvas, 0, CROSSING_GROUND, tick, Color::TEXT_FAINT);
         // The rain passes behind the time and the hints, not through
         // their letters, which it would break up.
-        canvas.fill_rect(3, 16, 56, 17, BACKGROUND);
-        canvas.fill_rect(3, 48, 50, 15, BACKGROUND);
+        canvas.fill_rect(3, 14, 56, 17, BACKGROUND);
+        canvas.fill_rect(3, 37, 50, 15, BACKGROUND);
     }
-    render_crossing(canvas, tick.is_multiple_of(2));
+    let lit = render_crossing(canvas, tick.is_multiple_of(2));
+    if !dim {
+        render_road(canvas, lit, rain, tick);
+    }
 
     let title = match kind {
         alarm::Kind::Smart => "GOOD MORNING",
@@ -277,9 +313,10 @@ pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &St
     };
     let end = street::title(canvas, title, Color::HEART);
     debug_assert!(end < 61, "the ringing's title runs into the crossbuck");
-    if let Some(minute) = minute {
+    if let Some(second) = status.local_second {
         // The clock's 2× digits, closer round the colon than the
         // editor's, to leave the crossing its room.
+        let minute = second.div_euclid(60).rem_euclid(24 * 60);
         let digits = [
             minute / 600,
             minute / 60 % 10,
@@ -287,21 +324,54 @@ pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &St
             minute % 10,
         ];
         for (&digit, x) in digits.iter().zip([4, 16, 34, 46]) {
-            draw_digit(canvas, x, 17, digit as u64, 2, Color::TEXT);
+            draw_digit(canvas, x, 15, digit as u64, 2, Color::TEXT);
         }
-        for y in [21, 27] {
+        for y in [19, 25] {
             canvas.fill_rect(29, y, 2, 2, Color::HEART);
         }
     }
-    // Under the boom, and clear of the dawn's glow (8 rows at most).
-    canvas.text(4, 49, "TAP: SNOOZE", Color::TEXT_DIM);
-    canvas.text(4, 57, "BUTTON: STOP", Color::TEXT_DIM);
+    canvas.text(4, 38, "TAP: SNOOZE", Color::TEXT_DIM);
+    canvas.text(4, 46, "BUTTON: STOP", Color::TEXT_DIM);
+}
+
+/// The road in front of the crossing, under the rails. Wet on a rainy
+/// night: the lit lamp (its lens's left edge at `lit`) broken up in the
+/// puddles under it, and the rain splashing, moving with `tick`. Dry on
+/// a clear one: the lit lamp's red light pooled on it.
+fn render_road(canvas: &mut Canvas, lit: i32, rain: bool, tick: u64) {
+    let road = CROSSING_GROUND + 2;
+    if rain {
+        street::reflection(canvas, lit - 1, LENS + 2, road + 1, 4, Color::HEART);
+        // Splashes: a drop's ring, three pixels, here and there, moving
+        // on each second.
+        for i in 0..5_u64 {
+            let x = ((i * 23 + tick * 17) % 54) as i32 + 2;
+            let y = road + 2 + ((i * 3 + tick) % 7) as i32;
+            if y < 79 {
+                canvas.pixel(x - 1, y + 1, Color::TEXT_FAINT);
+                canvas.pixel(x, y, Color::TEXT_FAINT);
+                canvas.pixel(x + 1, y + 1, Color::TEXT_FAINT);
+            }
+        }
+    } else {
+        // A pool of light, widening and thinning away from the lamp: a
+        // checkerboard on the first row, every third pixel on the next,
+        // every fourth on the last.
+        for row in 0..3 {
+            let y = road + 1 + row;
+            for x in lit - 1 - row..lit + LENS + 1 + row {
+                if (x + row) % (2 + row) == 0 {
+                    canvas.pixel(x, y, Color::HEART);
+                }
+            }
+        }
+    }
 }
 
 /// The crossing: the crossbuck, the post, the lamps (the left one lit if
-/// `left`, else the right), the boom with its own small lamps, the rails,
-/// and the lit lamp's reflection on the wet road.
-fn render_crossing(canvas: &mut Canvas, left: bool) {
+/// `left`, else the right), the boom with its own small lamps, and the
+/// rails. Returns the lit lens's left edge, for its reflection.
+fn render_crossing(canvas: &mut Canvas, left: bool) -> i32 {
     // Yellow and black, as Japan paints its crossings, bands `band` long
     // along a run: the black as the far buildings' slate, as black
     // proper would vanish into the night and leave yellow dashes.
@@ -314,8 +384,8 @@ fn render_crossing(canvas: &mut Canvas, left: bool) {
     };
     let post = CROSSING_POST;
     canvas.fill_rect(post, 12, 2, CROSSING_GROUND - 12, Color::TEXT_FAINT);
-    for y in 60..CROSSING_GROUND {
-        canvas.fill_rect(post, y, 2, 1, striped(y - 60, 2));
+    for y in CROSSING_GROUND - 10..CROSSING_GROUND {
+        canvas.fill_rect(post, y, 2, 1, striped(y - CROSSING_GROUND, 2));
     }
     // The crossbuck, a 17×12 X over the post, each arm 2 px thick: yellow,
     // with a thin dark band every fourth row, so that it reads as one
@@ -331,8 +401,8 @@ fn render_crossing(canvas: &mut Canvas, left: bool) {
         canvas.fill_rect(76 - dx, 1 + i, 2, 1, color);
     }
 
-    // The lamps' bracket, then each lamp: the lit one hazing red into the
-    // rain round its dark backplate.
+    // The lamps' bracket, then each lamp: the lit one hazing red round
+    // its dark backplate.
     let [first, last] = CROSSING_LENSES;
     canvas.fill_rect(
         first + 2,
@@ -366,15 +436,7 @@ fn render_crossing(canvas: &mut Canvas, left: bool) {
     }
 
     street::rails(canvas, 0, 80, CROSSING_GROUND);
-    // The lit lamp, broken up in the puddles under the crossing.
-    street::reflection(
-        canvas,
-        x - 1,
-        LENS + 2,
-        CROSSING_GROUND + 3,
-        3,
-        Color::HEART,
-    );
+    x
 }
 
 /// "Find my watch": HERE, big, with rings round it that spread a ring a

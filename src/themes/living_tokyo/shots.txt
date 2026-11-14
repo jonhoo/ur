@@ -123,9 +123,11 @@ wait 1s
 expect dim
 shot dim-glance-timers.png
 
-# A notification, lit: its banner over the clock face, then its page of
-# the history, on the wet street. After the timers, so that their
+# A notification, lit, in the evening (a clear one: see `street::rainy`):
+# its banner over the clock face, then its page of the history, in front
+# of the noodle bar, open and busy. After the timers, so that their
 # gestures don't move the shots above.
+until 21:30
 button
 wait 1s
 notify Signal "Nora Lindqvist"
@@ -138,10 +140,10 @@ shot night-notification.png
 button
 wait 1s
 
-# An alarm ringing towards dawn: the level crossing's lamps, under a sky
-# that has started to lighten.
-alarm 1 05:30 on
-until 05:30
+# An alarm ringing near dawn: the level crossing's lamps, under a sky
+# glowing behind the far city, its early risers' windows lit.
+alarm 1 06:10 on
+until 06:10
 wait 1s
 expect buzzing
 shot night-ringing.png

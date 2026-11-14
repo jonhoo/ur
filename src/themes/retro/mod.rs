@@ -119,11 +119,11 @@ impl Theme for Retro {
         glance::render_glance(canvas, glance);
     }
 
-    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>) {
+    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>, _dim: bool) {
         past::render_today(canvas, day, steps);
     }
 
-    fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>) {
+    fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>, _dim: bool) {
         past::render_last_night(canvas, sleep);
     }
 
@@ -133,23 +133,24 @@ impl Theme for Retro {
         settings: &alarm::Settings,
         state: &alarm::State,
         status: &Status,
+        _dim: bool,
     ) {
         alarms::render_alarms(canvas, settings, state, status);
     }
 
-    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone) {
+    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone, _dim: bool) {
         alarms::render_phone_alarms(canvas, phone);
     }
 
-    fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str) {
+    fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str, _dim: bool) {
         messages::render_card(canvas, app, who, arrived);
     }
 
-    fn music(&self, canvas: &mut Canvas, music: &Music) {
+    fn music(&self, canvas: &mut Canvas, music: &Music, _dim: bool) {
         messages::render_music(canvas, music);
     }
 
-    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant) {
+    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant, _dim: bool) {
         air::render_air(canvas, sighting, now);
     }
 
@@ -161,23 +162,23 @@ impl Theme for Retro {
         grid::render_buttons(canvas, grid, palette.is_dark());
     }
 
-    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage) {
+    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage, _dim: bool) {
         settings::render_settings(canvas, page);
     }
 
-    fn info(&self, canvas: &mut Canvas, status: &Status) {
+    fn info(&self, canvas: &mut Canvas, status: &Status, _dim: bool) {
         settings::render_info(canvas, status);
     }
 
-    fn storage_prompt(&self, canvas: &mut Canvas) {
+    fn storage_prompt(&self, canvas: &mut Canvas, _dim: bool) {
         system::render_storage_prompt(canvas);
     }
 
-    fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>) {
+    fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>, _dim: bool) {
         settings::render_ha_qr(canvas, identity);
     }
 
-    fn bthome_key(&self, canvas: &mut Canvas, identity: Option<&Identity>) {
+    fn bthome_key(&self, canvas: &mut Canvas, identity: Option<&Identity>, _dim: bool) {
         settings::render_ha_key(canvas, identity);
     }
 
@@ -195,35 +196,35 @@ impl Theme for Retro {
         }
     }
 
-    fn banner(&self, canvas: &mut Canvas, app: &str, who: &str) {
+    fn banner(&self, canvas: &mut Canvas, app: &str, who: &str, _dim: bool) {
         messages::render_banner(canvas, app, who);
     }
 
-    fn editor(&self, canvas: &mut Canvas, editor: &Editor) {
+    fn editor(&self, canvas: &mut Canvas, editor: &Editor, _dim: bool) {
         alarms::render_editor(canvas, editor);
     }
 
-    fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status) {
+    fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status, _dim: bool) {
         alarms::render_ringing(canvas, kind, status);
     }
 
-    fn find(&self, canvas: &mut Canvas, elapsed: Duration) {
+    fn find(&self, canvas: &mut Canvas, elapsed: Duration, _dim: bool) {
         alarms::render_find(canvas, elapsed);
     }
 
-    fn call(&self, canvas: &mut Canvas, call: &Call) {
+    fn call(&self, canvas: &mut Canvas, call: &Call, _dim: bool) {
         messages::render_call(canvas, call);
     }
 
-    fn pairing(&self, canvas: &mut Canvas, passkey: u32) {
+    fn pairing(&self, canvas: &mut Canvas, passkey: u32, _dim: bool) {
         system::render_pairing(canvas, passkey);
     }
 
-    fn update(&self, canvas: &mut Canvas, percent: u8, now: Instant) {
+    fn update(&self, canvas: &mut Canvas, percent: u8, now: Instant, _dim: bool) {
         system::render_update(canvas, percent, now);
     }
 
-    fn off(&self, canvas: &mut Canvas, reason: Reason) {
+    fn off(&self, canvas: &mut Canvas, reason: Reason, _dim: bool) {
         system::render_off(canvas, reason);
     }
 

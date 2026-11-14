@@ -104,78 +104,121 @@ pub(super) fn render_today(canvas: &mut Canvas, day: Option<&Day>, steps: Option
 // ==============================================================================
 
 // The night as an overnight sleeper train: it left when the wearer fell
-// asleep and arrived when they woke (the two times at its ends), and its
-// carriages are the night's stages, each as long as its share of the
-// time asleep, in the stage's colour. Over it, how long that was, big,
-// in the sky the wearer woke under. It lives on what it shows: a window
-// is lit for each share of the night spent lying awake (dark windows,
-// passengers asleep), the moon is the lower the later the wearer woke,
-// and the stars fewer, as from 04:00 the sky was lightening (see
-// `street::daylight`; no glow on the horizon here, where the train runs
-// along it); and, while it's looked at, a star twinkles with the seconds.
+// asleep and arrived when they woke (the two times on station signs at
+// its ends), and its carriages are the night's stages, each as long as
+// its share of the time asleep, in the stage's colour. Over it, how long
+// that was, big, and the sky the wearer woke under.
+//
+// It lives on the night it shows. A carriage window is lit for each share
+// of the night spent lying awake (dark windows, passengers asleep). The
+// sky is the one the train came in under: the moon setting behind the far
+// city the later the wearer woke, the city's windows as lit as its people
+// were up then (`street::city_lights`), and from 04:00 the dawn's glow
+// behind it, higher each hour (`street::horizon`). That night's weather
+// (`street::rainy`, keyed to the evening it started): rain, or stars, one
+// twinkling with the seconds. In the dim look (the quiet night), no rain,
+// no glow, no twinkle and no far city.
 
-/// The train's top row, the rail under it, and its length: the stages'
-/// bar's, columns 4..76.
-const TRAIN_Y: i32 = 53;
-const TRAIN_H: i32 = 6;
+/// The train's top row, its height, the rail under it, and its length:
+/// the stages' bar's, columns 4..76.
+const TRAIN_Y: i32 = 56;
+const TRAIN_H: i32 = 10;
 const RAIL_Y: i32 = TRAIN_Y + TRAIN_H;
 const TRAIN: i32 = 72;
+/// The departure and arrival signs' top: in the sky over the train's
+/// ends.
+const BOARD_Y: i32 = 41;
+/// The far city's tallest building, behind the train.
+const NIGHT_CITY: i32 = 12;
 
-/// The sky's stars, clear of the title, the moon and the figures; the
+/// The sky's stars, clear of the title, the figures and the signs; the
 /// last go first as the morning comes.
-const NIGHT_STARS: [(i32, i32); 7] = [
+const NIGHT_STARS: [(i32, i32); 9] = [
     (52, 4),
     (61, 9),
     (6, 16),
-    (74, 37),
+    (74, 35),
     (3, 30),
     (48, 11),
-    (70, 46),
+    (29, 44),
+    (70, 13),
+    (52, 46),
 ];
 
 /// The last night's (or nap's) sleep: how long, big, the train from when
 /// to when, and in which stages.
-pub(super) fn render_last_night(canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>) {
+pub(super) fn render_last_night(
+    canvas: &mut Canvas,
+    sleep: Option<crate::activity::Sleep>,
+    dim: bool,
+) {
     canvas.clear(BACKGROUND);
-    // When the wearer woke, in local time (as the offset is now), for
-    // the times and the sky.
+    // Local seconds (as the offset is now) of falling asleep and waking,
+    // for the times, the sky and the weather.
     let offset = crate::clock::utc_offset_minutes();
-    let local =
-        |utc_minute: i64| offset.map(|offset| (utc_minute + i64::from(offset)).rem_euclid(24 * 60));
+    let local = |utc_minute: i64| offset.map(|offset| (utc_minute + i64::from(offset)) * 60);
+    let left = sleep.and_then(|sleep| local(sleep.start_utc_minute));
     let woke = sleep.and_then(|sleep| local(sleep.end_utc_minute));
-    let light = woke.map_or(0, |minute| street::daylight((minute / 60) as u8));
-    let shown = NIGHT_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
-    street::stars(canvas, &NIGHT_STARS[..shown]);
-    // The twinkle: one of the stars still out, brighter, a second in
-    // three; none in the dim look (the quiet night), which holds still.
-    if let Some(now) = crate::clock::now()
-        && shown > 0
-        && now.second.is_multiple_of(3)
-        && !street::dim(canvas)
-    {
-        let (x, y) = NIGHT_STARS[usize::from(now.minute) % shown];
-        canvas.pixel(x, y, Color::TEXT);
+    // With no night to show, tonight's.
+    let now = street::local_now();
+    let hour = woke.or(now).map_or(0, street::hour_of);
+    let rain = left
+        .or(now)
+        .is_some_and(|second| street::rainy(street::evening(second)));
+    let light = street::daylight(hour);
+    let tick = now.map_or(0, |now| now as u64);
+
+    if !dim {
+        // Three levels at most: the fourth's would reach ASLEEP.
+        street::horizon(canvas, 0, 80, TRAIN_Y, light.min(3));
     }
-    // The moon, a crescent, high in the sky for a night that ended
-    // before 04:00, a 4 px lower each hour after, down to the horizon's
-    // haze by 10:00 (and high, with no time to place it by).
-    let hours_after_four = woke.map_or(0, |minute| (minute / 60 - 4).clamp(0, 6) as i32);
-    let moon_y = 2 + 4 * hours_after_four;
-    street::disc(canvas, 69, moon_y, 9, Color::TEXT_DIM);
-    street::disc(canvas, 66, moon_y - 1, 9, Color::BACKGROUND);
+    if !rain {
+        let shown =
+            NIGHT_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
+        street::stars(canvas, &NIGHT_STARS[..shown]);
+        if !dim && shown > 0 && tick.is_multiple_of(3) {
+            let (x, y) = NIGHT_STARS[(tick / 3) as usize % shown];
+            canvas.pixel(x, y, Color::TEXT);
+        }
+        // The moon, a crescent, setting: over the far city for a night
+        // that ended by 04:00, 2 px lower each hour after, behind its
+        // roofs by 10:00.
+        let hours_after_four = i32::from(hour.saturating_sub(4).min(6));
+        let moon_y = BOARD_Y + 2 * hours_after_four;
+        street::disc(canvas, 36, moon_y, 9, Color::TEXT_DIM);
+        street::disc(canvas, 33, moon_y - 1, 9, BACKGROUND);
+    }
+    // The far city, but not in the dim look, where its half-toned walls
+    // and lit windows would be a busy band in idle mode's few colours.
+    if !dim {
+        street::skyline(
+            canvas,
+            0,
+            80,
+            TRAIN_Y,
+            NIGHT_CITY,
+            street::city_lights(hour),
+        );
+    }
+    if rain && !dim {
+        street::rain(canvas, 0, TRAIN_Y, tick, Color::TEXT_FAINT);
+        // Behind ASLEEP, whose small letters it would break up; the big
+        // digits stand it.
+        canvas.fill_rect(26, 34, 28, 7, BACKGROUND);
+    }
     street::title(canvas, "LAST NIGHT", Color::ACCENT);
     street::rails(canvas, 0, 80, RAIL_Y);
 
     let Some(sleep) = sleep else {
         // An empty line: no train has come in.
-        canvas.text_centered(40, 36, "NO SLEEP YET", Color::TEXT_FAINT);
+        canvas.text_centered(40, 28, "NO SLEEP YET", Color::TEXT_FAINT);
         return;
     };
 
     // Time asleep (not counting time lying awake) as H:MM, in the clock's
     // 3× digits, laid out as its are (2 px between digits, 7 px for the
     // colon), and centred.
-    const TOP: i32 = 14;
+    const TOP: i32 = 12;
     const SCALE: i32 = 3;
     const DIGIT: i32 = font::DIGIT_W as i32 * SCALE;
     let (hours, minutes) = (sleep.asleep_minutes / 60, sleep.asleep_minutes % 60);
@@ -201,13 +244,16 @@ pub(super) fn render_last_night(canvas: &mut Canvas, sleep: Option<crate::activi
         draw_digit(canvas, x, TOP, u64::from(digit), SCALE, Color::TEXT);
         x += DIGIT + 2;
     }
-    canvas.text_centered(40, 39, "ASLEEP", Color::TEXT_DIM);
+    canvas.text_centered(40, 35, "ASLEEP", Color::TEXT_DIM);
 
-    // The train's departure and arrival, at its ends: falling asleep and
-    // waking, in local time.
-    if let (Some(left), Some(arrived)) = (local(sleep.start_utc_minute), woke) {
-        canvas.text(4, 46, &hhmm(left), Color::TEXT);
-        canvas.text_right(76, 46, &hhmm(arrived), Color::TEXT);
+    // The train's departure and arrival, on station signs over its ends:
+    // falling asleep and waking, in local time.
+    if let (Some(left), Some(woke)) = (left, woke) {
+        let minute = |second: i64| second.div_euclid(60).rem_euclid(24 * 60);
+        for (x, second) in [(2, left), (55, woke)] {
+            street::sign(canvas, x, BOARD_Y, 23, street::SIGN_H, Color::TEXT_FAINT);
+            canvas.text(x + 2, BOARD_Y + 2, &hhmm(minute(second)), Color::TEXT);
+        }
     }
 
     // The stages (see `crate::stages`): their shares of the time asleep as
@@ -246,34 +292,62 @@ pub(super) fn render_last_night(canvas: &mut Canvas, sleep: Option<crate::activi
             i32::from(minutes) * TRAIN / total
         };
         if width > 0 {
-            canvas.fill_rect(x, TRAIN_Y, width, TRAIN_H, color);
-            // A carriage's windows: 2×2, a pillar of 2 between, from 2 in;
-            // lit as `clock`'s are, by a permutation of their indices, so
-            // that the lit share is spread down the train.
-            let mut wx = x + 2;
-            while wx + 2 < x + width {
-                let hash = (window * 167 + 13) % 256;
-                let pane = if hash < lit {
-                    Color::HEART_SHINE
-                } else {
-                    Color::SHADOW
-                };
-                canvas.fill_rect(wx, TRAIN_Y + 1, 2, 2, pane);
-                window += 1;
-                wx += 4;
-            }
-            // The coupling between carriages: a gap a pixel wide.
-            if x > 4 {
-                canvas.fill_rect(x, TRAIN_Y, 1, TRAIN_H, BACKGROUND);
-            }
+            carriage(canvas, x, width, color, lit, &mut window);
         }
         x += width;
         let center = 16 + 24 * i as i32;
-        canvas.text_centered(center, 67, name, color);
-        canvas.text_centered(center, 74, &hhmm(i64::from(minutes)), Color::TEXT);
+        canvas.text_centered(center, 69, name, color);
+        canvas.text_centered(center, 75, &hhmm(i64::from(minutes)), Color::TEXT);
     }
-    // The front, heading for the arrival: its roof's corner rounded off,
-    // and a headlight.
-    canvas.pixel(4 + TRAIN - 1, TRAIN_Y, BACKGROUND);
-    canvas.pixel(4 + TRAIN - 1, TRAIN_Y + 3, Color::HEART_SHINE);
+    // The front, heading for the arrival: a sloped nose, a headlight,
+    // and its beam on the rails ahead; and the tail light, behind.
+    let front = 4 + TRAIN - 1;
+    canvas.fill_rect(front - 2, TRAIN_Y, 3, 1, BACKGROUND);
+    canvas.pixel(front, TRAIN_Y + 1, BACKGROUND);
+    canvas.pixel(front, TRAIN_Y + 5, Color::HEART_SHINE);
+    for dx in 1..80 - front {
+        for row in 4..7 {
+            if (dx + row) % 2 == 0 {
+                canvas.pixel(front + dx, TRAIN_Y + row, Color::HEART_SHINE);
+            }
+        }
+    }
+    canvas.pixel(4, TRAIN_Y + 5, Color::HEART);
+}
+
+/// One of the train's carriages, `width` wide from `x`, in a stage's
+/// `color`: a rounded roof, a row of windows (lit, of 256, as `lit` says,
+/// counting from `window`), a dark livery stripe, the skirt, and its
+/// wheels on the rail, with a coupling's gap before it unless it's the
+/// last carriage (the train's left end).
+fn carriage(canvas: &mut Canvas, x: i32, width: i32, color: Color, lit: u32, window: &mut u32) {
+    let y = TRAIN_Y;
+    canvas.fill_rect(x, y + 1, width, 7, color);
+    if width > 2 {
+        canvas.fill_rect(x + 1, y, width - 2, 1, color);
+    }
+    // Windows: 2×3, a pillar of 2 between, from 2 in; lit as `clock`'s
+    // are, by a permutation of their indices, so that the lit share is
+    // spread down the train.
+    let mut wx = x + 2;
+    while wx + 2 < x + width {
+        let pane = if (*window * 167 + 13) % 256 < lit {
+            Color::HEART_SHINE
+        } else {
+            Color::SHADOW
+        };
+        canvas.fill_rect(wx, y + 2, 2, 3, pane);
+        *window += 1;
+        wx += 4;
+    }
+    canvas.fill_rect(x, y + 6, width, 1, Color::SHADOW);
+    canvas.fill_rect(x, y + 8, width, 2, Color::SHADOW);
+    let mut wheel = x + 2;
+    while wheel + 2 <= x + width {
+        canvas.fill_rect(wheel, y + 9, 2, 1, Color::TEXT_FAINT);
+        wheel += 6;
+    }
+    if x > 4 {
+        canvas.fill_rect(x, y, 1, TRAIN_H - 2, BACKGROUND);
+    }
 }

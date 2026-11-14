@@ -313,10 +313,12 @@ flickers so), unless it scrolls.
 
 The dim look is the same methods, drawn in `dim()`'s palette: `glance`
 always, `notification` for one that arrived with the screen off, and
-every screen in the quiet night. `Face::dim` and `Grid::dim` say so, for
-the clock face and the button grid to draw otherwise there (Retro's
-greys the struck-through phone rune, and shades its keycaps for a dark
-palette).
+every screen in the quiet night. Each is told so, to draw otherwise
+there: a `dim` argument, or for the clock face, a glance and the button
+grid, `Face::dim`, `Glance::dim` and `Grid::dim` (Retro greys the
+struck-through phone rune, and shades its keycaps for a dark palette;
+Living Tokyo holds its city still, without rain or glow). Only
+`charged`, never dim, isn't told.
 
 ### Screens
 

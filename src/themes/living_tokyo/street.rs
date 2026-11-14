@@ -166,16 +166,126 @@ pub(super) fn rails(canvas: &mut Canvas, x: i32, w: i32, y: i32) {
 }
 
 // ==============================================================================
-// The time of night
+// Lanterns and steam
 // ==============================================================================
 
-/// Whether the screen is being drawn in the dim look ([`super::GLANCE`]):
-/// a glance, a notification that came with the screen off, the quiet
-/// night. There, the city holds still and calm (see DESIGN.md): no rain,
-/// no glow, nothing that moves with the seconds.
-pub(super) fn dim(canvas: &Canvas) -> bool {
-    core::ptr::eq(canvas.palette(), &super::GLANCE)
+/// A red paper lantern (chōchin), 5 wide and 7 tall from `(x, y)`, on a
+/// short cord from the row above: dark caps top and bottom, and a body
+/// that glows (with a haze round it, `glow`'s) when `lit`, or hangs dark.
+/// The lit body's middle column is the paper's warm light through it.
+pub(super) fn lantern(canvas: &mut Canvas, x: i32, y: i32, lit: bool) {
+    if lit {
+        glow(canvas, x, y + 1, 5, 2, Color::HEART);
+    }
+    canvas.pixel(x + 2, y - 1, Color::TEXT_FAINT);
+    canvas.fill_rect(x + 1, y, 3, 1, Color::TEXT_FAINT);
+    let body = if lit { Color::HEART } else { Color::TRACK };
+    canvas.fill_rect(x, y + 1, 5, 5, body);
+    if lit {
+        canvas.fill_rect(x + 2, y + 2, 1, 3, Color::HEART_SHINE);
+    }
+    canvas.fill_rect(x + 1, y + 6, 3, 1, Color::TEXT_FAINT);
 }
+
+/// How a wisp of steam sways, a column a row, over a cycle.
+const SWAY: [i32; 6] = [0, 1, 1, 0, -1, -1];
+
+/// Steam rising `height` rows from `(x, y)` (its source, at the bottom):
+/// two wisps, swaying and broken, fading as they rise. `tick`
+/// moves it up a row a second; a constant holds it still.
+pub(super) fn steam(canvas: &mut Canvas, x: i32, y: i32, height: i32, tick: u64) {
+    let tick = (tick % SWAY.len() as u64) as i32;
+    for (wisp, offset) in [(0, 0), (3, 3)] {
+        for row in 0..height {
+            // Every other row, and fewer higher up: wisps, not a column.
+            let phase = (row - tick + offset).rem_euclid(SWAY.len() as i32);
+            if phase % 2 == 1 || (row > height / 2 && phase % 3 == 0) {
+                continue;
+            }
+            let dx = SWAY[(phase as usize) % SWAY.len()];
+            let color = if row < height / 2 {
+                Color::TEXT_DIM
+            } else {
+                Color::TEXT_FAINT
+            };
+            canvas.pixel(x + wisp + dx, y - row, color);
+        }
+    }
+}
+
+// ==============================================================================
+// The far city
+// ==============================================================================
+
+/// Far buildings along a horizon, left to right: each one's width and
+/// height. They repeat across a screen wider than they are.
+const SKYLINE: [(i32, i32); 12] = [
+    (6, 9),
+    (4, 14),
+    (7, 7),
+    (5, 12),
+    (8, 10),
+    (3, 16),
+    (6, 8),
+    (7, 13),
+    (4, 6),
+    (6, 11),
+    (5, 15),
+    (7, 9),
+];
+
+/// The far city along the horizon `y` (its ground), `w` wide from `x`,
+/// at most `tallest` rows high (the table's heights scaled to it): its
+/// buildings in the far buildings' slate, their windows a pixel each,
+/// every other column and every third row, `lit` of 256 of them lit in
+/// the windows' warm yellow (see [`city_lights`]).
+pub(super) fn skyline(canvas: &mut Canvas, x: i32, w: i32, y: i32, tallest: i32, lit: u32) {
+    let mut left = x;
+    let mut window: u32 = 0;
+    let mut i = 0;
+    while left < x + w {
+        let (width, height) = SKYLINE[i % SKYLINE.len()];
+        let width = width.min(x + w - left);
+        let height = height * tallest / 16;
+        canvas.fill_rect(left, y - height, width, height, Color::TRACK);
+        let mut wy = y - height + 2;
+        while wy < y - 1 {
+            let mut wx = left + 1;
+            while wx < left + width - 1 {
+                // As the clock face's windows: a permutation of their
+                // indices, so `lit` lights its share wherever they are.
+                if (window * 167 + 13) % 256 < lit {
+                    canvas.pixel(wx, wy, Color::HEART_SHINE);
+                }
+                window += 1;
+                wx += 2;
+            }
+            wy += 3;
+        }
+        left += width + 1;
+        i += 1;
+    }
+}
+
+/// How many of the city's windows, out of 256, are lit at `hour`
+/// (local): most in the evening, fewer as the night goes on, hardly any
+/// in the small hours, a few early risers before dawn, and few by day,
+/// when the lights are off.
+pub(super) fn city_lights(hour: u8) -> u32 {
+    match hour {
+        18..=21 => 150,
+        22 | 23 => 100,
+        0 => 60,
+        1..=3 => 24,
+        4 => 32,
+        5 | 6 => 64,
+        _ => 16,
+    }
+}
+
+// ==============================================================================
+// The time of night, and the weather
+// ==============================================================================
 
 /// How light the sky is at `hour` (local), from 0, the dead of night, to
 /// [`DAYLIGHT`], day: up an hour at a time from 4 to 7, and down again
@@ -194,32 +304,70 @@ pub(super) fn daylight(hour: u8) -> i32 {
 /// The most [`daylight`] there is.
 pub(super) const DAYLIGHT: i32 = 4;
 
-/// The sky's light now, for a screen that isn't handed the time: the
-/// dead of night until the phone has set the clock.
-pub(super) fn daylight_now() -> i32 {
-    crate::clock::now().map_or(0, |t| daylight(t.hour))
+/// The local time now, as local seconds since 1970, if the phone has set
+/// the clock: for a screen that isn't handed the time.
+pub(super) fn local_now() -> Option<i64> {
+    let t = crate::clock::now()?;
+    Some(
+        t.days_since_epoch() * 86_400
+            + i64::from(t.hour) * 3600
+            + i64::from(t.minute) * 60
+            + i64::from(t.second),
+    )
 }
 
+/// The hour of local second `second`.
+pub(super) fn hour_of(second: i64) -> u8 {
+    (second.div_euclid(3600).rem_euclid(24)) as u8
+}
+
+/// How far up the sky the dawn's glow reaches, by level of [`daylight`].
+const GLOW_ROWS: [i32; DAYLIGHT as usize + 1] = [0, 4, 9, 15, 22];
+
 /// The glow of a sky lightening above the horizon, `w` wide from `x`, the
-/// row above `y` and up, for `level` of [`daylight`]: dithered rows, the
-/// windows' warm yellow nearest the horizon and the neon's violet above
-/// it, sparser the higher they are, two more rows a level. Drawn before
-/// the buildings, or whatever stands on the horizon.
+/// row above `y` and up, for `level` of [`daylight`], so that 02:00,
+/// 05:00 and 06:30 are three skies at a glance: nothing in the dead of
+/// night; then a band that grows a level at a time (4, 9, 15 and 22
+/// rows), the windows' warm yellow nearest the horizon (solid from the
+/// third level, dithered before), the neon's violet above it, and a
+/// sparse violet haze at its top. Drawn before the buildings, or
+/// whatever stands on the horizon, which stand dark against it.
 pub(super) fn horizon(canvas: &mut Canvas, x: i32, w: i32, y: i32, level: i32) {
-    for row in 0..2 * level {
-        let color = if row < level {
-            Color::HEART_SHINE
-        } else {
-            Color::REM
+    let rows = GLOW_ROWS[level.clamp(0, DAYLIGHT) as usize];
+    for row in 0..rows {
+        // Which quarter of the band, from the horizon up.
+        let (color, period) = match row * 4 / rows {
+            0 if level >= 3 => (Color::HEART_SHINE, 1),
+            0 | 1 => (Color::HEART_SHINE, 2),
+            2 => (Color::REM, 2),
+            _ => (Color::REM, 3),
         };
-        // An ordered dither: every other pixel in the two rows on the
-        // horizon (a checkerboard), every third in the two above, and so
-        // on up.
-        let period = 2 + row / 2;
         for dx in 0..w {
             if (dx + row) % period == 0 {
                 canvas.pixel(x + dx, y - 1 - row, color);
             }
         }
     }
+}
+
+/// The evening a local second belongs to, as days since 1970: a night
+/// runs from noon to noon, so 02:00 on the 10th is the 9th's evening, and
+/// a night's weather doesn't change at midnight.
+pub(super) fn evening(second: i64) -> i64 {
+    (second - 12 * 3600).div_euclid(86_400)
+}
+
+/// Whether it rains on the evening `evening` (see [`evening`]): about one
+/// night in three, picked from the date (not the weather, which the watch
+/// doesn't know), the same for every screen that night, and the same on
+/// every watch. A hash (murmur3's finaliser) rather than the date itself,
+/// so the rainy nights don't fall in a pattern.
+pub(super) fn rainy(evening: i64) -> bool {
+    let mut hash = evening as u32;
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x7feb_352d);
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(0x846c_a68b);
+    hash ^= hash >> 16;
+    hash.is_multiple_of(3)
 }

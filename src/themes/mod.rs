@@ -107,6 +107,14 @@ pub trait Theme: Sync {
     fn dim(&self) -> &Palette;
 
     // The clock, and the screens around it (see `crate::ui`).
+    //
+    // Every screen that can be drawn in the dim look (a glance, a
+    // notification that came with the screen off, and in the quiet night,
+    // any of them) is told whether it is: `dim` as an argument, or as a
+    // field of its view (`Face::dim`, `Glance::dim`, `Grid::dim`). The
+    // canvas is in `Theme::dim`'s palette then, but a theme may draw
+    // otherwise too: stiller, or with less, as idle mode wants calm.
+    // Only the full charge's screen, never dim, isn't told.
 
     /// The clock face, the screen the watch comes back to.
     fn clock(&self, canvas: &mut Canvas, face: &Face);
@@ -117,9 +125,9 @@ pub trait Theme: Sync {
     /// `ui::App::woke_on_charger`).
     fn glance(&self, canvas: &mut Canvas, glance: &Glance);
     /// Today: the steps and heart rate, by the hour.
-    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>);
+    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>, dim: bool);
     /// Last night's sleep, if any was tracked in the last day.
-    fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>);
+    fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>, dim: bool);
     /// The alarms, smart wake and timers (see [`Theme::alarm_at`]).
     fn alarms(
         &self,
@@ -127,37 +135,38 @@ pub trait Theme: Sync {
         settings: &alarm::Settings,
         state: &alarm::State,
         status: &Status,
+        dim: bool,
     );
     /// The phone's alarms, read-only.
-    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone);
+    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone, dim: bool);
     /// A notification with the whole screen: a page of the history, or
     /// one that arrived with the screen off (then in the dim look).
     /// `arrived` says when, in the history ([`crate::arrival`]); empty
     /// for one that has just come.
-    fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str);
+    fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str, dim: bool);
     /// What the phone is playing, with its controls (see
     /// [`Theme::music_control`]).
-    fn music(&self, canvas: &mut Canvas, music: &Music);
+    fn music(&self, canvas: &mut Canvas, music: &Music, dim: bool);
     /// A nearby room sensor's latest reading (see [`crate::aranet`]).
-    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant);
+    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant, dim: bool);
     /// The button grid (see [`crate::buttons`], and
     /// [`Theme::grid_button`]).
     fn buttons(&self, canvas: &mut Canvas, grid: &Grid);
     /// A settings screen, the look's or the button grid's: its title,
     /// and its rows, a setting each, as the UI words them (see
     /// [`SettingsPage`]).
-    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage);
+    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage, dim: bool);
     /// The watch's state: battery, uptime, the phone, the build.
-    fn info(&self, canvas: &mut Canvas, status: &Status);
+    fn info(&self, canvas: &mut Canvas, status: &Status, dim: bool);
     /// Asking whether to switch to storage mode (see
     /// [`Theme::storage_confirms`]).
-    fn storage_prompt(&self, canvas: &mut Canvas);
+    fn storage_prompt(&self, canvas: &mut Canvas, dim: bool);
     /// Home Assistant's key, as a QR code to scan (see
     /// [`Canvas::qr`]), or that there's none yet. A tap anywhere shows it
     /// as text.
-    fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>);
+    fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>, dim: bool);
     /// The same key as text, with the watch's address.
-    fn bthome_key(&self, canvas: &mut Canvas, identity: Option<&Identity>);
+    fn bthome_key(&self, canvas: &mut Canvas, identity: Option<&Identity>, dim: bool);
 
     // Drawn over the screen beneath.
 
@@ -167,27 +176,27 @@ pub trait Theme: Sync {
     /// A notification, or something the wearer should know, over the
     /// bottom of the screen: the app (or what happened) and who it's from
     /// (or what to do).
-    fn banner(&self, canvas: &mut Canvas, app: &str, who: &str);
+    fn banner(&self, canvas: &mut Canvas, app: &str, who: &str, dim: bool);
 
     // Screens that take over (and every touch).
 
     /// The alarm editor, over the alarms (see [`Theme::editor_button`]
     /// and [`Theme::editor_field`]).
-    fn editor(&self, canvas: &mut Canvas, editor: &Editor);
+    fn editor(&self, canvas: &mut Canvas, editor: &Editor, dim: bool);
     /// An alarm or a timer ringing: a tap anywhere snoozes, the button
     /// stops it.
-    fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status);
+    fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status, dim: bool);
     /// "Find my watch": `elapsed` is how long the phone has looked. Any
     /// touch finds it.
-    fn find(&self, canvas: &mut Canvas, elapsed: Duration);
+    fn find(&self, canvas: &mut Canvas, elapsed: Duration, dim: bool);
     /// A call ringing (see [`Theme::call_button`]).
-    fn call(&self, canvas: &mut Canvas, call: &Call);
+    fn call(&self, canvas: &mut Canvas, call: &Call, dim: bool);
     /// Pairing: the passkey to type on the phone.
-    fn pairing(&self, canvas: &mut Canvas, passkey: u32);
+    fn pairing(&self, canvas: &mut Canvas, passkey: u32, dim: bool);
     /// A firmware update arriving: how far along, in percent.
-    fn update(&self, canvas: &mut Canvas, percent: u8, now: Instant);
+    fn update(&self, canvas: &mut Canvas, percent: u8, now: Instant, dim: bool);
     /// The few seconds before the watch switches itself off, and why.
-    fn off(&self, canvas: &mut Canvas, reason: Reason);
+    fn off(&self, canvas: &mut Canvas, reason: Reason, dim: bool);
     /// The watch has just become fully charged on its cradle (see
     /// `ui::App::on_charged`): for a few seconds, with a buzz, so the
     /// wearer sees, from across the room, that it can come off. In the
@@ -321,6 +330,13 @@ pub struct Glance<'a> {
     /// none for one stopped, or ringing): shown with the time alone (not
     /// with the next turn, nor the charge).
     pub timers: [Option<i64>; alarm::TIMERS],
+    /// In the dim look: always, bar the charge screen woken on the
+    /// charger (see [`Theme::glance`]).
+    #[allow(
+        dead_code,
+        reason = "every theme draws its glances alike either way, so far"
+    )]
+    pub dim: bool,
 }
 
 /// The music screen's.
@@ -507,11 +523,11 @@ impl Theme for Scheme {
     fn glance(&self, canvas: &mut Canvas, glance: &Glance) {
         with_theme!(*self, theme => theme.glance(canvas, glance))
     }
-    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>) {
-        with_theme!(*self, theme => theme.today(canvas, day, steps))
+    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>, dim: bool) {
+        with_theme!(*self, theme => theme.today(canvas, day, steps, dim))
     }
-    fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>) {
-        with_theme!(*self, theme => theme.last_night(canvas, sleep))
+    fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>, dim: bool) {
+        with_theme!(*self, theme => theme.last_night(canvas, sleep, dim))
     }
     fn alarms(
         &self,
@@ -519,65 +535,66 @@ impl Theme for Scheme {
         settings: &alarm::Settings,
         state: &alarm::State,
         status: &Status,
+        dim: bool,
     ) {
-        with_theme!(*self, theme => theme.alarms(canvas, settings, state, status))
+        with_theme!(*self, theme => theme.alarms(canvas, settings, state, status, dim))
     }
-    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone) {
-        with_theme!(*self, theme => theme.phone_alarms(canvas, phone))
+    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone, dim: bool) {
+        with_theme!(*self, theme => theme.phone_alarms(canvas, phone, dim))
     }
-    fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str) {
-        with_theme!(*self, theme => theme.notification(canvas, app, who, arrived))
+    fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str, dim: bool) {
+        with_theme!(*self, theme => theme.notification(canvas, app, who, arrived, dim))
     }
-    fn music(&self, canvas: &mut Canvas, music: &Music) {
-        with_theme!(*self, theme => theme.music(canvas, music))
+    fn music(&self, canvas: &mut Canvas, music: &Music, dim: bool) {
+        with_theme!(*self, theme => theme.music(canvas, music, dim))
     }
-    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant) {
-        with_theme!(*self, theme => theme.air(canvas, sighting, now))
+    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant, dim: bool) {
+        with_theme!(*self, theme => theme.air(canvas, sighting, now, dim))
     }
     fn buttons(&self, canvas: &mut Canvas, grid: &Grid) {
         with_theme!(*self, theme => theme.buttons(canvas, grid))
     }
-    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage) {
-        with_theme!(*self, theme => theme.settings(canvas, page))
+    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage, dim: bool) {
+        with_theme!(*self, theme => theme.settings(canvas, page, dim))
     }
-    fn info(&self, canvas: &mut Canvas, status: &Status) {
-        with_theme!(*self, theme => theme.info(canvas, status))
+    fn info(&self, canvas: &mut Canvas, status: &Status, dim: bool) {
+        with_theme!(*self, theme => theme.info(canvas, status, dim))
     }
-    fn storage_prompt(&self, canvas: &mut Canvas) {
-        with_theme!(*self, theme => theme.storage_prompt(canvas))
+    fn storage_prompt(&self, canvas: &mut Canvas, dim: bool) {
+        with_theme!(*self, theme => theme.storage_prompt(canvas, dim))
     }
-    fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>) {
-        with_theme!(*self, theme => theme.bthome_qr(canvas, identity))
+    fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>, dim: bool) {
+        with_theme!(*self, theme => theme.bthome_qr(canvas, identity, dim))
     }
-    fn bthome_key(&self, canvas: &mut Canvas, identity: Option<&Identity>) {
-        with_theme!(*self, theme => theme.bthome_key(canvas, identity))
+    fn bthome_key(&self, canvas: &mut Canvas, identity: Option<&Identity>, dim: bool) {
+        with_theme!(*self, theme => theme.bthome_key(canvas, identity, dim))
     }
     fn handles(&self, canvas: &mut Canvas, handles: Handles) {
         with_theme!(*self, theme => theme.handles(canvas, handles))
     }
-    fn banner(&self, canvas: &mut Canvas, app: &str, who: &str) {
-        with_theme!(*self, theme => theme.banner(canvas, app, who))
+    fn banner(&self, canvas: &mut Canvas, app: &str, who: &str, dim: bool) {
+        with_theme!(*self, theme => theme.banner(canvas, app, who, dim))
     }
-    fn editor(&self, canvas: &mut Canvas, editor: &Editor) {
-        with_theme!(*self, theme => theme.editor(canvas, editor))
+    fn editor(&self, canvas: &mut Canvas, editor: &Editor, dim: bool) {
+        with_theme!(*self, theme => theme.editor(canvas, editor, dim))
     }
-    fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status) {
-        with_theme!(*self, theme => theme.ringing(canvas, kind, status))
+    fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status, dim: bool) {
+        with_theme!(*self, theme => theme.ringing(canvas, kind, status, dim))
     }
-    fn find(&self, canvas: &mut Canvas, elapsed: Duration) {
-        with_theme!(*self, theme => theme.find(canvas, elapsed))
+    fn find(&self, canvas: &mut Canvas, elapsed: Duration, dim: bool) {
+        with_theme!(*self, theme => theme.find(canvas, elapsed, dim))
     }
-    fn call(&self, canvas: &mut Canvas, call: &Call) {
-        with_theme!(*self, theme => theme.call(canvas, call))
+    fn call(&self, canvas: &mut Canvas, call: &Call, dim: bool) {
+        with_theme!(*self, theme => theme.call(canvas, call, dim))
     }
-    fn pairing(&self, canvas: &mut Canvas, passkey: u32) {
-        with_theme!(*self, theme => theme.pairing(canvas, passkey))
+    fn pairing(&self, canvas: &mut Canvas, passkey: u32, dim: bool) {
+        with_theme!(*self, theme => theme.pairing(canvas, passkey, dim))
     }
-    fn update(&self, canvas: &mut Canvas, percent: u8, now: Instant) {
-        with_theme!(*self, theme => theme.update(canvas, percent, now))
+    fn update(&self, canvas: &mut Canvas, percent: u8, now: Instant, dim: bool) {
+        with_theme!(*self, theme => theme.update(canvas, percent, now, dim))
     }
-    fn off(&self, canvas: &mut Canvas, reason: Reason) {
-        with_theme!(*self, theme => theme.off(canvas, reason))
+    fn off(&self, canvas: &mut Canvas, reason: Reason, dim: bool) {
+        with_theme!(*self, theme => theme.off(canvas, reason, dim))
     }
     fn charged(&self, canvas: &mut Canvas, status: &Status) {
         with_theme!(*self, theme => theme.charged(canvas, status))

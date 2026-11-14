@@ -11,11 +11,11 @@ use crate::themes::{Call, Music};
 // is a neon sign hanging where the other screens hang their titles, lit
 // in the app's own colour (see `neon`), with when it arrived top right
 // in the history, as MUSIC's state is. Who it's from is under it, centred,
-// in a face that makes it the most important thing on the screen, on a
-// wet street: the sign broken up in a puddle at the bottom, the rain
-// falling, and towards dawn, the sky lightening (all but the sign and
-// its reflection left out in the dim look, which holds still). The
-// banner is the same sign in short, over the bottom of whatever shows.
+// in a face that makes it the most important thing on the screen; and
+// under that, where the message is from: a little noodle bar with the
+// app's noren over its door (see `render_shop`), which keeps the hours
+// and the night's weather. The banner is the same sign in short, over
+// the bottom of whatever shows.
 //
 // Who it's from is the 3×5 at 2× if it fits on one line (up to about 9
 // letters), or on two of about the same width (see `large`): a poster,
@@ -102,44 +102,20 @@ fn large(who: &str, lines: &mut [font::Line; CARD_LINES]) -> usize {
 /// A notification, with the whole screen (one that arrived with the screen
 /// off, in the dim look, or a page of the history): the app on its sign
 /// top left, and `time` top right (when it arrived, in the history;
-/// nothing on a notification that has just come, as that's now), and
-/// who it's from below, centred, big if it's short (see [`large`]), on
-/// the wet street.
-pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str) {
+/// nothing on a notification that has just come, as that's now), who
+/// it's from below, centred, big if it's short (see [`large`]), and under
+/// that, the shop (see [`render_shop`]).
+pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str, dim: bool) {
     canvas.clear(BACKGROUND);
     let tube = neon(app);
-    // The street, lit: rain falling with the seconds, and towards dawn,
-    // the sky lightening behind it (see `street::daylight`): its first
-    // two levels only, a strip under the sign's reflection, as more would
-    // crowd it. Dim (a notification that came with the screen off), none
-    // of it: the sign, its reflection and the name, still.
-    if !street::dim(canvas) {
-        street::horizon(canvas, 0, 80, 80, street::daylight_now().min(2));
-        let tick = crate::clock::now().map_or(0, |t| u64::from(t.second));
-        street::rain(canvas, 14, 80, tick, Color::TRACK);
-    }
+    let now = street::local_now();
+    // With no time yet, an evening.
+    let hour = now.map_or(21, street::hour_of);
+    let rain = now.is_some_and(|second| street::rainy(street::evening(second)));
+    let tick = now.map_or(0, |second| second as u64);
 
-    // The app gives way to the time: 4 px between them (after the sign's
-    // tube), and an ellipsis.
-    let time_width = font::small_text_width(time);
-    let gap = if time.is_empty() { 0 } else { time_width + 6 };
-    let mut line = [font::Line::default()];
-    let room = BANNER_TEXT_WIDTH - gap;
-    let width = match font::wrap(app, font::Face::Small, room, &mut line) {
-        0 => 0,
-        _ => line[0].width(app, font::Face::Small),
-    };
-    street::hanging(canvas, width, tube);
-    if width > 0 {
-        canvas.line(BANNER_TEXT.start, 3, app, line[0], font::Face::Small, tube);
-    }
-    canvas.text_right(BANNER_TEXT.end, 3, time, Color::TEXT_DIM);
-    // The sign, as broken up in the wet street at the bottom: as wide as
-    // the app's name, and in its colour.
-    street::reflection(canvas, 2, width + 4, 70, 4, tube);
-
-    // At 2× (pitch, capitals' height, and accents' rows, all doubled),
-    // or in the medium face.
+    // Who it's from: at 2× (pitch, capitals' height, and accents' rows,
+    // all doubled), or in the medium face.
     let mut lines = [font::Line::default(); CARD_LINES];
     let (count, face, scale, pitch, height) = match large(who, &mut lines) {
         0 => (
@@ -157,21 +133,243 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str)
             2 * 5,
         ),
     };
-    // The capitals centred on the screen, which is where the eye expects
-    // a name (centring the space below the header put them 6 px low), but
-    // no nearer the sign than two clear rows above the accents. Accents
-    // above the first line are left out of the centring, as most names
-    // have none.
+    // The capitals centred between the sign and the shop's roof, which
+    // is where the eye looks for them, but no nearer the sign than two
+    // clear rows above the accents. Accents above the first line are left
+    // out of the centring, as most names have none. A long name pushes
+    // the roof down, the shop giving up its height to it.
     let block = pitch * (count as i32 - 1) + height;
-    let top = (40 - block / 2).max(12 + 2 + font::ACCENT_ROWS * scale);
+    let top = ((12 + SHOP_TOP - 3) / 2 - block / 2).max(12 + 2 + font::ACCENT_ROWS * scale);
+    let roof = (top + block + 4).clamp(SHOP_TOP, SHOP_LOWEST);
+
+    // The night over the roofs: the dawn's glow behind them (two levels
+    // at most, as more would reach the name), and the stars out, or the
+    // rain. Dim, none of it: idle mode keeps still.
+    if !dim {
+        let light = street::daylight(hour);
+        street::horizon(canvas, 0, 80, roof, light.min(2));
+        if rain {
+            street::rain(canvas, 12, roof, tick, Color::TEXT_FAINT);
+        } else if light < street::DAYLIGHT {
+            street::stars(canvas, &CARD_STARS);
+        }
+    }
+    render_shop(canvas, roof, tube, hour, rain, dim);
+    // Steam from the kitchen's vent while it cooks on a clear night,
+    // rising with the seconds: beside the name, if it ends short of the
+    // vent, else up to two rows short of it.
+    let right = lines[..count]
+        .iter()
+        .map(|&line| 40 + line.width(who, face) * scale / 2)
+        .max()
+        .unwrap_or(0);
+    let steam = if right < VENT_X - 1 {
+        14
+    } else {
+        roof - 6 - (top + block + 2)
+    };
+    if !dim && !rain && Shop::at(hour) != Shop::Shut && steam >= 3 {
+        street::steam(canvas, VENT_X, roof - 6, steam.min(14), tick);
+    }
+
+    // The app gives way to the time: 4 px between them (after the sign's
+    // tube), and an ellipsis.
+    let time_width = font::small_text_width(time);
+    let gap = if time.is_empty() { 0 } else { time_width + 6 };
+    let mut line = [font::Line::default()];
+    let room = BANNER_TEXT_WIDTH - gap;
+    let width = match font::wrap(app, font::Face::Small, room, &mut line) {
+        0 => 0,
+        _ => line[0].width(app, font::Face::Small),
+    };
+    street::hanging(canvas, width, tube);
+    if width > 0 {
+        canvas.line(BANNER_TEXT.start, 3, app, line[0], font::Face::Small, tube);
+    }
+    canvas.text_right(BANNER_TEXT.end, 3, time, Color::TEXT_DIM);
+
     for (i, &line) in lines[..count].iter().enumerate() {
         let y = top + pitch * i as i32;
         // The tail (an ellipsis or a hyphen) is part of the width.
-        let x = 40 - line.width(who, face) * scale / 2;
+        let w = line.width(who, face) * scale;
+        let x = 40 - w / 2;
+        if rain && !dim {
+            // The rain passes behind the name, not through its letters,
+            // which it would break up: a pixel clear round each line,
+            // its accents' rows included.
+            let accents = font::ACCENT_ROWS * scale;
+            canvas.fill_rect(
+                x - 1,
+                y - accents - 1,
+                w + 2,
+                height + accents + 2,
+                BACKGROUND,
+            );
+        }
         if scale == 2 {
             canvas.text_scaled(x, y, line.of(who), Color::TEXT, 2);
         } else {
             canvas.line(x, y, who, line, face, Color::TEXT);
+        }
+    }
+}
+
+/// The shop's roof, under a name of a line or two; and the lowest it
+/// goes for a longer one, leaving the noren and the lanterns room.
+const SHOP_TOP: i32 = 50;
+const SHOP_LOWEST: i32 = 64;
+/// The pavement in front of the shop, down to the bottom edge.
+const PAVEMENT: i32 = 73;
+/// The doorway, its noren across it, and a lantern either side.
+const DOOR_X: i32 = 24;
+const DOOR_W: i32 = 32;
+const LANTERNS: [i32; 2] = [15, 60];
+/// The kitchen's vent on the roof, near the right edge.
+const VENT_X: i32 = 71;
+
+/// A few stars over the roofs, among the name's letters as much as
+/// round them: single pixels it covers where they meet.
+const CARD_STARS: [(i32, i32); 6] = [(9, 17), (70, 15), (4, 38), (75, 33), (61, 45), (18, 46)];
+
+/// How the shop is at `hour`: open in the evening, its interior lit and
+/// full; in the small hours, dimmer, a regular or two left; shut from
+/// 04:00 until the evening, its shutter down, its noren taken in and
+/// its lanterns out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shop {
+    Busy,
+    Late,
+    Shut,
+}
+
+impl Shop {
+    fn at(hour: u8) -> Self {
+        match hour {
+            18..=23 => Shop::Busy,
+            0..=3 => Shop::Late,
+            _ => Shop::Shut,
+        }
+    }
+}
+
+/// The shop the notification is at, from its roof (`roof`) down: a
+/// little noodle bar at night, its noren in the app's neon (`tube`), the
+/// lanterns either side of its door, and its diners' backs at the
+/// counter against the warm light; and the pavement in front, wet on a
+/// rainy night (`rain`), the light broken up in its puddles, or dry, the
+/// light spilling onto it. It keeps the hours (see [`Shop`]). In the dim
+/// look, only its outline and its noren: no light, nothing moving.
+fn render_shop(canvas: &mut Canvas, roof: i32, tube: Color, hour: u8, rain: bool, dim: bool) {
+    let shop = if dim { Shop::Shut } else { Shop::at(hour) };
+    let door_top = roof + 3;
+    let door_h = PAVEMENT - door_top;
+    // The wall, darker than the night, under a tiled eave: its edge, and
+    // a row of tiles' ends (in the dim look, the edge alone, in grey).
+    canvas.fill_rect(0, roof, 80, PAVEMENT - roof, Color::SHADOW);
+    if dim {
+        canvas.fill_rect(0, roof, 80, 1, Color::TRACK);
+    } else {
+        canvas.fill_rect(0, roof, 80, 2, Color::TRACK);
+        canvas.fill_rect(0, roof, 80, 1, Color::TEXT_FAINT);
+        for x in (1..80).step_by(3) {
+            canvas.pixel(x, roof + 1, Color::SHADOW);
+        }
+        // The kitchen's vent on the roof (its steam is the card's to
+        // draw, clear of the name).
+        canvas.fill_rect(VENT_X, roof - 4, 3, 4, Color::TRACK);
+        canvas.fill_rect(VENT_X - 1, roof - 5, 5, 1, Color::TEXT_FAINT);
+    }
+
+    // The doorway: lit, dimmer in the small hours, or shuttered.
+    match shop {
+        Shop::Busy => canvas.fill_rect(DOOR_X, door_top, DOOR_W, door_h, Color::HEART_SHINE),
+        Shop::Late => {
+            for y in door_top..PAVEMENT {
+                for x in DOOR_X..DOOR_X + DOOR_W {
+                    if (x + y) % 2 == 0 {
+                        canvas.pixel(x, y, Color::HEART_SHINE);
+                    }
+                }
+            }
+        }
+        Shop::Shut if dim => {
+            // Its frame alone, a still outline.
+            canvas.fill_rect(DOOR_X - 1, door_top, 1, door_h, Color::TRACK);
+            canvas.fill_rect(DOOR_X + DOOR_W, door_top, 1, door_h, Color::TRACK);
+        }
+        Shop::Shut => {
+            canvas.fill_rect(DOOR_X, door_top, DOOR_W, door_h, Color::TRACK);
+            for y in (door_top + 1..PAVEMENT).step_by(2) {
+                canvas.fill_rect(DOOR_X, y, DOOR_W, 1, Color::SHADOW);
+            }
+        }
+    }
+    // The diners: their backs at the counter, a head and shoulders each,
+    // as many as the hour keeps (three in the evening, one late).
+    let counter = PAVEMENT - 4;
+    let diners: &[i32] = match shop {
+        Shop::Busy => &[28, 37, 47],
+        Shop::Late => &[42],
+        Shop::Shut => &[],
+    };
+    if shop != Shop::Shut && counter - 5 > door_top + 5 {
+        canvas.fill_rect(DOOR_X, counter, DOOR_W, 1, Color::SHADOW);
+        for &x in diners {
+            canvas.fill_rect(x + 1, counter - 6, 2, 2, Color::SHADOW);
+            canvas.fill_rect(x, counter - 4, 4, 4, Color::SHADOW);
+        }
+    }
+    // The noren, across the top of the doorway (taken in when it's shut,
+    // bar in the dim look, where it's the shop's sign): three panels in
+    // the app's colour, hanging from a rod, slit apart down to their
+    // hems, the light showing between them; in the dim look, their
+    // outlines only, still and thin.
+    if shop != Shop::Shut || dim {
+        let noren_h = 11.min(door_h);
+        canvas.fill_rect(DOOR_X - 1, door_top, DOOR_W + 2, 1, Color::TEXT_FAINT);
+        const PANEL: i32 = (DOOR_W - 4) / 3;
+        for panel in 0..3 {
+            let x = DOOR_X + panel * (PANEL + 2);
+            let w = if panel == 2 {
+                DOOR_X + DOOR_W - x
+            } else {
+                PANEL
+            };
+            canvas.fill_rect(x, door_top + 1, w, noren_h - 1, tube);
+            if dim {
+                canvas.fill_rect(x + 1, door_top + 1, w - 2, noren_h - 2, BACKGROUND);
+            }
+        }
+    }
+    let lit = shop != Shop::Shut;
+    if !dim {
+        for x in LANTERNS {
+            street::lantern(canvas, x, door_top + 1, lit);
+        }
+    }
+
+    // The pavement: wet, the doorway's light and the lanterns broken up
+    // in it; or dry, the light spilling out onto it.
+    canvas.fill_rect(0, PAVEMENT, 80, 1, Color::TRACK);
+    if dim {
+        return;
+    }
+    if rain {
+        if lit {
+            street::reflection(canvas, DOOR_X, DOOR_W, PAVEMENT + 2, 3, Color::HEART_SHINE);
+            for x in LANTERNS {
+                street::reflection(canvas, x, 5, PAVEMENT + 2, 3, Color::HEART);
+            }
+        }
+        street::reflection(canvas, DOOR_X + 4, DOOR_W - 8, PAVEMENT + 1, 1, tube);
+    } else if lit {
+        for row in 1..4 {
+            let inset = row * 2;
+            for x in DOOR_X - inset..DOOR_X + DOOR_W + inset {
+                if (x + row) % (row + 1) == 0 {
+                    canvas.pixel(x, PAVEMENT + row, Color::HEART_SHINE);
+                }
+            }
         }
     }
 }
