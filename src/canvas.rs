@@ -352,6 +352,9 @@ impl Canvas {
         let mut draw = |x: i32, text: &str| match face {
             font::Face::Small => self.text(x, y, text, color),
             font::Face::Medium => self.text_medium(x, y, text, color),
+            // In the panel's pixels, as it's measured.
+            #[cfg(feature = "theme-living_tokyo")]
+            font::Face::Fine(style) => self.fine_type(x, y, text, style, color, None),
         };
         let end = draw(x, line.of(text));
         // Right after the text, as one more letter of it.
@@ -848,6 +851,18 @@ struct Fine {
     kept: Vec<u8>,
 }
 
+/// How [`Canvas::fine_type`] draws a stroke: in `color` where a pixel's
+/// centre is within `core` of the stroke's middle, and in `edge` (a
+/// shade) where it's within `outer`, in sixteenths of a pixel.
+#[cfg(feature = "theme-living_tokyo")]
+#[derive(Clone, Copy)]
+struct Pen {
+    color: Color,
+    edge: Color,
+    core: i32,
+    outer: i32,
+}
+
 #[cfg(feature = "theme-living_tokyo")]
 impl Fine {
     const NONE: Self = Self {
@@ -1014,6 +1029,10 @@ impl Canvas {
                     let glyph = font::medium_glyph(c);
                     (glyph.width, glyph.rows)
                 }
+                // Drawn at its own size, whatever the scale.
+                font::Face::Fine(style) => {
+                    return self.fine_type(x, y, text, style, color, None);
+                }
             };
             for (dy, &row) in rows.iter().enumerate() {
                 for dx in 0..width {
@@ -1026,6 +1045,174 @@ impl Canvas {
             cursor += (width as i32 + 1) * scale;
         }
         cursor
+    }
+
+    /// `text` in Living Tokyo's lettering (see [`font::fine`]), in
+    /// `style`, from `x` and with its capitals' ink from `y`, in the
+    /// panel's pixels; and if `edge` is given, its edges smoothed in
+    /// that colour, a shade between `color` and what's under the text
+    /// (`TEXT_FAINT` round `TEXT` on the night's dark; nothing in the
+    /// dim look, whose eight colours have no such shade). Returns where
+    /// the next letter would start: the x past the ink and a gap.
+    pub fn fine_type(
+        &mut self,
+        x: i32,
+        y: i32,
+        text: &str,
+        style: font::fine::Style,
+        color: Color,
+        edge: Option<Color>,
+    ) -> i32 {
+        // A pixel is lit if its centre is within `core` of a stroke's
+        // middle (in sixteenths of a pixel), and shaded if within `outer`:
+        // smoothed, a shade from about half a pixel in to half out (less
+        // a little inside, so the stroke keeps its weight); or lit to
+        // the stroke's edge.
+        let radius = i32::from(style.stroke) / 2;
+        let pen = match edge {
+            Some(edge) => Pen {
+                color,
+                edge,
+                core: radius - 4,
+                outer: radius + 6,
+            },
+            None => Pen {
+                color,
+                edge: color,
+                core: radius,
+                outer: radius,
+            },
+        };
+        // A line whose ink is wholly outside the rows being drawn (see
+        // `refine`) only needs its end.
+        let (above, below) = style.reach();
+        let rows = self.fine_rows();
+        let drawn = y - above < rows.end && y + below > rows.start;
+        let mut cursor = x;
+        for c in text.chars() {
+            let advance = style.advance(c);
+            if drawn && cursor < FINE && cursor + advance > 0 {
+                let origin = (cursor * 16 + radius, y * 16 + radius);
+                font::fine::trace(c, style, origin, |from, to| {
+                    self.fine_stroke(from, to, &rows, pen);
+                });
+            }
+            cursor += advance;
+        }
+        cursor
+    }
+
+    /// Draws the line `from`-`to` (in sixteenths of the panel's pixels)
+    /// with `pen`, a round one, in `rows`, the panel rows being drawn
+    /// (see [`Canvas::fine_type`]).
+    fn fine_stroke(&mut self, from: (i32, i32), to: (i32, i32), rows: &Range<i32>, pen: Pen) {
+        let ((ax, ay), (bx, by)) = (from, to);
+        let reach = pen.outer;
+        let top = ((ay.min(by) - reach) >> 4).max(rows.start);
+        let bottom = (((ay.max(by) + reach) >> 4) + 1).min(rows.end);
+        if top >= bottom {
+            return;
+        }
+        let (mut left, mut right) = (0, FINE);
+        if let Some(clip) = &self.clip {
+            let scale = SCALE as i32;
+            left = clip.start * scale;
+            right = clip.end * scale;
+        }
+        // How near a pixel's centre is: 2 within `core`, 1 within
+        // `outer`, else 0. Past either end, from that end, by distances
+        // squared; else from the line, the cross product over the line's
+        // length (its square root, once a line, so it all stays in 32
+        // bits: the cross product of a long stroke's would need 64).
+        let (dx, dy) = (bx - ax, by - ay);
+        let length = dx * dx + dy * dy;
+        let span = length.isqrt();
+        let (core, outer) = (pen.core, pen.outer);
+        let near = |x: i32, y: i32| -> u8 {
+            let (px, py) = (x * 16 + 8 - ax, y * 16 + 8 - ay);
+            let along = px * dx + py * dy;
+            let (d, (core, outer)) = if along <= 0 || along >= length {
+                let (qx, qy) = if along <= 0 {
+                    (px, py)
+                } else {
+                    (px - dx, py - dy)
+                };
+                (qx * qx + qy * qy, (core * core, outer * outer))
+            } else {
+                ((px * dy - py * dx).abs(), (core * span, outer * span))
+            };
+            u8::from(d <= outer) + u8::from(d <= core)
+        };
+        // Where the line crosses row `y`'s middle (or its nearer end, if
+        // it doesn't): lit, if any of the row is, as a stroke is convex.
+        // So each row is walked from there out to where it stops, rather
+        // than across the line's box.
+        let crossing = |y: i32| -> i32 {
+            let cy = y * 16 + 8;
+            let x = if dy == 0 || (cy - ay) * dy <= 0 {
+                ax
+            } else if (cy - by) * dy >= 0 {
+                bx
+            } else {
+                ax + (cy - ay) * dx / dy
+            };
+            x >> 4
+        };
+        let band = self.fine.band_rows();
+        let scale = SCALE as i32;
+        // The pixels to walk: a band's every one, or in the frame's own
+        // pass only the canvas pixels' centres, as `fine_tone` has them,
+        // whose rows it notes as fine.
+        let step = if band.is_some() { 1 } else { scale };
+        let first_row = match band {
+            Some(_) => top,
+            None => {
+                for row in top / scale..=(bottom - 1) / scale {
+                    self.fine.rows.add(row as usize);
+                }
+                (top + 1) / scale * scale + 1
+            }
+        };
+        for y in (first_row..bottom).step_by(step as usize) {
+            // Pixel `x` of this row in `back` (see `refine`), or the
+            // canvas pixel it's the centre of.
+            let at = |x: i32| match band {
+                Some((first, _)) => (y - first * scale) as usize * FINE_W + x as usize,
+                None => (y / scale) as usize * WIDTH + (x / scale) as usize,
+            };
+            // On a centre column, in the frame's own pass.
+            let mut start = crossing(y);
+            if step > 1 {
+                start = start / scale * scale + 1;
+            }
+            for direction in [-step, step] {
+                let mut x = if direction < 0 { start } else { start + step };
+                let mut lit = false;
+                while x >= left && x < right {
+                    let how = near(x, y);
+                    // Past the stroke; or the first pixel walked wasn't
+                    // in it (its centre to the far side of a thin one),
+                    // nor the next.
+                    if how == 0 {
+                        if lit || (x - start).abs() >= step {
+                            break;
+                        }
+                        x += direction;
+                        continue;
+                    }
+                    lit = true;
+                    let i = at(x);
+                    // The shade never covers what another of the
+                    // letter's strokes has lit.
+                    let (byte, shift) = (&mut self.back[i / 2], 4 * (i % 2));
+                    if how == 2 || *byte >> shift & 0xF != pen.color.0 {
+                        let color = if how == 2 { pen.color } else { pen.edge };
+                        *byte = *byte & !(0xF << shift) | color.0 << shift;
+                    }
+                    x += direction;
+                }
+            }
+        }
     }
 
     /// Sends the rows this frame drew finely (see [`Canvas::fine_rect`]),
