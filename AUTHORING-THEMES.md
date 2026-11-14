@@ -255,7 +255,9 @@ beyond `ui::Status` (`Face`, `Glance`, `Music`, `Grid`, …, and
 `STEP_GOAL`). Drawing is on the 80×80 canvas
 ([src/canvas.rs](src/canvas.rs)), in colour roles, with the fonts and
 glyphs of [src/font.rs](src/font.rs). Retro's code, a file per group of
-screens, is a working example of every method.
+screens, is a working example of every method. Living Tokyo also draws
+some rows at the panel's own 240×240 (`Canvas::fine_rect` and the
+like, in its builds only): see the canvas's docs for what that costs.
 
 [`themes::helpers`](src/themes/helpers.rs) has what any theme is likely
 to need, whatever it looks like: mechanics that choose no colour,
@@ -313,10 +315,12 @@ flickers so), unless it scrolls.
 
 The dim look is the same methods, drawn in `dim()`'s palette: `glance`
 always, `notification` for one that arrived with the screen off, and
-every screen in the quiet night. `Face::dim` and `Grid::dim` say so, for
-the clock face and the button grid to draw otherwise there (Retro's
-greys the struck-through phone rune, and shades its keycaps for a dark
-palette).
+every screen in the quiet night. Each is told so, to draw otherwise
+there: a `dim` argument, or for the clock face, a glance and the button
+grid, `Face::dim`, `Glance::dim` and `Grid::dim` (Retro greys the
+struck-through phone rune, and shades its keycaps for a dark palette;
+Living Tokyo holds its city still, without rain or glow). Only
+`charged`, never dim, isn't told.
 
 ### Screens
 

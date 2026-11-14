@@ -614,12 +614,19 @@ impl Watch {
         } = self;
         // The dev kit's script draws these from the canvas, rather than
         // the watch pushing them: they take none of the watch's time.
+        // Each flush is followed by the rows drawn at the panel's
+        // resolution, as they were last drawn (see `Canvas::refine_kept`).
+        let mut flush = |canvas: &mut Canvas, display: &mut _| {
+            run(canvas.flush(display), on_frame);
+            #[cfg(feature = "theme-living_tokyo")]
+            run(canvas.refine_kept(display), on_frame);
+        };
         crate::display::untimed(|| {
             canvas.set_palette(palette);
-            run(canvas.flush(display), on_frame);
+            flush(canvas, display);
             let saved = crate::shot::save(path);
             canvas.set_palette(app.palette());
-            run(canvas.flush(display), on_frame);
+            flush(canvas, display);
             saved
         })
     }

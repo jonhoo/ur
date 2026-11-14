@@ -515,7 +515,30 @@ impl UiLoop {
         if let Some(reason) = off {
             // Why, drawn here, where the UI's chosen theme is known.
             app.render_off(canvas, reason);
-            board.switch_off(reason, canvas, self.panel_awake).await;
+            // Living Tokyo draws some of it at the panel's resolution, rows
+            // that only `Canvas::refine` sends: `switch_off`'s flush alone
+            // would leave them as the last screen had them. So it's sent
+            // here, the panel woken for it and shown, and `switch_off`'s
+            // flush finds nothing left to send.
+            #[cfg(feature = "theme-living_tokyo")]
+            let panel_awake = {
+                if !self.panel_awake {
+                    board.wake_panel().await;
+                }
+                canvas.flush(board.display()).await;
+                canvas
+                    .refine(board.display(), &mut |canvas| {
+                        app.render_off(canvas, reason)
+                    })
+                    .await;
+                if !self.panel_awake {
+                    board.show_panel().await;
+                }
+                true
+            };
+            #[cfg(not(feature = "theme-living_tokyo"))]
+            let panel_awake = self.panel_awake;
+            board.switch_off(reason, canvas, panel_awake).await;
             return Some(reason);
         }
         // For battery-life analysis from the field log.
@@ -612,6 +635,14 @@ impl UiLoop {
                 }
                 _ => canvas.flush(board.display()).await,
             }
+            // Then the rows drawn at the panel's own resolution, each drawn
+            // again as it's sent (see `Canvas::refine`).
+            #[cfg(feature = "theme-living_tokyo")]
+            canvas
+                .refine(board.display(), &mut |canvas| {
+                    app.render(canvas, &status, now)
+                })
+                .await;
             self.first_frame = false;
             #[cfg(feature = "compare")]
             crate::compare::rendered();

@@ -16,6 +16,7 @@ missing below were test builds for the dev kit.
 
 ### Changed
 
+- Draw every Living Tokyo screen as its city at street level, in place of Retro's screens in its colours: Today as a street of buildings, one an hour, under the heart rate's neon tube; Last night as an overnight sleeper train; a notification as a ramen stall under the app's noren; an alarm ringing as a level crossing at night; the alarms as a station's departure board; Settings as wooden menu tags; Info as a station's information board; the music as a record turning in a small bar; the air as a bowl steaming in a small room; a call as a phone booth; finding the watch as HERE in a puddle; the button grid as a drinks machine; and pairing, an update, storage mode and switching off in the same city. Lettering and finer detail are drawn at the panel's full resolution, each screen keeps one calm moving detail, and rain stands still, re-placed each minute, to spare the battery; a screen that isn't moving costs next to nothing to keep showing (5a5d9f0, 7f048b1)
 - Hold about 2½ days of a worn watch in the logging build's (`ur-logging`) field log, rather than under one (about 20 hours since 0.11.0): it now packs its busiest lines, the accelerometer's every 2 s and the heart-rate sensor's samples, so decode a fetched log with `defmt-print` and then `scripts/expand_log.py`, which writes them back as before (logs from older builds pass through unchanged). Log times are now in milliseconds rather than microseconds. The `ur` build is unchanged (bf66d61, e357323)
 
 ### Deprecated

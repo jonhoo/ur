@@ -1,7 +1,7 @@
 # Living Tokyo's screenshots, for its README: its clock face in each
-# scheme, Last night and LOOK at night (in LIVING TOKYO: it's a theme for
-# the night only), and the dim look's glance and notification. From
-# sim/:
+# scheme, Last night, LOOK, a notification and its banner, and an alarm
+# ringing, at night (in LIVING TOKYO: it's a theme for the night only),
+# and the dim look's glance and notification. From sim/:
 #
 #     cargo run --release --features theme-living_tokyo -- --out ../src/themes/living_tokyo/shots ../src/themes/living_tokyo/shots.txt
 #
@@ -111,9 +111,9 @@ button
 wait 1s
 left
 wait 1s
-long 20,60
+long 40,50
 wait 1s
-long 60,60
+long 40,61
 wait 1s
 button
 wait 11s
@@ -122,3 +122,119 @@ glance
 wait 1s
 expect dim
 shot dim-glance-timers.png
+
+# A notification, lit, in the evening (a clear one: see `street::rainy`):
+# its banner over the clock face, then its page of the history, in front
+# of the noodle bar, open and busy. After the timers, so that their
+# gestures don't move the shots above.
+until 21:30
+button
+wait 1s
+notify Signal "Nora Lindqvist"
+wait 1s
+shot night-banner.png
+wait 6s
+down
+wait 1s
+shot night-notification.png
+button
+wait 1s
+
+# An alarm ringing near dawn: the level crossing's lamps, under a sky
+# glowing behind the far city, its early risers' windows lit.
+alarm 1 06:10 on
+until 06:10
+wait 1s
+expect buzzing
+shot night-ringing.png
+
+# The alarms as a departure board at dawn, the ringing stopped: smart
+# wake next, its kind red, counting down, and a timer running.
+button
+wait 1s
+timer 2 25
+left
+wait 1s
+long 40,61
+wait 1s
+shot night-alarms.png
+
+# The button grid, a drinks machine on the street, at rest and as a press
+# is sent (its slot lit with the code, a can in the tray); then the
+# watch's own screens: the passkey on a ticket machine, and an update's
+# train pulling in.
+button
+wait 1s
+up
+wait 1s
+shot night-grid.png
+tap 67,20
+wait 0.5s
+shot night-grid-sent.png
+button
+wait 1s
+passkey 482913
+wait 1s
+shot night-pairing.png
+passkey off
+update 42
+wait 1s
+shot night-update.png
+update off
+
+# The street-level scenes, at dawn on the same clear night: the record
+# bar playing, the air's room, a call ringing in its booth, and the
+# watch being looked for, HERE in its puddle.
+button
+wait 15s
+button
+wait 1s
+music "Ida Moreau" "Night Signals" playing
+aranet 1091 20.75 53 1012.3 87 3m
+up
+wait 1s
+up
+wait 1s
+shot night-music.png
+up
+wait 1s
+shot night-air.png
+button
+wait 1s
+call "Nora Lindqvist"
+wait 1s
+shot night-call.png
+call over
+wait 1s
+find on
+wait 1s
+shot night-find.png
+find off
+
+# The city's fine lettering for a name too long for two big lines: in
+# its smaller size, balanced over two, the accents over the capitals
+# clear of them; at dawn, the stall shut.
+wait 1s
+notify Telegram "Øyvind Åsheim-Brekke"
+wait 7s
+down
+wait 1s
+shot night-notification-long.png
+button
+wait 1s
+
+# Today, that evening: the day's steps as a street of buildings, one an
+# hour, the evening run at 19:00 a tower, lit after dark; the hour now's
+# beacon on its mast, the hours to come empty lots; and the heart rate's
+# range as a neon tube over the roofs. (No smart wake to ring on the way.)
+smart off
+until 21:30
+demo-day
+button
+wait 1s
+expect clock
+right
+wait 2s
+shot night-today.png
+button
+wait 1s

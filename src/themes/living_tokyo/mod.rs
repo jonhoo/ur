@@ -3,13 +3,14 @@
 //! night, as the city is the night's (see [`schemes`]), and the black,
 //! white and red dim look ([`GLANCE`]).
 //!
-//! The clock face is the theme's own. Every other screen, and where its
-//! taps land, started as a copy of Retro's (`scripts/new-theme.sh`): the
-//! files beside this one, a file a group of screens, in Living Tokyo's
-//! colours, its own code from here on. [`LivingTokyo`]'s [`Theme`] says
-//! which draws which.
-//!
-//! TODO: screens in the city's style, beyond its clock face.
+//! The clock face is the city seen from afar; every other screen is the
+//! same city at street level, each living on the time, the night's
+//! weather and what it shows, from the shared pieces in [`street`] (see
+//! DESIGN.md beside this file for the language). The screens started as
+//! a copy of Retro's (`scripts/new-theme.sh`): the files beside this
+//! one, a file a group of screens, Living Tokyo's own code from there
+//! on. [`LivingTokyo`]'s [`Theme`] says which draws which, and where
+//! taps land.
 
 // Its own code is held to dead code in every build, even one where the
 // shared code a theme draws with isn't (see `main.rs`), so that a copy
@@ -46,6 +47,7 @@ mod messages;
 mod past;
 mod schemes;
 mod settings;
+mod street;
 mod system;
 
 pub use schemes::{GLANCE, LIVING_TOKYO, LivingTokyo};
@@ -71,12 +73,11 @@ const fn wrap<const N: usize>(list: [&'static LivingTokyo; N]) -> [Scheme; N] {
 /// Where Living Tokyo draws what can be tapped, for the drawing and the
 /// taps alike (see [`Theme::alarm_at`] and the like).
 mod layout {
-    /// The alarms screen: smart wake across the top, then the two alarms
-    /// side by side, then the two timers side by side, each half of the
-    /// screen's width. These are the tops of those bands.
-    pub const SMART_TOP: i32 = 11;
-    pub const ALARMS_TOP: i32 = 30;
-    pub const TIMERS_TOP: i32 = 53;
+    /// The alarms screen's departure board: its first row's top, and how
+    /// tall each of its five rows is (smart wake, the two alarms, and the
+    /// two timers, top to bottom, each across the screen).
+    pub const ALARM_ROWS_TOP: i32 = 12;
+    pub const ALARM_ROW: i32 = 11;
     /// Where the editor's buttons start: on/off on the left half, next or
     /// done on the right. Above them, a swipe up or down on the left half
     /// changes the hours, on the right the minutes.
@@ -120,12 +121,12 @@ impl Theme for LivingTokyo {
         glance::render_glance(canvas, glance);
     }
 
-    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>) {
-        past::render_today(canvas, day, steps);
+    fn today(&self, canvas: &mut Canvas, day: Option<&Day>, steps: Option<u32>, dim: bool) {
+        past::render_today(canvas, day, steps, dim);
     }
 
-    fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>) {
-        past::render_last_night(canvas, sleep);
+    fn last_night(&self, canvas: &mut Canvas, sleep: Option<crate::activity::Sleep>, dim: bool) {
+        past::render_last_night(canvas, sleep, dim);
     }
 
     fn alarms(
@@ -134,51 +135,48 @@ impl Theme for LivingTokyo {
         settings: &alarm::Settings,
         state: &alarm::State,
         status: &Status,
+        dim: bool,
     ) {
-        alarms::render_alarms(canvas, settings, state, status);
+        alarms::render_alarms(canvas, settings, state, status, dim);
     }
 
-    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone) {
-        alarms::render_phone_alarms(canvas, phone);
+    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone, dim: bool) {
+        alarms::render_phone_alarms(canvas, phone, dim);
     }
 
-    fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str) {
-        messages::render_card(canvas, app, who, arrived);
+    fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str, dim: bool) {
+        messages::render_card(canvas, app, who, arrived, dim);
     }
 
-    fn music(&self, canvas: &mut Canvas, music: &Music) {
-        messages::render_music(canvas, music);
+    fn music(&self, canvas: &mut Canvas, music: &Music, dim: bool) {
+        messages::render_music(canvas, music, dim);
     }
 
-    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant) {
-        air::render_air(canvas, sighting, now);
+    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant, dim: bool) {
+        air::render_air(canvas, sighting, now, dim);
     }
 
     fn buttons(&self, canvas: &mut Canvas, grid: &Grid) {
-        // Shaded for a dark palette, where edges catch light against
-        // black, or a light one, where the ink is the dark: by the palette
-        // it shows in, the dim look's (white on black) included.
-        let palette = if grid.dim { self.dim() } else { self.palette() };
-        grid::render_buttons(canvas, grid, palette.is_dark());
+        grid::render_buttons(canvas, grid);
     }
 
-    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage) {
-        settings::render_settings(canvas, page);
+    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage, dim: bool) {
+        settings::render_settings(canvas, page, dim);
     }
 
-    fn info(&self, canvas: &mut Canvas, status: &Status) {
+    fn info(&self, canvas: &mut Canvas, status: &Status, _dim: bool) {
         settings::render_info(canvas, status);
     }
 
-    fn storage_prompt(&self, canvas: &mut Canvas) {
-        system::render_storage_prompt(canvas);
+    fn storage_prompt(&self, canvas: &mut Canvas, dim: bool) {
+        system::render_storage_prompt(canvas, dim);
     }
 
-    fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>) {
+    fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>, _dim: bool) {
         settings::render_ha_qr(canvas, identity);
     }
 
-    fn bthome_key(&self, canvas: &mut Canvas, identity: Option<&Identity>) {
+    fn bthome_key(&self, canvas: &mut Canvas, identity: Option<&Identity>, _dim: bool) {
         settings::render_ha_key(canvas, identity);
     }
 
@@ -198,54 +196,57 @@ impl Theme for LivingTokyo {
         }
     }
 
-    fn banner(&self, canvas: &mut Canvas, app: &str, who: &str) {
+    fn banner(&self, canvas: &mut Canvas, app: &str, who: &str, _dim: bool) {
         messages::render_banner(canvas, app, who);
     }
 
-    fn editor(&self, canvas: &mut Canvas, editor: &Editor) {
-        alarms::render_editor(canvas, editor);
+    fn editor(&self, canvas: &mut Canvas, editor: &Editor, dim: bool) {
+        alarms::render_editor(canvas, editor, dim);
     }
 
-    fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status) {
-        alarms::render_ringing(canvas, kind, status);
+    fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status, dim: bool) {
+        alarms::render_ringing(canvas, kind, status, dim);
     }
 
-    fn find(&self, canvas: &mut Canvas, elapsed: Duration) {
-        alarms::render_find(canvas, elapsed);
+    fn find(&self, canvas: &mut Canvas, elapsed: Duration, dim: bool) {
+        alarms::render_find(canvas, elapsed, dim);
     }
 
-    fn call(&self, canvas: &mut Canvas, call: &Call) {
-        messages::render_call(canvas, call);
+    fn call(&self, canvas: &mut Canvas, call: &Call, dim: bool) {
+        messages::render_call(canvas, call, dim);
     }
 
-    fn pairing(&self, canvas: &mut Canvas, passkey: u32) {
-        system::render_pairing(canvas, passkey);
+    fn pairing(&self, canvas: &mut Canvas, passkey: u32, dim: bool) {
+        system::render_pairing(canvas, passkey, dim);
     }
 
-    fn update(&self, canvas: &mut Canvas, percent: u8, now: Instant) {
-        system::render_update(canvas, percent, now);
+    fn update(&self, canvas: &mut Canvas, percent: u8, _now: Instant, dim: bool) {
+        system::render_update(canvas, percent, dim);
     }
 
-    fn off(&self, canvas: &mut Canvas, reason: Reason) {
-        system::render_off(canvas, reason);
+    fn off(&self, canvas: &mut Canvas, reason: Reason, dim: bool) {
+        system::render_off(canvas, reason, dim);
     }
 
     fn charged(&self, canvas: &mut Canvas, status: &Status) {
         glance::render_charged(canvas, status);
     }
 
-    fn alarm_at(&self, x: i32, y: i32) -> Option<Editing> {
-        use layout::{ALARMS_TOP, SMART_TOP, TIMERS_TOP};
-        let right = u8::from(x >= 40);
-        if y < SMART_TOP {
-            None
-        } else if y < ALARMS_TOP {
-            Some(Editing::SmartWeekday)
-        } else if y < TIMERS_TOP {
-            Some(Editing::At(right))
-        } else {
-            Some(Editing::Timer(right))
+    fn alarm_at(&self, _x: i32, y: i32) -> Option<Editing> {
+        use layout::{ALARM_ROW, ALARM_ROWS_TOP};
+        // The board's rows, across the screen: nothing in the title's
+        // strip above the board, and the last row reaches the bottom
+        // edge, over the platform.
+        if y < ALARM_ROWS_TOP - 1 {
+            return None;
         }
+        Some(match (y - ALARM_ROWS_TOP).max(0) / ALARM_ROW {
+            0 => Editing::SmartWeekday,
+            1 => Editing::At(0),
+            2 => Editing::At(1),
+            3 => Editing::Timer(0),
+            _ => Editing::Timer(1),
+        })
     }
 
     fn editor_button(&self, x: i32, y: i32) -> Option<EditorButton> {
@@ -298,7 +299,7 @@ impl Theme for LivingTokyo {
     }
 
     fn call_overflow(&self, caller: &str) -> i32 {
-        helpers::overflow(caller, 2, layout::CALL_TEXT_WIDTH)
+        messages::call_overflow(caller)
     }
 
     fn music_overflow(&self, artist: &str, track: &str) -> i32 {

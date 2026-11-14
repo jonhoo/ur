@@ -259,6 +259,10 @@ const fn small_art(c: char) -> [u8; 5] {
     }
 }
 
+#[cfg(feature = "theme-living_tokyo")]
+#[path = "fine_font.rs"]
+pub mod fine;
+
 // ==============================================================================
 // Medium: a bold 7 px face for the names in notifications
 // ==============================================================================
@@ -461,26 +465,43 @@ pub fn medium_glyph(c: char) -> MediumGlyph {
 // ==============================================================================
 
 /// The faces text is laid out in: the small font at 1×, and the medium
-/// face. (The small font at 2× is only ever one line: see
-/// [`small_text_width`].)
+/// face (the small font at 2× is only ever one line: see
+/// [`small_text_width`]); and in Living Tokyo's builds, its lettering at
+/// the panel's resolution (see [`fine`]), measured in the panel's pixels.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Face {
     Small,
     Medium,
+    #[cfg(feature = "theme-living_tokyo")]
+    Fine(fine::Style),
 }
 
 impl Face {
+    /// How far a character moves the pen on, less [`Face::gap`]: the
+    /// pixel fonts' glyphs' widths, without the column after each.
     fn glyph_width(self, c: char) -> i32 {
         (match self {
             Self::Small => glyph(c).width,
             Self::Medium => medium_glyph(c).width,
+            #[cfg(feature = "theme-living_tokyo")]
+            Self::Fine(style) => return style.advance(c) - style.gap(),
         }) as i32
+    }
+
+    /// The space between two characters' ink: the pixel fonts' column.
+    fn gap(self) -> i32 {
+        match self {
+            #[cfg(feature = "theme-living_tokyo")]
+            Self::Fine(style) => style.gap(),
+            _ => 1,
+        }
     }
 
     /// Width in pixels of `text`, excluding the trailing spacing column.
     pub fn width(self, text: &str) -> i32 {
-        let total: i32 = text.chars().map(|c| self.glyph_width(c) + 1).sum();
-        (total - 1).max(0)
+        let gap = self.gap();
+        let total: i32 = text.chars().map(|c| self.glyph_width(c) + gap).sum();
+        (total - gap).max(0)
     }
 }
 
@@ -528,7 +549,7 @@ impl Line {
     pub fn width(self, text: &str, face: Face) -> i32 {
         let tail = match self.tail {
             Tail::None => 0,
-            tail => 1 + face.width(tail.as_str()),
+            tail => face.gap() + face.width(tail.as_str()),
         };
         face.width(self.of(text)) + tail
     }
@@ -562,7 +583,7 @@ pub fn wrap(text: &str, face: Face, room: i32, lines: &mut [Line]) -> usize {
         // It doesn't fit: as much as does, then an ellipsis, in place of
         // whatever the last line would have broken with.
         let last = &mut lines[most - 1];
-        let ellipsis = face.width(Tail::Ellipsis.as_str()) + 1;
+        let ellipsis = face.width(Tail::Ellipsis.as_str()) + face.gap();
         let rest = slice(text, last.start, text.len());
         let mut end = 0;
         for (i, c) in rest.char_indices() {
@@ -600,6 +621,21 @@ pub fn wrap(text: &str, face: Face, room: i32, lines: &mut [Line]) -> usize {
         .unwrap_or(0);
     if count > 1 && widest < room {
         let mut narrowest = room;
+        // The panel's pixels are many more steps than the canvas's: halve
+        // the range until it's found, as filling narrower never takes
+        // fewer lines. The walk below then only confirms it.
+        #[cfg(feature = "theme-living_tokyo")]
+        if let Face::Fine(_) = face {
+            let mut wide = widest - 1;
+            while narrowest - wide > 1 {
+                let middle = (wide + narrowest) / 2;
+                if fill(text, face, middle, lines) == count {
+                    narrowest = middle;
+                } else {
+                    wide = middle;
+                }
+            }
+        }
         while narrowest > widest && fill(text, face, narrowest - 1, lines) == count {
             narrowest -= 1;
         }
@@ -632,14 +668,14 @@ pub fn fill(text: &str, face: Face, room: i32, lines: &mut [Line]) -> usize {
         // The last place the line could end so far, and where the next
         // would then start.
         let mut fits: Option<(usize, usize)> = None;
-        let mut width = -1;
+        let mut width = -face.gap();
         let mut overflow = None;
         for (i, c) in slice(text, start, text.len()).char_indices() {
             let i = start + i;
             if c == ' ' && !(dash(i + 1) && bytes.get(i + 2).is_none_or(|&b| b == b' ')) {
                 fits = Some((i, i + 1));
             }
-            width += face.glyph_width(c) + 1;
+            width += face.glyph_width(c) + face.gap();
             if width > room {
                 overflow = Some(i);
                 break;
@@ -713,7 +749,7 @@ fn break_word(text: &str, face: Face, room: i32, start: usize, at: usize) -> (Li
         return cut(end, Tail::None);
     }
     // Something like a link or a file name has no letters to hyphenate.
-    let hyphen = face.width("-") + 1;
+    let hyphen = face.width("-") + face.gap();
     if word.contains(['.', '/']) || at == start {
         return cut(
             at.max(start + word.chars().next().map_or(1, char::len_utf8)),
