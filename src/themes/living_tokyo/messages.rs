@@ -223,11 +223,11 @@ const STALL_H: i32 = 78;
 const POSTS: [i32; 2] = [46, 190];
 const POST_W: i32 = 4;
 const EAVES: core::ops::Range<i32> = 30..210;
-/// The noren: its panels, how wide each is and the slit between them, and
-/// what's dyed on them, a letter a panel, as noren have their shop's name.
+/// The noren (see `street::fine_noren`): its panels, how wide each is,
+/// and what's dyed on them, a letter a panel, as noren have their shop's
+/// name.
 const NOREN_X: i32 = 50;
 const NOREN_PANEL: i32 = 26;
-const NOREN_SLIT: i32 = 2;
 const NOREN_LETTERS: [&str; 5] = ["R", "A", "M", "E", "N"];
 /// The lanterns' middles, hanging from the eaves' ends.
 const LANTERNS: [i32; 2] = [38, 202];
@@ -395,18 +395,16 @@ fn render_shop(
     // the dark; taken in when the shop's shut, its rail bare.
     canvas.fine_rect(left, rail, right - left, 1, Color::TEXT_DIM);
     if lit {
-        for (i, letter) in NOREN_LETTERS.iter().enumerate() {
-            let x = NOREN_X + i as i32 * (NOREN_PANEL + NOREN_SLIT);
-            canvas.fine_rect(x, rail + 1, NOREN_PANEL, noren_h, tube);
-            // The cloth's fold under the rail, and its hem.
-            canvas.fine_tone(x, rail + 1, NOREN_PANEL, 2, 2, Color::SHADOW);
-            canvas.fine_tone(x, hem - 1, NOREN_PANEL, 2, 2, Color::SHADOW);
-            if noren_h >= 20 {
-                let w = font::Face::Medium.width(letter) * 2;
-                let (x, y) = (x + (NOREN_PANEL - w) / 2, rail + 5);
-                canvas.fine_text(x, y, letter, font::Face::Medium, Color::SHADOW, 2);
-            }
-        }
+        street::fine_noren(
+            canvas,
+            NOREN_X,
+            rail,
+            noren_h,
+            NOREN_PANEL,
+            &NOREN_LETTERS,
+            tube,
+            false,
+        );
     }
 
     // The bowl's steam, rising in front of the noren, thinner in the
@@ -519,19 +517,16 @@ fn render_shop_dim(canvas: &mut Canvas, top: i32, rail: i32, hem: i32, counter: 
         canvas.fine_rect(x, rail, 1, GROUND - rail, line);
         canvas.fine_rect(x + POST_W - 1, rail, 1, GROUND - rail, line);
     }
-    for (i, letter) in NOREN_LETTERS.iter().enumerate() {
-        let x = NOREN_X + i as i32 * (NOREN_PANEL + NOREN_SLIT);
-        let h = hem - rail;
-        canvas.fine_rect(x, rail, NOREN_PANEL, 1, tube);
-        canvas.fine_rect(x, rail + h - 1, NOREN_PANEL, 1, tube);
-        canvas.fine_rect(x, rail, 1, h, tube);
-        canvas.fine_rect(x + NOREN_PANEL - 1, rail, 1, h, tube);
-        if h >= 20 {
-            let w = font::Face::Medium.width(letter) * 2;
-            let (x, y) = (x + (NOREN_PANEL - w) / 2, rail + 5);
-            canvas.fine_text(x, y, letter, font::Face::Medium, tube, 2);
-        }
-    }
+    street::fine_noren(
+        canvas,
+        NOREN_X,
+        rail,
+        hem - rail,
+        NOREN_PANEL,
+        &NOREN_LETTERS,
+        tube,
+        true,
+    );
     canvas.fine_rect(left - 6, counter, right - left + 12, 1, line);
     for x in LANTERNS {
         street::fine_lantern(canvas, x, rail + 4, false);

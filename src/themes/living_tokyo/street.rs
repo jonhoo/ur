@@ -600,3 +600,47 @@ pub(super) fn fine_reflection(
         }
     }
 }
+
+/// The slit between a [`fine_noren`]'s panels.
+pub(super) const NOREN_SLIT: i32 = 2;
+
+/// A shop's noren at the panel's resolution, hung from its rail at row
+/// `rail` and `h` rows long, from column `x`: a panel `panel` wide a
+/// letter of `letters` (as noren carry the shop's name), [`NOREN_SLIT`]
+/// apart, in `tube` (the app's neon, say), each with the cloth's fold
+/// under the rail and its hem shaded, its letter dyed in the dark in the
+/// medium face at 2× where there's room for it (`h` of 20 or more). In
+/// the dim look (`dim`), outlines in `tube`, from the rail itself, the
+/// letters solid in it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fine_noren(
+    canvas: &mut Canvas,
+    x: i32,
+    rail: i32,
+    h: i32,
+    panel: i32,
+    letters: &[&str],
+    tube: Color,
+    dim: bool,
+) {
+    for (i, letter) in letters.iter().enumerate() {
+        let x = x + i as i32 * (panel + NOREN_SLIT);
+        let ink = if dim {
+            canvas.fine_rect(x, rail, panel, 1, tube);
+            canvas.fine_rect(x, rail + h - 1, panel, 1, tube);
+            canvas.fine_rect(x, rail, 1, h, tube);
+            canvas.fine_rect(x + panel - 1, rail, 1, h, tube);
+            tube
+        } else {
+            canvas.fine_rect(x, rail + 1, panel, h, tube);
+            canvas.fine_tone(x, rail + 1, panel, 2, 2, Color::SHADOW);
+            canvas.fine_tone(x, rail + h - 1, panel, 2, 2, Color::SHADOW);
+            Color::SHADOW
+        };
+        if h >= 20 {
+            let w = font::Face::Medium.width(letter) * 2;
+            let (x, y) = (x + (panel - w) / 2, rail + 5);
+            canvas.fine_text(x, y, letter, font::Face::Medium, ink, 2);
+        }
+    }
+}
