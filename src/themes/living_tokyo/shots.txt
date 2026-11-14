@@ -147,3 +147,26 @@ until 06:10
 wait 1s
 expect buzzing
 shot night-ringing.png
+
+# The button grid, a drinks machine on the street, at rest and as a press
+# is sent (its slot lit with the code, a can in the tray); then the
+# watch's own screens: the passkey on a ticket machine, and an update's
+# train pulling in.
+button
+wait 1s
+up
+wait 1s
+shot night-grid.png
+tap 67,20
+wait 0.5s
+shot night-grid-sent.png
+button
+wait 1s
+passkey 482913
+wait 1s
+shot night-pairing.png
+passkey off
+update 42
+wait 1s
+shot night-update.png
+update off

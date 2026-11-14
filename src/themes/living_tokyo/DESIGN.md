@@ -171,18 +171,18 @@ it stays the night's city under the full dawn glow, with no stars.
 | `banner` | everyday | *Done.* The same sign, over the bottom of the screen | The app's colour |
 | `music` | medium | A small lit record bar: the track on an LED marquee, a turntable in the window | The record turns a step a second while it plays and stops when paused; the marquee scrolls; rain on the window or a clear night over the roof |
 | `air` | medium | A small lit interior: the CO₂ figure on a board, a bowl's steam rising | The steam taller the stuffier the air; the window fogs with the humidity; the board fades as the reading ages |
-| `buttons` | elaborate | A vending machine glowing on a dark street, a lit slot a button | A pressed button's slot flashes, a waiting one blinks, and a sent press drops a can into the tray; the street wet with its glow, or dry. Dim (`Grid::dim`): the machine, unlit |
+| `buttons` | elaborate | *Done.* A dark drinks machine on a street corner: its lit shelves (two, or three with two layers), a drink on show over each slot's button, the readout and the tray at its foot. Each slot sits inside its `buttons::at` tap area (asserted as it's drawn) | A pressed slot floods warm; a waiting one's button is lit and a ring round it blinks; a sent press lights its slot green (red if it went nowhere) with the code big on it, says the gesture on the readout, and drops a can into the tray. One thing of the night's: rain falling past the cabinet and the shelves' light broken up on the wet street, or stars and a moth round the light. Dim (`Grid::dim`): the shelves' outlines, unlit; what's pressed or sent in white |
 | `settings` | subtle | Each row a hanging wooden menu tag on a rail; a fixed row's tag unlit | The THEME row's tag lit in the scheme's own colours |
 | `info` | subtle | A station information board | The uptime ticks; the battery's moon; the phone's sign lit while it's connected |
-| `storage_prompt` | subtle | A shop's shutter half down: closing up | Still |
+| `storage_prompt` | subtle | *Done.* A shop's shutter half down, the light on under it; what to do painted on the shutter | Still. Dim: the shutter's outline, the light out |
 | `bthome_qr`, `bthome_key` | subtle | The title's sign; the QR code untouched, as it must scan | Still: they're read once |
 | `handles` | subtle | The edge bars, as now | |
 | `ringing` | elaborate | *Done.* A level crossing: the crossbuck, two red lamps, the boom down; the title on a red sign, the time big, the hints under the boom; the far city behind, the road in front | The lamps take turns each second; the city's windows by the hour, the dawn's glow behind it; rainy, rain, the lamp broken up in the wet road and splashes; clear, stars (one twinkling) and the lamp's light pooled on the road |
 | `find` | elaborate | HERE, big, in a puddle: the rings as ripples | A drop falls each second and its ripples spread; the longer the phone looks, the harder it rains (on a clear night, a single drop from an eave) |
 | `call` | elaborate | A lit phone booth on a corner, the caller's name on its sign; decline and answer as lit red and green keys | The handset jiggles with each ring; silenced, the booth's light dims and it stills; rain on its glass or stars over it |
-| `pairing` | subtle | The passkey on a ticket machine's display | Still |
-| `update` | medium | A train pulling into a platform: how far along it is | The train moves on with the percentage, its windows lit, a step a second |
-| `off` | subtle | The city's lights going out, with why | The windows go out a few a second over its seconds |
+| `pairing` | subtle | *Done.* The passkey, big, on a ticket machine's dark display, its fare buttons and ticket slot under it | Still. Dim: the display's frame and the digits |
+| `update` | medium | *Done.* The percentage big over a platform, a train pulling in: its nose at the left edge at 0%, at the platform's end at 100% | The train, as far in as the update. Dim: its roof and nose, unlit |
+| `off` | subtle | *Done.* Why, on its sign, what wakes it, and the far city along the bottom | Drawn once: the city's windows all but out, an eighth of the hour's still lit. Dim: no city |
 
 Where taps land stays where `mod.rs`'s `layout` has it (the alarms'
 bands, the editor's and a call's buttons, the music's thirds, the

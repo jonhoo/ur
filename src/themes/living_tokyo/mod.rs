@@ -162,11 +162,7 @@ impl Theme for LivingTokyo {
     }
 
     fn buttons(&self, canvas: &mut Canvas, grid: &Grid) {
-        // Shaded for a dark palette, where edges catch light against
-        // black, or a light one, where the ink is the dark: by the palette
-        // it shows in, the dim look's (white on black) included.
-        let palette = if grid.dim { self.dim() } else { self.palette() };
-        grid::render_buttons(canvas, grid, palette.is_dark());
+        grid::render_buttons(canvas, grid);
     }
 
     fn settings(&self, canvas: &mut Canvas, page: &SettingsPage, _dim: bool) {
@@ -177,8 +173,8 @@ impl Theme for LivingTokyo {
         settings::render_info(canvas, status);
     }
 
-    fn storage_prompt(&self, canvas: &mut Canvas, _dim: bool) {
-        system::render_storage_prompt(canvas);
+    fn storage_prompt(&self, canvas: &mut Canvas, dim: bool) {
+        system::render_storage_prompt(canvas, dim);
     }
 
     fn bthome_qr(&self, canvas: &mut Canvas, identity: Option<&Identity>, _dim: bool) {
@@ -225,16 +221,16 @@ impl Theme for LivingTokyo {
         messages::render_call(canvas, call);
     }
 
-    fn pairing(&self, canvas: &mut Canvas, passkey: u32, _dim: bool) {
-        system::render_pairing(canvas, passkey);
+    fn pairing(&self, canvas: &mut Canvas, passkey: u32, dim: bool) {
+        system::render_pairing(canvas, passkey, dim);
     }
 
-    fn update(&self, canvas: &mut Canvas, percent: u8, now: Instant, _dim: bool) {
-        system::render_update(canvas, percent, now);
+    fn update(&self, canvas: &mut Canvas, percent: u8, _now: Instant, dim: bool) {
+        system::render_update(canvas, percent, dim);
     }
 
-    fn off(&self, canvas: &mut Canvas, reason: Reason, _dim: bool) {
-        system::render_off(canvas, reason);
+    fn off(&self, canvas: &mut Canvas, reason: Reason, dim: bool) {
+        system::render_off(canvas, reason, dim);
     }
 
     fn charged(&self, canvas: &mut Canvas, status: &Status) {

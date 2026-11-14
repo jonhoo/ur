@@ -19,8 +19,12 @@ day's steps as a row of lit windows at its foot) and the route's (the
 street on a street plate), Today (the day's steps as a street of
 buildings, one an hour, under the heart rate's neon tube), Last night
 (an overnight sleeper train), a notification and its banner (the app's
-noren over a noodle bar's door), and an alarm ringing (a level crossing
-at night). The rest are still copies of [Retro](../retro/)'s, in Tokyo
+noren over a noodle bar's door), an alarm ringing (a level crossing
+at night), the button grid (a drinks machine on a street corner),
+pairing (a ticket machine's display), an update (a train pulling in),
+storage mode's prompt (a shop's shutter half down) and switching off
+(the city's lights going out). The rest are still copies of
+[Retro](../retro/)'s, in Tokyo
 Night's colours.
 
 ## Colour schemes
@@ -63,6 +67,10 @@ says.)
 | A notification's banner | <img src="shots/night-banner.png" width="120" alt="The clock face with a banner over its bottom: a dark sign outlined in the app's cyan neon, SIGNAL in cyan and Nora Lindqvist in white"> |
 | A notification | <img src="shots/night-notification.png" width="120" alt="A notification in the history at 21:30: SIGNAL on a cyan neon sign top left, the time top right, Nora Lindqvist big in the middle; under it a noodle bar, its cyan noren over a warmly lit doorway with diners at the counter, a red lantern either side, steam from its vent, and the light spilling onto the pavement"> |
 | An alarm ringing | <img src="shots/night-ringing.png" width="120" alt="An alarm ringing at 06:10: ALARM on a red neon sign, the time big, and a level crossing on the right, its crossbuck yellow, one red lamp lit and hazing, the yellow and black boom down across the screen over TAP: SNOOZE and BUTTON: STOP; behind, the far city against a dawn glowing yellow and violet, a few windows lit"> |
+| The button grid | <img src="shots/night-grid.png" width="120" alt="The button grid at 06:10: a dark drinks machine on a clear night, a moth over its roof, its two lit shelves each with three drinks on show, bottles and cans in red, cyan, yellow, green, violet and blue, a small dark button under each; at its foot, an empty tray and a dark readout"> |
+| A press sent | <img src="shots/night-grid-sent.png" width="120" alt="The same machine just after a tap on the top right slot: that part of the shelf lit green with 3 on it, big, its button green, TAP in green on the readout, and a yellow can lying in the tray"> |
+| Pairing | <img src="shots/night-pairing.png" width="120" alt="Pairing: PAIRING on a blue neon sign, ENTER ON PHONE:, and the passkey 482913, big, on a ticket machine's dark display, a row of fare buttons and the ticket slot under it"> |
+| An update arriving | <img src="shots/night-update.png" width="120" alt="An update: UPDATING on a blue neon sign, KEEP CLOSE, 42% big; under it a silver train with a green line and lit windows pulling into a platform from the left, its nose a little short of the middle, over the rails and the platform's yellow edge"> |
 | LOOK, in Settings | <img src="shots/night-look-settings.png" width="120" alt="LOOK's settings, at night, in LIVING TOKYO"> |
 
 They change with the hour, the night's weather and what they show. A
