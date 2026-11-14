@@ -48,9 +48,10 @@ on top:
   your steps), open Gadgetbridge's Live activity chart: the watch measures
   continuously while it's open.
 - **A dim glance:** turn your wrist, and the time shows dimly for a few
-  seconds without lighting the screen. While Google Maps, OsmAnd, or
-  CoMaps navigates, so does the next turn, with two taps as it comes
-  within 50 m.
+  seconds without lighting the screen; with a timer running, so does its
+  time left (each one's, soonest first), under the time. While Google
+  Maps, OsmAnd, or CoMaps navigates, so does the next turn, with two taps
+  as it comes within 50 m.
 - **Media gestures:** double-tap to play or pause, and tap, then tap and
   hold, to skip, whether the screen is off, on a glance, or on the clock
   face. A buzz says it took.

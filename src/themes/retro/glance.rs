@@ -1,25 +1,32 @@
-//! Retro's glance: what a look at the wrist shows, the time alone, the
-//! next turn while the phone navigates, or on the charger, how long it has
-//! to go; and, just after a media gesture, what it did.
+//! Retro's glance: what a look at the wrist shows, the time alone (or with
+//! the running timers' time left), the next turn while the phone
+//! navigates, or on the charger, how long it has to go; and, just after a
+//! media gesture, what it did.
 
 use super::{BACKGROUND, action_icon, draw_digit};
+use crate::alarm;
 use crate::canvas::{Canvas, Color};
 use crate::font;
 use crate::route::Turn;
-use crate::themes::helpers::{hhmm, percent as percent_text, to_full as to_full_text};
+use crate::themes::helpers::{countdown, hhmm, percent as percent_text, to_full as to_full_text};
 use crate::themes::{Glance, ToFull};
 use crate::ui::Status;
 
-/// A glance: the time alone, the next turn while the phone navigates, or
-/// the charge on the charger.
+/// A glance: the time alone, or with the running timers; the next turn
+/// while the phone navigates; or the charge on the charger. Only the
+/// time's glance shows the timers: the route's has no room to spare, and
+/// the charger's is about the charge.
 pub(super) fn render_glance(canvas: &mut Canvas, glance: &Glance) {
     match (glance.route, glance.charge) {
         (Some(step), _) => render_route_glance(canvas, glance.status, step),
         (None, Some(to_full)) => render_charge_glance(canvas, glance.status, to_full),
+        (None, None) if glance.timers.iter().any(Option::is_some) => {
+            render_timers_glance(canvas, glance.status, &glance.timers);
+        }
         (None, None) => render_time_glance(canvas, glance.status),
     }
     // Just after a media gesture, what it did, in the top right corner,
-    // which both layouts leave free.
+    // which every layout leaves free.
     if let Some(action) = glance.media {
         let icon = action_icon(action);
         canvas.sprite(65, 3, font::MEDIA_HINT_W, icon, 2, Color::TEXT);
@@ -62,6 +69,102 @@ fn render_time_glance(canvas: &mut Canvas, status: &Status) {
             SCALE,
             Color::TEXT,
         );
+    }
+}
+
+/// The glance while a timer runs: the time as the clock face has it, in
+/// one row at 3×, and under it a row for each running timer, an hourglass
+/// and the time left at 2×, as the clock face and the Alarms screen write
+/// it ("42 MIN", then "7:45" under 10 minutes, "2H05" beyond the hour).
+///
+/// The time gives up a size (4× to 3×) rather than share the screen at
+/// 4×: the stacked hours and minutes take 65 of the 80 rows, which leaves
+/// only the 17 px either side of them, room for 1× text that crowds the
+/// edges ("7:45" ends on the last column). At 3×, it's still the biggest
+/// thing on the screen, and it's the clock face's own time, near the
+/// clock face's place, so a glance with a timer reads as the watch's face
+/// with the timers brought forward. It starts at y = 15, two rows below
+/// the clock face's, under the band where a media gesture's icon shows
+/// (y 3..12) with a gap: a block centred on the screen would run into
+/// that icon with two timers.
+///
+/// The colon is steady, in the accent, unlike the clock face's blinking
+/// one: nothing on a glance moves but what has to (see below).
+///
+/// The timers go soonest first, which is what the wearer looks for, and
+/// their order only changes when one is started again. They aren't
+/// labelled TIMER 1 and TIMER 2: they're set to different lengths for
+/// different things, and the wearer who set them knows the tea from the
+/// laundry by how long is left. The rows share a left edge, the widest
+/// centred, so the hourglasses stand in a column, as a list.
+///
+/// Under 10 minutes, the seconds tick: the UI draws a frame every second
+/// while the screen is on, a glance included, and pushes only the rows
+/// that changed, so that's a few rows a second for the glance's few
+/// seconds, and no extra wake-ups. A timer whose time is up shows "0:00"
+/// for the moment (under a second) before it rings, which takes the
+/// screen; one ringing is no longer running, so it isn't here.
+fn render_timers_glance(
+    canvas: &mut Canvas,
+    status: &Status,
+    timers: &[Option<i64>; alarm::TIMERS],
+) {
+    // Two rows fit under the time; a third timer would need a new layout.
+    const _: () = assert!(alarm::TIMERS == 2, "a row a timer, two at most");
+    const TIME_Y: i32 = 15;
+    const TIME_SCALE: i32 = 3;
+    const ICON_SCALE: i32 = 2;
+    const TEXT_SCALE: i32 = 2;
+    const ICON_W: i32 = font::HOURGLASS_W as i32 * ICON_SCALE;
+    const GAP: i32 = 4;
+    canvas.clear(BACKGROUND);
+    if let Some(t) = &status.local_time {
+        // As the clock face draws it: 15 px digits 2 px apart, and a 3 px
+        // column for the colon, its dots on glyph rows 2 and 4.
+        let (hours, minutes) = (u64::from(t.hour), u64::from(t.minute));
+        let digits = [hours / 10, hours % 10, minutes / 10, minutes % 10];
+        for (digit, x) in digits.into_iter().zip([4, 21, 43, 60]) {
+            draw_digit(canvas, x, TIME_Y, digit, TIME_SCALE, Color::TEXT);
+        }
+        for row in [2, 4] {
+            let y = TIME_Y + row * TIME_SCALE;
+            canvas.fill_rect(39, y + 1, 3, 3, Color::SHADOW);
+            canvas.fill_rect(38, y, 3, 3, Color::ACCENT);
+        }
+    }
+
+    // Soonest first (stopped timers, `None`, last).
+    let mut running = *timers;
+    running.sort_unstable_by_key(|left| (left.is_none(), *left));
+    let texts = running.map(|left| left.map(countdown));
+    // One row centred in the room under the time and its shadow (y
+    // 37..79); two a little closer to each other than to the time, with
+    // the glance's 7–8 px margin under the last.
+    let rows: &[i32] = match texts.iter().flatten().count() {
+        1 => &[51],
+        _ => &[42, 59],
+    };
+    let widest = texts
+        .iter()
+        .flatten()
+        .map(|text| font::small_text_width(text) * TEXT_SCALE)
+        .max()
+        .unwrap_or(0);
+    let x = 40 - (ICON_W + GAP + widest) / 2;
+    // The widest, "10 MIN" (or a 16-hour timer's "16H00"), leaves room
+    // either side.
+    debug_assert!(x >= 4, "a timer's row runs off the glance");
+    for (text, &y) in texts.iter().flatten().zip(rows) {
+        canvas.sprite(
+            x,
+            y,
+            font::HOURGLASS_W,
+            &font::HOURGLASS,
+            ICON_SCALE,
+            Color::ACCENT,
+        );
+        // The text's capitals (10 px) centred on the hourglass (14 px).
+        canvas.text_scaled(x + ICON_W + GAP, y + 2, text, Color::TEXT, TEXT_SCALE);
     }
 }
 

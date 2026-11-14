@@ -110,9 +110,9 @@ pub trait Theme: Sync {
 
     /// The clock face, the screen the watch comes back to.
     fn clock(&self, canvas: &mut Canvas, face: &Face);
-    /// A glance (see `crate::glance`): the time, bigger, and nothing else;
-    /// or the next turn, while the phone navigates; or the charge, on the
-    /// charger. In the dim look; bar the charge's, which is also the
+    /// A glance (see `crate::glance`): the time, bigger, and nothing else,
+    /// or with the running timers' time left; or the next turn, while the
+    /// phone navigates; or the charge, on the charger. In the dim look; bar the charge's, which is also the
     /// charge screen, woken on the charger, in the scheme's palette (see
     /// `ui::App::woke_on_charger`).
     fn glance(&self, canvas: &mut Canvas, glance: &Glance);
@@ -317,6 +317,10 @@ pub struct Glance<'a> {
     /// (`status.battery`) instead of the time alone (but not instead of
     /// the next turn).
     pub charge: Option<ToFull>,
+    /// Each running timer's seconds left, by timer (see `alarm::TIMERS`;
+    /// none for one stopped, or ringing): shown with the time alone (not
+    /// with the next turn, nor the charge).
+    pub timers: [Option<i64>; alarm::TIMERS],
 }
 
 /// The music screen's.

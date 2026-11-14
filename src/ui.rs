@@ -132,7 +132,10 @@
 //!   [`crate::gesture::HOLD_LIMIT`]; not one that woke the screen.
 //! - Turning the wrist to look (see [`crate::glance`]) while the screen is
 //!   off: a glance, just the time in white on black at a low backlight, for
-//!   [`GLANCE_TIME`]. While the phone navigates, the next turn instead,
+//!   [`GLANCE_TIME`]; while a timer runs, the time a size smaller, with
+//!   each running timer's time left under it (redrawn each second, as
+//!   every screen is, so its seconds tick under 10 minutes). While the
+//!   phone navigates, the next turn instead,
 //!   with the time smaller above it. On the charger, the charge and the
 //!   time to full, with the time smaller above them; and one shows by
 //!   itself every few minutes there, until full, outside the quiet night,
@@ -2763,6 +2766,9 @@ impl App {
                 route: self.route.as_ref().map(|route| &route.step),
                 media: self.media_hint.map(|(action, _)| action),
                 charge: status.battery.to_full(status.uptime_secs as u32),
+                timers: core::array::from_fn(|t| {
+                    self.alarm_state.remaining(t, status.uptime_secs as i64)
+                }),
             };
             theme.glance(canvas, &glance);
             return;
@@ -2821,6 +2827,8 @@ impl App {
                     route: None,
                     media: None,
                     charge: Some(charge),
+                    // The charge's drawing shows none.
+                    timers: [None; alarm::TIMERS],
                 };
                 theme.glance(canvas, &glance);
             }

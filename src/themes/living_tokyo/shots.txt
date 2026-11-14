@@ -100,3 +100,25 @@ expect charged
 expect not dim
 shot charged.png
 battery 3990 unplugged
+
+# A glance with timers running (a long press on each, on the alarms
+# screen). Last, as the gestures' odd milliseconds would shift the
+# seconds of every screenshot after them.
+wait 11s
+expect not screen-on
+timer 1 45
+button
+wait 1s
+left
+wait 1s
+long 20,60
+wait 1s
+long 60,60
+wait 1s
+button
+wait 11s
+expect not screen-on
+glance
+wait 1s
+expect dim
+shot dim-glance-timers.png

@@ -169,7 +169,7 @@ without touching the rest:
 |---|---|
 | `mod.rs` | The `Theme` impl (which file draws which screen), every tap area, the layout's constants, the handles, and what several files draw: the big digits, and the media actions' icons |
 | `clock.rs` | The clock face, and its battery |
-| `glance.rs` | A glance: the time, the next turn, or the charge and the time to full on the charger; and the full charge's screen |
+| `glance.rs` | A glance: the time (with the running timers' time left), the next turn, or the charge and the time to full on the charger; and the full charge's screen |
 | `past.rs` | Today, and Last night |
 | `alarms.rs` | Alarms, the phone's alarms, the editor, an alarm ringing, and "find my watch" |
 | `messages.rs` | A notification, its banner, a call, and music |
@@ -325,7 +325,7 @@ Each draws its screen from scratch: clear the canvas first, then draw.
 | Method | The screen |
 |---|---|
 | `clock` | The clock face (`Face`: the status, the next alarm, media, unseen notifications, whether it's in the dim look); on the charger (`status.battery.power_present`) the heart rate isn't measured, which it should say rather than show an old reading (Retro: a grey heart, OFF) |
-| `glance` | A glance: the time, the next turn while the phone navigates, or on the charger the charge (`status.battery`) and the time to full (`charge`; `helpers::to_full` words it), and what a media gesture just did; in the dim look, bar the charge's, which is also the charge screen, woken on the charger, in the scheme's palette (so its colours must read in every scheme, light ones too) |
+| `glance` | A glance: the time, and with it each running timer's seconds left (`timers`, by timer; `helpers::countdown` words them), the next turn while the phone navigates, or on the charger the charge (`status.battery`) and the time to full (`charge`; `helpers::to_full` words it), and what a media gesture just did; in the dim look, bar the charge's, which is also the charge screen, woken on the charger, in the scheme's palette (so its colours must read in every scheme, light ones too) |
 | `today`, `last_night` | The day's steps and heart rate by the hour; last night's sleep |
 | `alarms`, `phone_alarms` | The alarms, smart wake and timers; the phone's alarms, read-only |
 | `notification` | A notification with the whole screen: a page of the history, or one that arrived with the screen off (in the dim look) |

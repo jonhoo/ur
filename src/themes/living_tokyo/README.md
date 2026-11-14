@@ -68,9 +68,9 @@ with a buzz.
 
 ## The dim look
 
-| A glance | A notification, with the screen off | A glance on the charger |
-|---|---|---|
-| <img src="shots/dim-glance.png" width="120" alt="A glance: the hours above the minutes, big, white on black"> | <img src="shots/dim-notification.png" width="120" alt="A notification that arrived with the screen off: the app in red, and who it's from, big, in white"> | <img src="shots/dim-charging.png" width="120" alt="On the charger: the time small in red; the moon, big, waxing to the charge, among red stars, with 66% under it; then FULL IN in red, and 1:12, big, in white"> |
+| A glance | With timers running | A notification, with the screen off | A glance on the charger |
+|---|---|---|---|
+| <img src="shots/dim-glance.png" width="120" alt="A glance: the hours above the minutes, big, white on black"> | <img src="shots/dim-glance-timers.png" width="120" alt="A glance with two timers running: the time in one row, white on black, and under it a red hourglass with the time left on each, 2:46, then 45 MIN"> | <img src="shots/dim-notification.png" width="120" alt="A notification that arrived with the screen off: the app in red, and who it's from, big, in white"> | <img src="shots/dim-charging.png" width="120" alt="On the charger: the time small in red; the moon, big, waxing to the charge, among red stars, with 66% under it; then FULL IN in red, and 1:12, big, in white"> |
 
 These are `shots.txt`'s, drawn in a build with every theme (where
 FORCE is a choice), which the simulator's tests check (see
