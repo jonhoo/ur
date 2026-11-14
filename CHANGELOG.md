@@ -16,6 +16,8 @@ missing below were test builds for the dev kit.
 
 ### Changed
 
+- Draw Living Tokyo's notification card's noodle bar as a ramen stall at the panel's full resolution, finer than the rest of the screen: the app's noren lettered RAMEN over the counter, a red lantern at each end of the eaves, a steaming bowl and a stock pot on the counter, four red stools, and a menu board on the street; lit and steaming in the evening, dimmer in the small hours, shuttered with its lanterns out from 04:00, its lights broken up in the wet street on a rainy night; in the dim look, its outlines and the lettered noren (28d93db)
+
 ### Deprecated
 
 ### Removed
