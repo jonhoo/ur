@@ -173,8 +173,11 @@ pub fn classify(before: Kind, before_evidence: Minute, minutes: &[Minute], out: 
                 u += 1;
                 end = u;
             } else {
-                let gap = run(u, &|v| minutes[v].seen && !still(v));
-                // An unseen minute (gap 0) ends the stillness too.
+                let gap = run(u, &|v| {
+                    minutes[v].seen && minutes[v].worn != Some(false) && !still(v)
+                });
+                // An unseen minute, or one off the wrist (gap 0), ends the
+                // stillness too (see `still_among`).
                 if gap == 0 || gap > STIR || u + gap == n {
                     break;
                 }
@@ -273,6 +276,14 @@ fn is_still(before: Minute, minutes: &[Minute], t: usize) -> bool {
 /// Whether `minute` is still, given its neighbours (`None` outside the
 /// minutes classified), as [`classify`] sees it: for `crate::sleep_hold`,
 /// which reads the history a minute at a time rather than as a slice.
+///
+/// A minute off the wrist isn't: whatever lies still then, it's not the
+/// wearer, so it doesn't make a stillness, and ends one. Otherwise the
+/// still minutes before a watch was set down on a desk (or found off by
+/// the heart rate sensor) took its stillness for their own, and fell
+/// asleep, if they and it made [`ONSET`] minutes: a wearer sitting still,
+/// then taking the watch off, had a few minutes' nap in Gadgetbridge.
+/// (Off-wrist minutes are awake as ever: see [`classify`].)
 pub fn still_among(before: Option<Minute>, minute: Minute, after: Option<Minute>) -> bool {
     let seen = [before, Some(minute), after]
         .into_iter()
@@ -280,7 +291,7 @@ pub fn still_among(before: Option<Minute>, minute: Minute, after: Option<Minute>
         .filter(|m| m.seen);
     let (sum, count) = seen.fold((0u32, 0u32), |(s, c), m| (s + u32::from(m.movement), c + 1));
     let smoothed = (sum / count.max(1)) as u16;
-    minute.seen && minute.steps == 0 && smoothed < STILL_LIMIT
+    minute.seen && minute.steps == 0 && minute.worn != Some(false) && smoothed < STILL_LIMIT
 }
 
 /// How many of the newest minutes [`unsettled_onset`] needs: a stillness
@@ -296,9 +307,9 @@ pub const ONSET_SPAN: usize = ONSET + STIR + 2 + 1;
 /// yet: the first minute of the stillness they end with, which becomes
 /// sleep, dated from its start, once it has lasted [`ONSET`] minutes (or
 /// [`RESUME`]). Bridges stirs of up to [`STIR`] minutes, and a trailing
-/// one that may yet turn out to be a stir. A minute not worn can't fall
-/// asleep, but stays in the stillness of the ones before it, as in
-/// [`classify`]. `None` if the newest minutes aren't still, or not worn.
+/// one that may yet turn out to be a stir. A minute off the wrist ends
+/// the stillness, as an unseen one does, as in [`classify`]. `None` if the
+/// newest minutes aren't still.
 ///
 /// The newest minute is under way, so its own and its predecessor's
 /// smoothed movement aren't final: they count as still if they may yet
@@ -341,14 +352,12 @@ pub fn unsettled_onset(minutes: &[Minute]) -> Option<usize> {
     let mut moving = 0;
     // From the second-oldest: the oldest is only its neighbour.
     for t in (1..n).rev() {
-        if !minutes[t].seen {
+        if !minutes[t].seen || minutes[t].worn == Some(false) {
             break;
         }
         if still(t) {
             moving = 0;
-            if minutes[t].worn != Some(false) {
-                from = Some(t);
-            }
+            from = Some(t);
         } else {
             moving += 1;
             if moving > STIR {

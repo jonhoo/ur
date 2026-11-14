@@ -376,8 +376,12 @@ fn nap(newest: i64, first_unsettled: i64, evidence: impl Fn(i64) -> sleep::Minut
                 end = minute;
                 continue;
             }
+            // Off the wrist ends it, as unseen does (gap 0).
             let gap = (minute..=newest)
-                .take_while(|&m| evidence(m).seen && !still(m))
+                .take_while(|&m| {
+                    let e = evidence(m);
+                    e.seen && e.worn != Some(false) && !still(m)
+                })
                 .count() as i64;
             if gap == 0 || gap > sleep::STIR as i64 {
                 break;
@@ -389,12 +393,11 @@ fn nap(newest: i64, first_unsettled: i64, evidence: impl Fn(i64) -> sleep::Minut
             minute += gap;
         }
         unfinished |= end > newest;
-        // Sleep starts at a still minute on the wrist, from which the
-        // stillness is long enough (or may yet be), and lasts until the
-        // classifier wakes: perhaps at the next minute off the wrist, in
-        // the middle of the stillness, after which it may start again.
-        let worn = |m: i64| still(m) && evidence(m).worn != Some(false);
-        let mut onset = (start..end).find(|&m| worn(m));
+        // Sleep starts at a still minute (on the wrist, as every still
+        // one is: see `sleep::still_among`), from which the stillness is
+        // long enough (or may yet be), and lasts until the classifier
+        // wakes (walking, say), after which it may start again.
+        let mut onset = (start..end).find(|&m| still(m));
         while let Some(from) = onset {
             if !unfinished && end - from < sleep::RESUME as i64 {
                 break;
@@ -403,7 +406,7 @@ fn nap(newest: i64, first_unsettled: i64, evidence: impl Fn(i64) -> sleep::Minut
             if woke.is_none_or(|woke| woke >= window) {
                 return Some(from.max(first_unsettled));
             }
-            onset = woke.and_then(|woke| (woke + 1..end).find(|&m| worn(m)));
+            onset = woke.and_then(|woke| (woke + 1..end).find(|&m| still(m)));
         }
         minute = minute.max(end);
     }

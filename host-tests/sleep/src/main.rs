@@ -1220,9 +1220,44 @@ mod tests {
         assert!(!kinds.iter().any(|k| k.is_sleep()));
     }
 
+    /// Sitting still, then taking the watch off and setting it down on a
+    /// desk (which `desk` finds, after the fact, back to when it was set
+    /// down): the minutes before can't borrow its stillness, as they did,
+    /// to make a nap (here, of the 15 minutes before it), neither in the
+    /// end nor at any pass on the way, nor be held back as a sleep that
+    /// may yet begin.
+    #[test]
+    fn still_before_a_desk_is_not_sleep() {
+        let worn = |movement| Minute {
+            seen: true,
+            movement,
+            steps: 0,
+            worn: Some(true),
+        };
+        let mut minutes = vec![worn(30); 15];
+        // Taking it off: a stir, as far as stillness goes.
+        minutes.push(worn(800));
+        minutes.extend(
+            [Minute {
+                worn: Some(false),
+                ..worn(25)
+            }; 60],
+        );
+        let (kinds, asleep) = firmware(&minutes, &[]);
+        assert!(!kinds.iter().any(|k| k.is_sleep()), "{}", timeline(&kinds));
+        assert!(!asleep.iter().any(|&a| a));
+        assert!(kinds[16..].iter().all(|&k| k == Kind::NotWorn));
+        // Nor does a stillness that ends on the desk hold anything back.
+        let n = minutes.len();
+        assert_eq!(
+            sleep::unsettled_onset(&minutes[n - sleep::ONSET_SPAN..]),
+            None
+        );
+    }
+
     /// Without the heart rate sensor's verdict (it hasn't looked yet), a
     /// motionless watch reads as sleep: a known limitation, pinned here so
-    /// a change is noticed.
+    /// a change is noticed. (A level one, face up, is found by `desk`.)
     #[test]
     fn off_the_wrist_without_heart_rate_looks_like_sleep() {
         let mut rng = Rng::new(1);
