@@ -760,20 +760,22 @@ fn set_nibble(buffer: &mut [u8; BYTES], i: usize, value: u8) {
 //   whole frame is drawn again with only eight canvas rows' panel rows
 //   taking any of it (`Fine::band`), into `back`, which the flush has
 //   just made a copy of `front` and so is free until it's put back from
-//   it. Each fine row of the eight is sent if it differs from what the
-//   panel shows, which is known by a hash of each row rather than a copy
-//   of it: this costs RAM for 80 hashes and little else.
+//   it. The band's fine rows are sent if they differ from what the
+//   panel shows, which is known by a hash of the band rather than a copy
+//   of it: 64 bytes of RAM in all (see `Fine`).
 //
-// Drawing the frame again for each eight fine rows is the price: the
+// Drawing the frame again for each band with fine rows is the price: the
 // canvas's own drawing is cut to the rows being drawn (see `rect` and
 // `glyphs`), so a band costs little more than walking the screen's code
-// and drawing its detail. Each fine row that changed goes whole, as
-// there's no copy to find where it changed: a full-width row, a transfer
-// of its own. Only Living Tokyo draws finely, so only its builds have any
-// of this: Retro's are as they were.
+// and drawing its detail. And a band that changed sends its fine rows
+// whole, as there's no copy to find where it changed: each a full-width
+// row, a transfer of its own. Only Living Tokyo draws finely, so only
+// its builds have any of this: Retro's are as they were.
 //
-// TODO: hash a fine row in parts, so that one that changed in a part
-// (steam rising) is sent in part, as the canvas's rows are.
+// TODO: a hash a row, or a row's parts, so that a fine row that changed
+// in a part (steam rising) is sent alone, in part, as the canvas's rows
+// are: it needs RAM that the dev kit's Living Tokyo `compare` build
+// hasn't got (8 bytes to spare).
 
 /// The panel's side, in its own pixels: where [`Canvas::fine_rect`] draws.
 #[cfg(feature = "theme-living_tokyo")]
