@@ -6,10 +6,11 @@ use core::fmt::Write as _;
 use embassy_time::Duration;
 
 use super::layout::{ALARM_ROW, ALARM_ROWS_TOP, EDITOR_BUTTONS_Y};
-use super::{BACKGROUND, draw_digit, street};
+use super::{BACKGROUND, street};
 use crate::alarm;
 use crate::canvas::{Canvas, Color};
 use crate::font;
+use crate::font::fine::Style;
 use crate::themes::Editor;
 use crate::themes::helpers::{duration, hhmm};
 use crate::ui::{Editing, Fits, Status};
@@ -31,6 +32,16 @@ use crate::ui::{Editing, Fits, Status};
 // dark row. Under the board, past the platform's edge, the night's
 // weather, quietly: rain falling, or a few stars. Dim, the board alone,
 // still.
+//
+// At the panel's resolution, the rows are the board's dot matrix, an LED
+// a pixel of the font (`street::led_text`), the seams between them
+// hairlines, and the rail and the platform's studded yellow edge drawn
+// as what they are. The board's frame stays on the canvas's grid, as
+// does a row that ticks every second (a running timer's, or one in its
+// last ten minutes): a fine row that changes goes to the panel whole,
+// with every fine row in its band (see `Canvas::refine`), where the
+// canvas sends a changed figure as a narrow span. So a ticking row is
+// the canvas's bolder lettering among the LEDs.
 
 /// The board's columns: its kind, when it goes, and (right-aligned to
 /// the last) its state.
@@ -194,7 +205,7 @@ pub(super) fn render_alarms(
     for (i, row) in rows.iter().enumerate() {
         let top = ALARM_ROWS_TOP + ALARM_ROW * i as i32;
         if i > 0 {
-            seam(canvas, top - 1);
+            seam(canvas, top - 1, dim);
         }
         let lit = if Some(i) == next {
             Lit::Next
@@ -204,44 +215,55 @@ pub(super) fn render_alarms(
             Lit::Dark
         };
         let mut state = heapless::String::<8>::new();
+        let mut ticks = row.timer && row.on;
         match row.left {
             Some(left) if row.timer || lit == Lit::Next => {
                 write!(state, "IN {}", until(left)).fits();
+                ticks |= left < 10 * 60;
             }
             _ if row.on => state.push_str("ON").fits(),
             _ if row.timer => {}
             _ => state.push_str("OFF").fits(),
         }
         let y = top + (ALARM_ROW - 1 - 5) / 2;
-        departure(canvas, y, row.kind, &row.time, &state, lit);
+        departure(canvas, y, row.kind, &row.time, &state, lit, !ticks);
     }
 }
 
-/// A seam between a board's rows, at row `y`: its panels' join, dotted,
-/// so a row reads as a strip to tap.
-fn seam(canvas: &mut Canvas, y: i32) {
-    for x in (2..78).step_by(2) {
-        canvas.pixel(x, y, Color::TRACK);
-    }
+/// A seam between a board's rows, at the canvas's row `y`: its panels'
+/// join, a hairline, so a row reads as a strip to tap. Solid in the dim
+/// look, where a checkered tone flickers with the panel's inversion at
+/// idle mode's refresh.
+fn seam(canvas: &mut Canvas, y: i32, dim: bool) {
+    let level = if dim { 4 } else { 2 };
+    canvas.fine_tone(6, 3 * y + 1, 228, 1, level, Color::TRACK);
 }
 
 /// A departure on the alarms board, its lettering's top at `y`: its kind
 /// (red if it's the next to ring), its time and its state in the
-/// board's amber, "ON" in green; a dark row, all faint.
-fn departure(canvas: &mut Canvas, y: i32, kind: &str, time: &str, state: &str, lit: Lit) {
+/// board's amber, "ON" in green; a dark row, all faint. In the board's
+/// LEDs if `fine` (see `street::led_text`): a row that ticks every second
+/// stays on the canvas.
+fn departure(
+    canvas: &mut Canvas,
+    y: i32,
+    kind: &str,
+    time: &str,
+    state: &str,
+    lit: Lit,
+    fine: bool,
+) {
     let (kind_color, text) = match lit {
         Lit::Next => (Color::HEART, Color::HEART_SHINE),
         Lit::On => (Color::HEART_SHINE, Color::HEART_SHINE),
         Lit::Dark => (Color::TEXT_FAINT, Color::TEXT_FAINT),
     };
     let state_color = if state == "ON" { Color::GOOD } else { text };
-    canvas.text(KIND_X, y, kind, kind_color);
-    let end = canvas.text(TIME_X, y, time, text);
-    debug_assert!(
-        end < STATE_RIGHT - font::small_text_width(state),
-        "{state} runs into {time}"
-    );
-    canvas.text_right(STATE_RIGHT, y, state, state_color);
+    street::led_text(canvas, KIND_X, y, kind, kind_color, fine);
+    let end = street::led_text(canvas, TIME_X, y, time, text, fine);
+    let state_x = STATE_RIGHT - font::small_text_width(state);
+    debug_assert!(end < state_x, "{state} runs into {time}");
+    street::led_text(canvas, state_x, y, state, state_color, fine);
 }
 
 /// Under a board whose bottom edge is row `top`, past the platform's
@@ -270,12 +292,26 @@ fn render_platform(canvas: &mut Canvas, top: i32, now: Option<i64>, tick: u64, d
         }
         street::fine_stars(canvas, &shown, (!dim).then_some(tick));
     }
-    // The rail, and the platform's edge: its yellow tactile strip, in
-    // dashes. (Not `street::rails`' sleepers: in so thin a strip, one
-    // line fewer keeps it calm under the board.)
-    canvas.fill_rect(0, RAILS, 80, 1, Color::TEXT_FAINT);
-    for x in (0..80).step_by(4) {
-        canvas.fill_rect(x + 1, PLATFORM_EDGE, 2, 1, Color::HEART_SHINE);
+    // The rail beyond the edge, its sleepers' ends under it; and the
+    // platform's edge, its yellow tactile strip studded, as Japan's
+    // platforms have it.
+    rails(canvas, 3 * RAILS);
+    let edge = 3 * PLATFORM_EDGE - 1;
+    canvas.fine_rect(0, edge, 240, 4, Color::HEART_SHINE);
+    for x in (1..240).step_by(4) {
+        canvas.fine_pixel(x, edge + 1, Color::SHADOW);
+        canvas.fine_pixel(x + 2, edge + 3, Color::SHADOW);
+    }
+}
+
+/// A railway line seen from the side, across the screen at the panel's
+/// row `y`: the rail, lit along its head, and its sleepers' ends under
+/// it.
+fn rails(canvas: &mut Canvas, y: i32) {
+    canvas.fine_rect(0, y, 240, 1, Color::TEXT_DIM);
+    canvas.fine_rect(0, y + 1, 240, 1, Color::TEXT_FAINT);
+    for x in (3..240).step_by(12) {
+        canvas.fine_rect(x, y + 3, 6, 2, Color::TRACK);
     }
 }
 
@@ -319,7 +355,7 @@ pub(super) fn render_phone_alarms(canvas: &mut Canvas, phone: &alarm::Phone, dim
     street::board(canvas, 0, top - 1, 80, bottom - top + 2, RODS);
     street::title(canvas, "PHONE ALARMS", Color::ACCENT);
     if alarms.is_empty() {
-        canvas.text(KIND_X, top + 1, "NONE", Color::TEXT_FAINT);
+        street::led_text(canvas, KIND_X, top + 1, "NONE", Color::TEXT_FAINT, true);
         return;
     }
 
@@ -346,9 +382,12 @@ pub(super) fn render_phone_alarms(canvas: &mut Canvas, phone: &alarm::Phone, dim
             Color::TEXT_FAINT
         };
         let time = if lit == Lit::Next { Color::HEART } else { text };
-        canvas.text(KIND_X, y, &hhmm(alarm.time.into()), time);
+        // In the board's LEDs, but for the next to ring in its last ten
+        // minutes, whose seconds tick (see `departure`).
+        let fine = !matches!(next, Some((i, left)) if i == row && left < 10 * 60);
+        street::led_text(canvas, KIND_X, y, &hhmm(alarm.time.into()), time, fine);
         if alarm.days == 0 {
-            canvas.text(TIME_X, y, "ONCE", text);
+            street::led_text(canvas, TIME_X, y, "ONCE", text, fine);
         } else {
             // Its weekdays lit, the others dark LEDs (faint, dim, where
             // the dark's half-tone would break the letters up), so the
@@ -360,7 +399,7 @@ pub(super) fn render_phone_alarms(canvas: &mut Canvas, phone: &alarm::Phone, dim
                 } else {
                     unlit
                 };
-                canvas.text(TIME_X + 4 * day as i32, y, letter, color);
+                street::led_text(canvas, TIME_X + 4 * day as i32, y, letter, color, fine);
             }
         }
         // No room for "IN" beside the weekdays: the red time says it's
@@ -370,7 +409,8 @@ pub(super) fn render_phone_alarms(canvas: &mut Canvas, phone: &alarm::Phone, dim
             (_, _) if on => ("ON".try_into().unwrap_or_default(), Color::GOOD),
             _ => ("OFF".try_into().unwrap_or_default(), Color::TEXT_FAINT),
         };
-        canvas.text_right(STATE_RIGHT, y, &state, color);
+        let x = STATE_RIGHT - font::small_text_width(&state);
+        street::led_text(canvas, x, y, &state, color, fine);
     }
 }
 
@@ -462,15 +502,22 @@ pub(super) fn render_editor(canvas: &mut Canvas, editor: &Editor, dim: bool) {
             left.is_none(),
         );
     }
+    // What the digits are and how to change them, in the board's LEDs
+    // too: they stay still while a timer's digits tick.
     let labels_y = EDITOR_DIGITS_Y + street::LED_H + 4;
-    canvas.text_centered(20, labels_y, labels.0, Color::TEXT_FAINT);
-    canvas.text_centered(59, labels_y, labels.1, Color::TEXT_FAINT);
     let hint = if left.is_some() {
         "LEFT"
     } else {
         "SWIPE UP/DOWN"
     };
-    canvas.text_centered(40, labels_y + 8, hint, Color::TEXT_FAINT);
+    for (centre, y, text) in [
+        (20, labels_y, labels.0),
+        (59, labels_y, labels.1),
+        (40, labels_y + 8, hint),
+    ] {
+        let x = centre - font::small_text_width(text) / 2;
+        street::led_text(canvas, x, y, text, Color::TEXT_FAINT, true);
+    }
 
     let (left, left_color) = match (editing, on) {
         (Editing::Timer(_), true) => ("STOP", Some(Color::BAD)),
@@ -483,25 +530,40 @@ pub(super) fn render_editor(canvas: &mut Canvas, editor: &Editor, dim: bool) {
     } else {
         "DONE"
     };
-    key(canvas, 2, left, left_color);
-    key(canvas, 42, right, Some(Color::ACCENT));
+    key(canvas, 2, left, left_color, dim);
+    key(canvas, 42, right, Some(Color::ACCENT), dim);
 }
 
-/// One of the editor's buttons, 36 wide from `x`: a panel key, its face
-/// lit in `lit` (or unlit, dark, for a switch that's off) in a slate
-/// bezel, a row deeper at the bottom, as a key stands proud of its
-/// panel.
-fn key(canvas: &mut Canvas, x: i32, label: &str, lit: Option<Color>) {
-    const W: i32 = 36;
-    const H: i32 = 18;
-    let y = EDITOR_BUTTONS_Y;
-    canvas.fill_rect(x, y, W, H, Color::TRACK);
+/// One of the editor's buttons, 36 wide from the canvas's `x`, at the
+/// panel's resolution: a key, its face lit in `lit` (or unlit, dark, for
+/// a switch that's off), its top edge catching the light, in a slate
+/// bezel deeper at the bottom, as a key stands proud of its panel; its
+/// label lettered as a sign's. In the dim look, no light on its edge: a
+/// checkered tone there flickers at idle mode's refresh.
+fn key(canvas: &mut Canvas, x: i32, label: &str, lit: Option<Color>, dim: bool) {
+    let (x, y, w, h) = (3 * x, 3 * EDITOR_BUTTONS_Y, 3 * 36, 3 * 18);
+    rounded(canvas, x, y, w, h, Color::TRACK);
     let (face, ink) = match lit {
         Some(color) => (color, BACKGROUND),
         None => (Color::SHADOW, Color::TEXT_DIM),
     };
-    canvas.fill_rect(x + 1, y + 1, W - 2, H - 3, face);
-    canvas.text_centered(x + W / 2, y + 6, label, ink);
+    let (fw, fh) = (w - 6, h - 9);
+    rounded(canvas, x + 3, y + 3, fw, fh, face);
+    if !dim {
+        canvas.fine_tone(x + 5, y + 4, fw - 4, 1, 2, Color::TEXT);
+    }
+    let style = street::LETTERING;
+    let lx = x + (w - font::Face::Fine(style).width(label)) / 2;
+    let ly = y + 3 + (fh - style.height()) / 2;
+    canvas.fine_type(lx, ly, label, style, ink, None);
+}
+
+/// A box `w` by `h` from the panel's `(x, y)`, its corners rounded by a
+/// pixel, as [`street::fine_sign`]'s.
+fn rounded(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Color) {
+    canvas.fine_rect(x + 2, y, w - 4, h, color);
+    canvas.fine_rect(x, y + 2, w, h - 4, color);
+    canvas.fine_rect(x + 1, y + 1, w - 2, h - 2, color);
 }
 
 // ==============================================================================
@@ -515,29 +577,48 @@ fn key(canvas: &mut Canvas, x: i32, label: &str, lit: Option<Color>) {
 // and the hints below it. Behind, the far city along the horizon, and
 // the road in front.
 //
+// It's drawn at the panel's resolution, so that it reads as a crossing
+// without being told: the crossbuck's yellow and black boards, each lamp
+// a lens under its hood in a dark backplate, the boom's slanting stripes
+// and its little lamps, the gate's box at the post, the rail and its
+// sleepers. The time is in the city's lettering: it changes by the
+// minute. What changes every second is kept to few rows: the lamps and
+// their haze within one band of the canvas's eight rows (see
+// `Canvas::refine`), the boom's lamps, and the road's light under them.
+//
 // It lives on the hour and the night. The city's windows are lit as its
 // people are up (`street::city_lights`: most in the evening, hardly any
 // at 02:00), and from 04:00 the sky behind it glows, higher each hour
 // (`street::fine_horizon`), so 02:00, 05:00 and 06:30 are three skies at a
 // glance. On a rainy night (`street::rainy`, a third of them) the rain
-// falls and the road is wet, the lit lamp and the windows broken up in
-// it; on a clear one, the stars are out, one twinkling. The lamps take
-// turns each second. In the dim look (the quiet night), no weather, no
-// glow, no twinkle: the lamps alone flash.
+// falls and the road is wet, the lit lamp broken up in it and the rain
+// splashing; on a clear one, the stars are out, one twinkling, and the
+// lit lamp's red pools on the road. The lamps take turns each second. In
+// the dim look (the quiet night), no weather, no glow, no twinkle and no
+// far city's half-toned walls: the lamps alone flash.
 
-/// The horizon: the rails, the far city's ground, and the road's top.
+/// The horizon: the rails, the far city's ground, and the road's top
+/// (a canvas row).
 const CROSSING_GROUND: i32 = 69;
-/// The post's left column (it's 2 px wide), under the crossbuck.
-const CROSSING_POST: i32 = 69;
-/// The boom's top row: down, across the screen to the post.
-const CROSSING_BOOM: i32 = 33;
-/// The lamps' lenses, each 6 across in a dark backplate 8 across, either
-/// side of the post: their left edges, and their top.
-const CROSSING_LENSES: [i32; 2] = [60, 73];
-const CROSSING_LENS_Y: i32 = 17;
-const LENS: i32 = 6;
-/// The far city's tallest building.
+/// The far city's tallest building (canvas rows).
 const CROSSING_CITY: i32 = 15;
+/// The crossing, in the panel's pixels: the post's left (it's 6 wide),
+/// the lamps' middles either side of it, and the boom's top (it's 5
+/// thick).
+const POST: i32 = 207;
+const LAMPS: [i32; 2] = [188, 231];
+const LAMP_Y: i32 = 60;
+const BOOM: i32 = 99;
+/// A lamp's lens, and its backplate, across.
+const LENS: i32 = 14;
+const PLATE: i32 = 20;
+/// The time, big, in the city's lettering, and its capitals' top left.
+const TIME: Style = Style {
+    cap: 40,
+    stroke: 104,
+    caps: true,
+};
+const TIME_AT: (i32, i32) = (12, 45);
 
 /// Stars over the crossing, clear of the title, the time, the hints and
 /// the crossbuck; as the sky lightens, the last go first.
@@ -569,31 +650,28 @@ pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &St
     // The sky: the dawn's glow, then the stars still out on a clear
     // night (one brighter, a second in three), then the rain on a wet
     // one; and the far city in front of the glow.
+    let ground = 3 * CROSSING_GROUND;
     if !dim {
         // Three levels at most: the fourth's would reach the hints.
-        street::fine_horizon(canvas, 0, 240, 3 * CROSSING_GROUND, light.min(3));
+        street::fine_horizon(canvas, 0, 240, ground, light.min(3));
     }
     if !rain {
         let shown =
             CROSSING_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
         street::fine_stars(canvas, &CROSSING_STARS[..shown], (!dim).then_some(tick));
     }
-    street::fine_skyline(
-        canvas,
-        0,
-        240,
-        3 * CROSSING_GROUND,
-        3 * CROSSING_CITY,
-        street::city_lights(hour),
-    );
+    if !dim {
+        let lights = street::city_lights(hour);
+        street::fine_skyline(canvas, 0, 240, ground, 3 * CROSSING_CITY, lights);
+    }
     if rain && !dim {
-        street::fine_rain(canvas, 0, 3 * CROSSING_GROUND, tick, Color::TEXT_FAINT);
+        street::fine_rain(canvas, 0, ground, tick, Color::TEXT_FAINT);
         // The rain passes behind the time and the hints, not through
         // their letters, which it would break up.
-        canvas.fill_rect(3, 14, 56, 17, BACKGROUND);
+        canvas.fill_rect(3, 14, 56, 18, BACKGROUND);
         canvas.fill_rect(3, 37, 50, 15, BACKGROUND);
     }
-    let lit = render_crossing(canvas, tick.is_multiple_of(2));
+    let lit = render_crossing(canvas, tick.is_multiple_of(2), dim);
     if !dim {
         render_road(canvas, lit, rain, tick);
     }
@@ -606,129 +684,152 @@ pub(super) fn render_ringing(canvas: &mut Canvas, kind: alarm::Kind, status: &St
     let end = street::title(canvas, title, Color::HEART);
     debug_assert!(end < 61, "the ringing's title runs into the crossbuck");
     if let Some(second) = status.local_second {
-        // The clock's 2× digits, closer round the colon than the
-        // editor's, to leave the crossing its room.
+        // The hours and the minutes in the city's lettering, and between
+        // them a colon of two red dots, as a clock's, at their middle
+        // rather than the face's at its baseline.
         let minute = second.div_euclid(60).rem_euclid(24 * 60);
-        let digits = [
-            minute / 600,
-            minute / 60 % 10,
-            minute % 60 / 10,
-            minute % 10,
-        ];
-        for (&digit, x) in digits.iter().zip([4, 16, 34, 46]) {
-            draw_digit(canvas, x, 15, digit as u64, 2, Color::TEXT);
+        let edge = (!dim).then_some(Color::TEXT_FAINT);
+        let (mut x, y) = TIME_AT;
+        for (i, part) in [minute / 60, minute % 60].into_iter().enumerate() {
+            if i == 1 {
+                for dot in [12, 30] {
+                    street::fine_ellipse(canvas, x, y + dot, 7, 7, Color::HEART);
+                }
+                x += 7 + TIME.gap();
+            }
+            let mut text = heapless::String::<4>::new();
+            write!(text, "{part:02}").fits();
+            x = canvas.fine_type(x, y, &text, TIME, Color::TEXT, edge);
         }
-        for y in [19, 25] {
-            canvas.fill_rect(29, y, 2, 2, Color::HEART);
-        }
+        debug_assert!(x < LAMPS[0] - PLATE / 2, "the time runs into the lamps");
     }
     canvas.text(4, 38, "TAP: SNOOZE", Color::TEXT_DIM);
     canvas.text(4, 46, "BUTTON: STOP", Color::TEXT_DIM);
 }
 
 /// The road in front of the crossing, under the rails. Wet on a rainy
-/// night: the lit lamp (its lens's left edge at `lit`) broken up in the
-/// puddles under it, and the rain splashing, moving with `tick`. Dry on
-/// a clear one: the lit lamp's red light pooled on it.
+/// night: the lit lamp (its middle at the panel's column `lit`) broken
+/// up in the road under it, and the rain splashing, moving with `tick`.
+/// Dry on a clear one: the lit lamp's red light pooled on it.
 fn render_road(canvas: &mut Canvas, lit: i32, rain: bool, tick: u64) {
-    let road = CROSSING_GROUND + 2;
-    if rain {
-        street::reflection(canvas, lit - 1, LENS + 2, road + 1, 4, Color::HEART);
-        // Splashes: a drop's ring, three pixels, here and there, moving
-        // on each second.
-        for i in 0..5_u64 {
-            let x = ((i * 23 + tick * 17) % 54) as i32 + 2;
-            let y = road + 2 + ((i * 3 + tick) % 7) as i32;
-            if y < 79 {
-                canvas.pixel(x - 1, y + 1, Color::TEXT_FAINT);
-                canvas.pixel(x, y, Color::TEXT_FAINT);
-                canvas.pixel(x + 1, y + 1, Color::TEXT_FAINT);
-            }
-        }
-    } else {
-        // A pool of light, widening and thinning away from the lamp: a
-        // checkerboard on the first row, every third pixel on the next,
-        // every fourth on the last.
-        for row in 0..3 {
-            let y = road + 1 + row;
-            for x in lit - 1 - row..lit + LENS + 1 + row {
-                if (x + row) % (2 + row) == 0 {
-                    canvas.pixel(x, y, Color::HEART);
-                }
-            }
-        }
+    // From the canvas's band of rows under the far city's (see
+    // `Canvas::refine`), so that a second's change of the light on it
+    // sends only the road's rows.
+    let road = 3 * (CROSSING_GROUND + 3);
+    if !rain {
+        street::fine_glow(canvas, lit - 30, road - 2, 60, 12, Color::HEART);
+        return;
+    }
+    street::fine_reflection(canvas, lit - 12, 24, road, 6, Color::HEART);
+    // Splashes: a drop's crown, here and there, somewhere new each
+    // second.
+    for i in 0..6_u64 {
+        let x = ((i * 67 + tick * 53) % 160) as i32 + 8;
+        let y = road + 5 + ((i * 7 + tick * 3) % 19) as i32;
+        canvas.fine_rect(x - 1, y, 3, 1, Color::TEXT_FAINT);
+        canvas.fine_pixel(x - 2, y - 1, Color::TEXT_FAINT);
+        canvas.fine_pixel(x + 2, y - 1, Color::TEXT_FAINT);
+        canvas.fine_pixel(x, y - 2, Color::TEXT_FAINT);
     }
 }
 
 /// The crossing: the crossbuck, the post, the lamps (the left one lit if
-/// `left`, else the right), the boom with its own small lamps, and the
-/// rails. Returns the lit lens's left edge, for its reflection.
-fn render_crossing(canvas: &mut Canvas, left: bool) -> i32 {
-    // Yellow and black, as Japan paints its crossings, bands `band` long
-    // along a run: the black as the far buildings' slate, as black
-    // proper would vanish into the night and leave yellow dashes.
-    let striped = |i: i32, band: i32| {
-        if (i / band) % 2 == 0 {
-            Color::HEART_SHINE
-        } else {
-            Color::TRACK
+/// `left`, else the right), the boom with its own small lamps and its
+/// gate's box, and the rail. Returns the lit lamp's middle, for its
+/// light on the road.
+fn render_crossing(canvas: &mut Canvas, left: bool, dim: bool) -> i32 {
+    let ground = 3 * CROSSING_GROUND;
+    // The post, up from the rail into the crossbuck, striped at its
+    // foot as the boom is. Plain, it's on the canvas's grid, two of its
+    // pixels wide (`POST` is on it): drawn finely, it would make every
+    // row it stands in a fine one, sent again whenever a lamp beside it
+    // changes its band.
+    canvas.fill_rect(POST / 3, 7, 2, CROSSING_GROUND - 17, Color::TEXT_FAINT);
+    striped(canvas, POST, ground - 30, 6, 30);
+
+    // The crossbuck: two boards crossed over the post, each striped
+    // across, yellow and black, as Japan's are.
+    let rows = canvas.fine_rows();
+    for y in rows.start.max(4)..rows.end.min(38) {
+        let dx = (y - 4) * 46 / 34;
+        for (from, sign) in [(186, 1), (241, -1)] {
+            let middle = from + sign * dx;
+            for x in middle - 4..middle + 5 {
+                // Bands across the board: along it, every 7 pixels.
+                let along = (3 * sign * x + 4 * y).rem_euclid(70);
+                let color = if along < 35 {
+                    Color::HEART_SHINE
+                } else {
+                    Color::TRACK
+                };
+                canvas.fine_pixel(x, y, color);
+            }
         }
-    };
-    let post = CROSSING_POST;
-    canvas.fill_rect(post, 12, 2, CROSSING_GROUND - 12, Color::TEXT_FAINT);
-    for y in CROSSING_GROUND - 10..CROSSING_GROUND {
-        canvas.fill_rect(post, y, 2, 1, striped(y - CROSSING_GROUND, 2));
-    }
-    // The crossbuck, a 17×12 X over the post, each arm 2 px thick: yellow,
-    // with a thin dark band every fourth row, so that it reads as one
-    // bold X at a glance rather than as dashes.
-    for i in 0..12 {
-        let color = if i % 4 == 3 {
-            Color::TRACK
-        } else {
-            Color::HEART_SHINE
-        };
-        let dx = i * 15 / 11;
-        canvas.fill_rect(62 + dx, 1 + i, 2, 1, color);
-        canvas.fill_rect(76 - dx, 1 + i, 2, 1, color);
     }
 
-    // The lamps' bracket, then each lamp: the lit one hazing red round
-    // its dark backplate.
-    let [first, last] = CROSSING_LENSES;
-    canvas.fill_rect(
-        first + 2,
-        CROSSING_LENS_Y - 2,
-        last - first,
-        1,
-        Color::TEXT_FAINT,
-    );
+    // The lamps: their bracket across the post, the lit one's haze, and
+    // each a lens in a dark backplate under its hood, the lit one red
+    // with a gleam on it.
     let lit = usize::from(!left);
-    let x = CROSSING_LENSES[lit];
-    street::glow(canvas, x, CROSSING_LENS_Y, LENS, 3, Color::HEART);
-    for (i, &x) in CROSSING_LENSES.iter().enumerate() {
-        street::disc(canvas, x - 1, CROSSING_LENS_Y - 1, LENS + 2, Color::TRACK);
-        let lens = if i == lit {
-            Color::HEART
-        } else {
-            Color::SHADOW
+    let [l, r] = LAMPS;
+    canvas.fine_rect(l, LAMP_Y - 1, r - l, 3, Color::TEXT_FAINT);
+    if !dim {
+        street::fine_glow(canvas, LAMPS[lit] - 20, LAMP_Y - 12, 40, 24, Color::HEART);
+    }
+    for (i, &x) in LAMPS.iter().enumerate() {
+        // A disc `d` across round the lamp's middle, `dy` lower.
+        let mut disc = |d: i32, dy: i32, color: Color| {
+            let top = LAMP_Y - d / 2 + dy;
+            street::fine_ellipse(canvas, x - d / 2, top, d, d, color);
         };
-        street::disc(canvas, x, CROSSING_LENS_Y, LENS, lens);
-    }
-
-    // The boom, down, from the left edge to the post, in yellow and
-    // black, its two small lamps flashing with the left one.
-    for x in 0..post {
-        canvas.fill_rect(x, CROSSING_BOOM, 1, 2, striped(x, 4));
-    }
-    if left {
-        for x in [14, 40] {
-            canvas.fill_rect(x, CROSSING_BOOM - 1, 2, 1, Color::HEART);
+        // The hood, rimmed, standing out over the top of the backplate.
+        disc(PLATE + 4, -3, Color::TEXT_FAINT);
+        disc(PLATE + 2, -2, Color::TRACK);
+        disc(PLATE, 0, Color::SHADOW);
+        let lens = if i == lit { Color::HEART } else { Color::TRACK };
+        disc(LENS, 0, lens);
+        if i == lit && !dim {
+            let corner = LAMP_Y - LENS / 2 + 3;
+            canvas.fine_tone(x - LENS / 2 + 3, corner, 4, 2, 2, Color::TEXT);
         }
     }
 
-    street::rails(canvas, 0, 80, CROSSING_GROUND);
-    x
+    // The boom, down, from the left edge to the post, its two small
+    // lamps flashing with the left one; and the gate's box at the post,
+    // which it swings from.
+    striped(canvas, 0, BOOM, POST, 5);
+    for x in [42, 120] {
+        let lamp = if left { Color::HEART } else { Color::TRACK };
+        canvas.fine_rect(x, BOOM - 3, 5, 3, lamp);
+    }
+    // The box on the canvas's grid too, but for its lid's edge.
+    canvas.fill_rect(POST / 3 - 2, BOOM / 3 - 2, 6, 6, Color::TRACK);
+    canvas.fine_rect(POST - 6, BOOM - 6, 18, 1, Color::TEXT_FAINT);
+
+    rails(canvas, ground);
+    LAMPS[lit]
+}
+
+/// A run of a crossing's yellow and black, `w` by `h` from the panel's
+/// `(x, y)`: bands 7 pixels wide slanting a pixel a row, the black as
+/// the far buildings' slate, as black proper would vanish into the night
+/// and leave yellow dashes.
+fn striped(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+    let rows = canvas.fine_rows();
+    for py in y.max(rows.start)..(y + h).min(rows.end) {
+        let mut from = x;
+        while from < x + w {
+            let phase = (from + py).rem_euclid(14);
+            let (color, run) = if phase < 7 {
+                (Color::HEART_SHINE, 7 - phase)
+            } else {
+                (Color::TRACK, 14 - phase)
+            };
+            let run = run.min(x + w - from);
+            canvas.fine_rect(from, py, run, 1, color);
+            from += run;
+        }
+    }
 }
 
 // ==============================================================================
@@ -742,22 +843,34 @@ fn render_crossing(canvas: &mut Canvas, left: bool) -> i32 {
 // and how to stop it under the puddle.
 //
 // Its one living thing is the water: a ring a second spreads round
-// HERE, one to three at once. On a clear night, the drop falls from an
-// eave over the street, alone; on a rainy one it rains, and the longer
-// the phone looks the harder it rains, the puddle pocked with more drops
+// HERE, one to three at once, each fainter as it spreads. On a clear
+// night, a drop gathers on the corner of an eave over the street and
+// falls, a second each; on a rainy one it rains, and the longer the
+// phone looks the harder it rains, the puddle pocked with more drops
 // each second. The hour is quiet: the far city's windows, low on the
 // horizon, lit as its people are up. In the dim look, the rings still
 // spread (it's calling for someone), but there's no weather or city.
+//
+// At the panel's resolution, as the rings are what moves and a ring a
+// canvas pixel thick was a stair, not water. They change the rows round
+// HERE every second, which go to the panel whole (see `Canvas::refine`):
+// it shows for a minute at most, while the phone looks.
 
-/// The horizon: the far city's ground, and the puddle's far edge.
+/// The horizon: the far city's ground, and the puddle's far edge (a
+/// canvas row).
 const FIND_GROUND: i32 = 30;
-/// "HERE" at 3×: 45×15, its top left.
-const HERE: (i32, i32) = (17, 44);
-/// The ripples' centre, HERE's middle.
-const RIPPLE: (i32, i32) = (40, 51);
-/// The eave the drop falls from on a clear night, from here to the right
-/// edge.
-const EAVE: (i32, i32) = (38, 13);
+/// HERE, big, in the city's lettering.
+const HERE: Style = Style {
+    cap: 42,
+    stroke: 96,
+    caps: true,
+};
+/// The ripples' middle, and HERE's, in the panel's pixels.
+const RIPPLE: (i32, i32) = (120, 153);
+/// The corner of the eave the drop falls from on a clear night, the
+/// panel's (the eave runs from it to the right edge): its gutter's end,
+/// over the ripples' middle.
+const EAVE: (i32, i32) = (118, 45);
 /// Stars, left of the eave and clear of the title.
 const FIND_STARS: [(i32, i32); 3] = [(8, 16), (27, 20), (16, 13)];
 
@@ -767,6 +880,7 @@ pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration, dim: bool) {
     let night = street::Night::now();
     let seconds = elapsed.as_secs();
     let (cx, cy) = RIPPLE;
+    let ground = 3 * FIND_GROUND;
 
     // The sky, the far city, and the eave over the street.
     if !dim {
@@ -775,7 +889,7 @@ pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration, dim: bool) {
             // and a third at 40, each a few rows behind the last.
             for fall in 0..(1 + seconds / 20).min(3) {
                 let tick = night.tick + fall * 2;
-                street::fine_rain(canvas, 0, 3 * FIND_GROUND, tick, Color::TEXT_FAINT);
+                street::fine_rain(canvas, 0, ground, tick, Color::TEXT_FAINT);
             }
         } else {
             let light = street::daylight(night.hour);
@@ -783,34 +897,45 @@ pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration, dim: bool) {
                 FIND_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
             street::fine_stars(canvas, &FIND_STARS[..shown], None);
         }
-        street::fine_skyline(
-            canvas,
-            0,
-            240,
-            3 * FIND_GROUND,
-            3 * 8,
-            street::city_lights(night.hour),
-        );
+        let lights = street::city_lights(night.hour);
+        street::fine_skyline(canvas, 0, 240, ground, 3 * 8, lights);
     }
-    canvas.fill_rect(0, FIND_GROUND, 80, 1, Color::TRACK);
-    let (ex, ey) = EAVE;
-    let eave = if dim { Color::TRACK } else { Color::TEXT_FAINT };
-    canvas.fill_rect(ex, ey, 80 - ex, 1, eave);
+    canvas.fine_rect(0, ground, 240, 1, Color::TRACK);
     if !dim {
-        canvas.fill_rect(ex, ey + 1, 80 - ex, 2, Color::SHADOW);
-        if !night.rain {
-            // The drop, on its way down from the eave's corner.
-            canvas.fill_rect(cx, ey + 5 + (seconds % 2) as i32 * 6, 1, 3, Color::TEXT);
+        street::fine_reflection(canvas, 0, 240, ground + 3, 3, Color::TRACK);
+    }
+    eave(canvas, dim);
+    if !dim && !night.rain {
+        // The drop: gathering under the gutter's end, then falling;
+        // both within one band of the canvas's rows (see
+        // `Canvas::refine`), so that it sends only that band's.
+        let ey = EAVE.1 + 3;
+        if seconds.is_multiple_of(2) {
+            street::fine_ellipse(canvas, cx - 1, ey, 3, 4, Color::TEXT);
+        } else {
+            canvas.fine_rect(cx, ey + 10, 1, 3, Color::TEXT_FAINT);
+            street::fine_ellipse(canvas, cx - 1, ey + 13, 3, 5, Color::TEXT);
         }
     }
 
     street::title(canvas, "FIND MY WATCH", Color::HEART);
 
-    // The ripples round HERE: one to three, a ring a second, widening.
+    // The ripples round HERE: one to three, a ring a second, widening
+    // and fading. The widest stays under the far edge.
     let rings = seconds % 3 + 1;
     for ring in 1..=rings as i32 {
-        let ry = 8 + 4 * ring;
-        ripple(canvas, cx, cy, 2 * ry + 10, ry, Color::ACCENT);
+        let ry = 3 * (8 + 4 * ring);
+        let rx = 2 * ry + 30;
+        // Solid in the dim look, where a checkered tone flickers at
+        // idle mode's refresh.
+        let level = if dim { 4 } else { (5 - ring) as u8 };
+        street::fine_ring(
+            canvas,
+            (cx - rx, cy - ry, 2 * rx, 2 * ry),
+            2,
+            level,
+            Color::ACCENT,
+        );
     }
 
     // The puddle: the drops of the rain pocking it, more the longer the
@@ -819,42 +944,53 @@ pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration, dim: bool) {
     if night.rain && !dim {
         let drops = (2 + seconds / 3).min(20);
         for i in 0..drops {
-            let x = ((i * 37 + seconds * 13) % 76) as i32 + 2;
-            let y = FIND_GROUND + 3 + ((i * 29 + seconds * 7) % 44) as i32;
-            canvas.pixel(x - 1, y, Color::TEXT_FAINT);
-            canvas.pixel(x + 1, y, Color::TEXT_FAINT);
-            canvas.pixel(x, y + 1, Color::TEXT_FAINT);
+            let x = ((i * 113 + seconds * 41) % 228) as i32 + 6;
+            let y = ground + 8 + ((i * 89 + seconds * 23) % 130) as i32;
+            canvas.fine_rect(x - 1, y - 1, 3, 1, Color::TEXT_FAINT);
+            canvas.fine_rect(x - 1, y + 1, 3, 1, Color::TEXT_FAINT);
+            canvas.fine_pixel(x - 2, y, Color::TEXT_FAINT);
+            canvas.fine_pixel(x + 2, y, Color::TEXT_FAINT);
         }
     }
 
     // HERE, and how to stop it, clear of the water's marks.
-    let (x, y) = HERE;
-    canvas.fill_rect(x - 1, y - 1, 45 + 2, 15 + 2, BACKGROUND);
-    canvas.text_scaled(x, y, "HERE", Color::TEXT, 3);
+    let (w, h) = (font::Face::Fine(HERE).width("HERE"), HERE.height());
+    let (x, y) = (cx - w / 2, cy - h / 2);
+    canvas.fine_rect(x - 4, y - 4, w + 8, h + 8, BACKGROUND);
+    let edge = (!dim).then_some(Color::TEXT_FAINT);
+    canvas.fine_type(x, y, "HERE", HERE, Color::TEXT, edge);
     let hint = "TAP: FOUND IT";
-    let width = crate::font::small_text_width(hint);
+    let width = font::small_text_width(hint);
     canvas.fill_rect(40 - width / 2 - 2, 69, width + 4, 9, BACKGROUND);
     canvas.text_centered(40, 71, hint, Color::TEXT_DIM);
 }
 
-/// A ripple's ring on the water: an ellipse round `(cx, cy)`, `rx` and
-/// `ry` its half-axes, a pixel thick, cut by the screen's edges and by
-/// the far edge of the puddle.
-fn ripple(canvas: &mut Canvas, cx: i32, cy: i32, rx: i32, ry: i32, color: Color) {
-    let mut point = |x: i32, y: i32| {
-        if y > FIND_GROUND {
-            canvas.pixel(x, y, color);
+/// The eave over the street, from [`EAVE`] to the right edge, seen from
+/// under it: the roof rising away in rows of tiles, the tiles' round
+/// ends along its edge, and the fascia under them. In the dim look, the
+/// tiles' ends alone.
+fn eave(canvas: &mut Canvas, dim: bool) {
+    let (x, y) = EAVE;
+    if !dim {
+        // The roof, its end cut back as a gable's, its courses of tiles
+        // running away above their round ends.
+        for row in 0..14 {
+            let from = x + 4 + (14 - row) / 2;
+            canvas.fine_rect(from, y - 14 + row, 240 - from, 1, Color::SHADOW);
         }
-    };
-    // Across by columns, then down by rows, so its steep ends close up.
-    for dx in -rx..=rx {
-        let dy = (ry * ry * (rx * rx - dx * dx) / (rx * rx)).isqrt();
-        point(cx + dx, cy - dy);
-        point(cx + dx, cy + dy);
+        for course in [y - 11, y - 7] {
+            let from = x + 4 + (y - course) / 2;
+            canvas.fine_rect(from, course, 240 - from, 1, Color::TRACK);
+        }
+        for tx in (x + 4..240).step_by(7) {
+            street::fine_ellipse(canvas, tx, y - 5, 6, 8, Color::TRACK);
+            street::fine_ring(canvas, (tx, y - 5, 6, 8), 1, 2, Color::TEXT_FAINT);
+        }
     }
-    for dy in -ry..=ry {
-        let dx = (rx * rx * (ry * ry - dy * dy) / (ry * ry)).isqrt();
-        point(cx - dx, cy + dy);
-        point(cx + dx, cy + dy);
+    // The gutter along its edge, a half-round lit along its lip, from
+    // whose end the drop falls.
+    canvas.fine_rect(x, y, 240 - x, 1, Color::TEXT_FAINT);
+    if !dim {
+        canvas.fine_rect(x, y + 1, 240 - x, 2, Color::TRACK);
     }
 }
