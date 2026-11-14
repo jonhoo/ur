@@ -972,7 +972,8 @@ async fn measure(
     let (mut peak, mut sum, mut count) = (0u32, 0u32, 0u32);
     // And the samples themselves, for the field log at `trace`: replaying
     // real wrists through `ppg` (host-tests/ppg) is how its limits get
-    // tuned. About 60 bytes a second while measuring. (Room for a few more
+    // tuned. About 50 bytes a second while measuring, with the level check
+    // (see `trace_level_samples`). (Room for a few more
     // than `LEVEL_CHECK_SAMPLES`, as one poll can complete several.)
     let mut second = heapless::Vec::<u16, SECOND_SAMPLES>::new();
 
@@ -985,11 +986,7 @@ async fn measure(
         // UI loop looks at the charger at least once a second). The last
         // part-second goes into the log, as for any end.
         if on_charger() {
-            trace!(
-                "heart: samples {=[?]} movement {}",
-                second.as_slice(),
-                activity::movement()
-            );
+            trace_samples(&second);
             return Ok(Ended::Charger(measured));
         }
         // A phase that ran out without a reading on a calm wrist may go on
@@ -1003,11 +1000,7 @@ async fn measure(
             });
         if let Some(next) = brighter {
             // The part-second at the dimmer drive, for the replay.
-            trace!(
-                "heart: samples {=[?]} movement {}",
-                second.as_slice(),
-                activity::movement()
-            );
+            trace_samples(&second);
             info!(
                 "heart: brighter after {} s: drive {}, from mean {}, pulse {}",
                 elapsed.as_secs(),
@@ -1106,11 +1099,7 @@ async fn measure(
         if let Some(ended) = ended {
             // The last part-second too, which holds the end of the last
             // window: without it, a replay is a window short.
-            trace!(
-                "heart: samples {=[?]} movement {}",
-                second.as_slice(),
-                activity::movement()
-            );
+            trace_samples(&second);
             return Ok(ended);
         }
 
@@ -1151,19 +1140,20 @@ async fn measure(
             } else {
                 mean
             };
-            debug!(
-                "heart: level {}, mean {}, peak {}, ambient {}, period {} µs",
-                at(*level, drive),
-                mean,
-                peak,
-                ambient,
-                conversions.period_us()
-            );
-            trace!(
-                "heart: samples {=[?]} movement {}",
-                second.as_slice(),
-                activity::movement()
-            );
+            #[cfg(not(feature = "field-log"))]
+            {
+                debug!(
+                    "heart: level {}, mean {}, peak {}, ambient {}, period {} µs",
+                    at(*level, drive),
+                    mean,
+                    peak,
+                    ambient,
+                    conversions.period_us()
+                );
+                trace_samples(&second);
+            }
+            #[cfg(feature = "field-log")]
+            trace_level_samples(at(*level, drive), ambient, conversions.period_us(), &second);
             second.clear();
             let before = (*level, drive);
             if peak >= SATURATED {
@@ -1313,6 +1303,63 @@ fn read(
 }
 
 // ==============================================================================
+// The samples through each session (at trace)
+// ==============================================================================
+
+/// Logs a part-second of samples (a session's end, or the dimmer drive's
+/// before a brighter phase), for the replay (host-tests/ppg, through
+/// `scripts/ppg_sessions.py`).
+///
+/// A field build packs them as differences (see [`crate::log_pack`]):
+/// `heart: packed samples [..] movement M`, which `scripts/expand_log.py`
+/// turns back into the `heart: samples [..] movement M` other builds log.
+fn trace_samples(second: &[u16]) {
+    #[cfg(not(feature = "field-log"))]
+    trace!(
+        "heart: samples {=[?]} movement {}",
+        second,
+        activity::movement()
+    );
+    #[cfg(feature = "field-log")]
+    {
+        let mut packed = [0u8; crate::log_pack::PACKED_PER_SAMPLE * SECOND_SAMPLES];
+        let len = crate::log_pack::pack_samples(second, &mut packed);
+        trace!(
+            "heart: packed samples {=[u8]} movement {=u16}",
+            packed[..len],
+            activity::movement()
+        );
+    }
+}
+
+/// Logs a second's level check and its samples in a field build, as one
+/// line where other builds log two (`heart: level …` at debug, then
+/// `heart: samples …`; `scripts/expand_log.py` turns it back into those):
+/// the level as drive/gain, the ambient light, the conversion period, and
+/// the samples packed as in [`trace_samples`]. The check's mean and peak
+/// are left out: they're the samples' own (their mean, rounded down, and
+/// their largest; true of every check in 0.11.1's log), which the expander
+/// works out. (Not so on a dev kit told its desk is skin, whose check
+/// raises the mean: see `debug::skin_forced`.)
+///
+/// At trace, with the samples, so a field build that logs this module at
+/// debug has neither.
+#[cfg(feature = "field-log")]
+fn trace_level_samples(level: Level, ambient: u32, period_us: f32, second: &[u16]) {
+    let mut packed = [0u8; crate::log_pack::PACKED_PER_SAMPLE * SECOND_SAMPLES];
+    let len = crate::log_pack::pack_samples(second, &mut packed);
+    trace!(
+        "heart: level {=u8}/{=u8}, ambient {=u32}, period {=f32} µs, packed samples {=[u8]} movement {=u16}",
+        level.drive,
+        level.gain,
+        ambient,
+        period_us,
+        packed[..len],
+        activity::movement()
+    );
+}
+
+// ==============================================================================
 // The accelerometer through each session (the logging build)
 // ==============================================================================
 
@@ -1343,10 +1390,10 @@ const ACCEL_TAIL: u8 = 2;
 /// fits a byte), the same as a capture build's `activity: samples` (see
 /// `activity::trace_samples`). That's ~93 bytes a poll (rzCOBS-encoded,
 /// measured on a capture log's samples), ~46 a second of session, against
-/// the ~100 of the PPG's own lines; ~24 samples a line, or fewer when a
-/// read failed or the FIFO was flushed. The movement's fundamental (a
-/// walk's ~1.8 Hz of steps, or ~0.9 Hz of arm swing) is well below the
-/// ~6 Hz this resolves.
+/// the ~50 of the PPG's own (see `trace_level_samples`); ~24 samples a
+/// line, or fewer when a read failed or the FIFO was flushed. The
+/// movement's fundamental (a walk's ~1.8 Hz of steps, or ~0.9 Hz of arm
+/// swing) is well below the ~6 Hz this resolves.
 #[cfg(feature = "field-log")]
 pub fn trace_accel(frames: &[[i16; 3]]) {
     let wanted = match ACCEL.load(Ordering::Relaxed) {

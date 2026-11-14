@@ -1218,6 +1218,55 @@ fn trace_samples(frames: &Frames, movement: u64) {
     defmt::trace!("activity: samples {=[?]}", raw[..3 * frames.len()]);
 }
 
+/// Logs a poll in a field build: a minute's polls to a line (see
+/// [`crate::log_pack::Polls`]), which `scripts/expand_log.py` turns back
+/// into a line a poll, as other builds log them. That line a poll was
+/// 60% of a worn day's field log, nearly all of it the timestamp and
+/// argument tags each line carries. A partly filled minute is lost if the
+/// watch resets or switches off.
+///
+/// A capture build (this module at trace) also logs each poll as before,
+/// at trace: `scripts/accel_samples.py` pairs each poll's samples (see
+/// [`trace_samples`]) with its steps, by time. (The expander then leaves
+/// the minute's line alone, rather than repeat its polls.)
+#[cfg(feature = "field-log")]
+fn log_poll(
+    polls: &mut crate::log_pack::Polls,
+    samples: u32,
+    movement: u64,
+    steps: u32,
+    count: u32,
+    [x, y, z]: [i16; 3],
+) {
+    defmt::trace!(
+        "activity: {} samples, movement {}, {} new steps (counter {}), last ({}, {}, {})",
+        samples,
+        movement,
+        steps,
+        count,
+        x,
+        y,
+        z
+    );
+    let now = embassy_time::Instant::now().as_millis();
+    if polls.push(now, samples, movement, steps) {
+        // Samples as counted from 24, so that each is nearly always a 0,
+        // which costs a bit. The expander knows the line by its start.
+        defmt::debug!(
+            "activity: polls over {=u32} ms: movement {=[?]}, steps {=[?]}, samples-24 {=[u8]}, counter {=u32}, last ({=i16}, {=i16}, {=i16})",
+            polls.span_ms(now),
+            polls.movement(),
+            polls.steps(),
+            polls.samples(),
+            count,
+            x,
+            y,
+            z
+        );
+        polls.clear();
+    }
+}
+
 #[embassy_executor::task]
 pub async fn activity_task(i2c: Device) {
     restore_today();
@@ -1272,6 +1321,9 @@ pub async fn activity_task(i2c: Device) {
     let mut previous: Option<[i16; 3]> = None;
     // Movement accumulated within the current minute.
     let (mut minute, mut movement_sum, mut movement_samples) = (None::<i64>, 0u64, 0u32);
+    // The polls not yet in the field log (see `log_poll`).
+    #[cfg(feature = "field-log")]
+    let mut polls = crate::log_pack::Polls::new();
 
     loop {
         Timer::after_secs(POLL_SECONDS).await;
@@ -1328,6 +1380,16 @@ pub async fn activity_task(i2c: Device) {
         // the sensor's own axes), for orientation questions such as how
         // it's mounted, or sleep position.
         let [x, y, z] = previous.unwrap_or_default();
+        #[cfg(feature = "field-log")]
+        log_poll(
+            &mut polls,
+            samples,
+            moved * 8 / u64::from(samples.max(1)),
+            new_steps,
+            count,
+            [x, y, z],
+        );
+        #[cfg(not(feature = "field-log"))]
         defmt::debug!(
             "activity: {} samples, movement {}, {} new steps (counter {}), last ({}, {}, {})",
             samples,

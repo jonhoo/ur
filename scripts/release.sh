@@ -183,8 +183,9 @@ variant ur "info"
 panics_only=embassy_executor=off,embassy_sync=off,embassy_time=off,embassy_nrf=off,bt_hci=off,nrf_mpsl=off,nrf_sdc=off
 # `UR_ACTIVITY_LOG=trace` makes a capture build, whose field log also keeps
 # the accelerometer's samples while the wrist moves, for tuning step
-# counting offline (see `trace_samples` in src/activity.rs). It about
-# doubles the log on a busy day, so it's not for releases: give it a
+# counting offline (see `trace_samples` in src/activity.rs), and each
+# poll's own line (see `log_poll` there). That's several times the log on a
+# busy day, so it's not for releases: give it a
 # `--pre` of its own (`--pre accel`) to tell its packages apart.
 variant ur-logging "info,ur::heart=trace,ur::activity=${UR_ACTIVITY_LOG:-debug},$panics_only" --features field-log
 

@@ -103,6 +103,8 @@ mod heart_schedule;
 mod i2c;
 mod link;
 mod live;
+#[cfg(feature = "field-log")]
+mod log_pack;
 mod mcuboot;
 mod minute_ring;
 mod motor;
