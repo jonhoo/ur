@@ -1698,9 +1698,21 @@ impl<'a> Follower<'a> {
         self.canvas.set_palette(self.app.palette());
         self.app.render(&mut self.canvas, &status, now);
         let Self {
-            canvas, display, ..
+            app,
+            canvas,
+            display,
+            ..
         } = self;
         crate::watch::run(canvas.flush(display), &mut None);
+        // Then the rows drawn at the panel's own resolution, which the
+        // flush leaves out, as the dev kit's UI loop sends them: without
+        // this, a Living Tokyo frame's fine rows never reach the panel
+        // here, and every `compare` differs there.
+        #[cfg(feature = "theme-living_tokyo")]
+        crate::watch::run(
+            canvas.refine(display, &mut |canvas| app.render(canvas, &status, now)),
+            &mut None,
+        );
     }
 }
 
