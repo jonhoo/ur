@@ -732,25 +732,130 @@ fn render_crossing(canvas: &mut Canvas, left: bool) -> i32 {
     x
 }
 
-/// "Find my watch": HERE, big, with rings round it that spread a ring a
-/// second, as a ping does, so the screen catches the eye from across a
-/// room (or from under a cushion), and how to stop it. `elapsed` is how
-/// long the phone has been looking.
-pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration) {
+// ==============================================================================
+// Finding the watch: HERE in a puddle
+// ==============================================================================
+
+// "Find my watch" is HERE, big, lying in a puddle in the street at
+// night, with a drop falling into it each second and its ripples
+// spreading round the word: what catches the eye from across a room
+// (or from under a cushion). The title on a red sign, as what rings is,
+// and how to stop it under the puddle.
+//
+// Its one living thing is the water: a ring a second spreads round
+// HERE, one to three at once. On a clear night, the drop falls from an
+// eave over the street, alone; on a rainy one it rains, and the longer
+// the phone looks the harder it rains, the puddle pocked with more drops
+// each second. The hour is quiet: the far city's windows, low on the
+// horizon, lit as its people are up. In the dim look, the rings still
+// spread (it's calling for someone), but there's no weather or city.
+
+/// The horizon: the far city's ground, and the puddle's far edge.
+const FIND_GROUND: i32 = 30;
+/// "HERE" at 3×: 45×15, its top left.
+const HERE: (i32, i32) = (17, 44);
+/// The ripples' centre, HERE's middle.
+const RIPPLE: (i32, i32) = (40, 51);
+/// The eave the drop falls from on a clear night, from here to the right
+/// edge.
+const EAVE: (i32, i32) = (38, 13);
+/// Stars, left of the eave and clear of the title.
+const FIND_STARS: [(i32, i32); 3] = [(8, 16), (27, 20), (16, 13)];
+
+/// `elapsed` is how long the phone has been looking.
+pub(super) fn render_find(canvas: &mut Canvas, elapsed: Duration, dim: bool) {
     canvas.clear(BACKGROUND);
-    canvas.text_centered(40, 6, "FIND MY WATCH", Color::ACCENT);
-    // "HERE" at 3×: 45×15, at x 17..62, y 28..43.
-    let (x, y, w, h) = (17, 28, 45, 15);
-    canvas.text_scaled(x, y, "HERE", Color::TEXT, 3);
-    // One to three rings, 4 px apart, outlined a pixel thick.
-    let rings = elapsed.as_secs() % 3 + 1;
-    for ring in 1..=rings as i32 {
-        let gap = 4 * ring;
-        let (left, top, width, height) = (x - gap, y - gap, w + 2 * gap, h + 2 * gap);
-        canvas.fill_rect(left, top, width, 1, Color::ACCENT);
-        canvas.fill_rect(left, top + height - 1, width, 1, Color::ACCENT);
-        canvas.fill_rect(left, top, 1, height, Color::ACCENT);
-        canvas.fill_rect(left + width - 1, top, 1, height, Color::ACCENT);
+    let night = street::Night::now();
+    let seconds = elapsed.as_secs();
+    let (cx, cy) = RIPPLE;
+
+    // The sky, the far city, and the eave over the street.
+    if !dim {
+        if night.rain {
+            // Harder the longer it looks: another fall of it at 20 s,
+            // and a third at 40, each a few rows behind the last.
+            for fall in 0..(1 + seconds / 20).min(3) {
+                let tick = night.tick + fall * 2;
+                street::rain(canvas, 0, FIND_GROUND, tick, Color::TEXT_FAINT);
+            }
+        } else {
+            let light = street::daylight(night.hour);
+            let shown =
+                FIND_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
+            street::stars(canvas, &FIND_STARS[..shown]);
+        }
+        street::skyline(
+            canvas,
+            0,
+            80,
+            FIND_GROUND,
+            8,
+            street::city_lights(night.hour),
+        );
     }
-    canvas.text_centered(40, 66, "TAP: FOUND IT", Color::TEXT_DIM);
+    canvas.fill_rect(0, FIND_GROUND, 80, 1, Color::TRACK);
+    let (ex, ey) = EAVE;
+    let eave = if dim { Color::TRACK } else { Color::TEXT_FAINT };
+    canvas.fill_rect(ex, ey, 80 - ex, 1, eave);
+    if !dim {
+        canvas.fill_rect(ex, ey + 1, 80 - ex, 2, Color::SHADOW);
+        if !night.rain {
+            // The drop, on its way down from the eave's corner.
+            canvas.fill_rect(cx, ey + 5 + (seconds % 2) as i32 * 6, 1, 3, Color::TEXT);
+        }
+    }
+
+    street::title(canvas, "FIND MY WATCH", Color::HEART);
+
+    // The ripples round HERE: one to three, a ring a second, widening.
+    let rings = seconds % 3 + 1;
+    for ring in 1..=rings as i32 {
+        let ry = 8 + 4 * ring;
+        ripple(canvas, cx, cy, 2 * ry + 10, ry, Color::ACCENT);
+    }
+
+    // The puddle: the drops of the rain pocking it, more the longer the
+    // phone has looked (a pair at first, twenty after a minute), each a
+    // small ring, somewhere new each second.
+    if night.rain && !dim {
+        let drops = (2 + seconds / 3).min(20);
+        for i in 0..drops {
+            let x = ((i * 37 + seconds * 13) % 76) as i32 + 2;
+            let y = FIND_GROUND + 3 + ((i * 29 + seconds * 7) % 44) as i32;
+            canvas.pixel(x - 1, y, Color::TEXT_FAINT);
+            canvas.pixel(x + 1, y, Color::TEXT_FAINT);
+            canvas.pixel(x, y + 1, Color::TEXT_FAINT);
+        }
+    }
+
+    // HERE, and how to stop it, clear of the water's marks.
+    let (x, y) = HERE;
+    canvas.fill_rect(x - 1, y - 1, 45 + 2, 15 + 2, BACKGROUND);
+    canvas.text_scaled(x, y, "HERE", Color::TEXT, 3);
+    let hint = "TAP: FOUND IT";
+    let width = crate::font::small_text_width(hint);
+    canvas.fill_rect(40 - width / 2 - 2, 69, width + 4, 9, BACKGROUND);
+    canvas.text_centered(40, 71, hint, Color::TEXT_DIM);
+}
+
+/// A ripple's ring on the water: an ellipse round `(cx, cy)`, `rx` and
+/// `ry` its half-axes, a pixel thick, cut by the screen's edges and by
+/// the far edge of the puddle.
+fn ripple(canvas: &mut Canvas, cx: i32, cy: i32, rx: i32, ry: i32, color: Color) {
+    let mut point = |x: i32, y: i32| {
+        if y > FIND_GROUND {
+            canvas.pixel(x, y, color);
+        }
+    };
+    // Across by columns, then down by rows, so its steep ends close up.
+    for dx in -rx..=rx {
+        let dy = (ry * ry * (rx * rx - dx * dx) / (rx * rx)).isqrt();
+        point(cx + dx, cy - dy);
+        point(cx + dx, cy + dy);
+    }
+    for dy in -ry..=ry {
+        let dx = (rx * rx * (ry * ry - dy * dy) / (ry * ry)).isqrt();
+        point(cx - dx, cy + dy);
+        point(cx + dx, cy + dy);
+    }
 }

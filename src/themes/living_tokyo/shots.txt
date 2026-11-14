@@ -181,3 +181,32 @@ update 42
 wait 1s
 shot night-update.png
 update off
+
+# The street-level scenes, at dawn on the same clear night: the record
+# bar playing, the air's room, a call ringing in its booth, and the
+# watch being looked for, HERE in its puddle.
+button
+wait 15s
+button
+wait 1s
+music "Ida Moreau" "Night Signals" playing
+aranet 1091 20.75 53 1012.3 87 3m
+up
+wait 1s
+up
+wait 1s
+shot night-music.png
+up
+wait 1s
+shot night-air.png
+button
+wait 1s
+call "Nora Lindqvist"
+wait 1s
+shot night-call.png
+call over
+wait 1s
+find on
+wait 1s
+shot night-find.png
+find off

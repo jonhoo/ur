@@ -432,3 +432,29 @@ pub(super) fn led_colon(canvas: &mut Canvas, x: i32, y: i32, color: Color) {
         canvas.fill_rect(x, y + row * LED_PITCH, LED_PITCH - 1, LED_PITCH - 1, color);
     }
 }
+
+// ==============================================================================
+// For the street-level scenes: music, a call, the air, finding the watch
+// ==============================================================================
+
+/// The night a screen that isn't handed the time is drawn in: the hour
+/// (for the sky, the far city and the shops' hours), whether it rains,
+/// and the seconds, for what moves. With no time yet, a clear evening,
+/// standing still.
+#[derive(Clone, Copy)]
+pub(super) struct Night {
+    pub hour: u8,
+    pub rain: bool,
+    pub tick: u64,
+}
+
+impl Night {
+    pub(super) fn now() -> Self {
+        let now = local_now();
+        Night {
+            hour: now.map_or(21, hour_of),
+            rain: now.is_some_and(|second| rainy(evening(second))),
+            tick: now.map_or(0, |second| second as u64),
+        }
+    }
+}

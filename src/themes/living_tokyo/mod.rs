@@ -152,12 +152,12 @@ impl Theme for LivingTokyo {
         messages::render_card(canvas, app, who, arrived, dim);
     }
 
-    fn music(&self, canvas: &mut Canvas, music: &Music, _dim: bool) {
-        messages::render_music(canvas, music);
+    fn music(&self, canvas: &mut Canvas, music: &Music, dim: bool) {
+        messages::render_music(canvas, music, dim);
     }
 
-    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant, _dim: bool) {
-        air::render_air(canvas, sighting, now);
+    fn air(&self, canvas: &mut Canvas, sighting: &Sighting, now: Instant, dim: bool) {
+        air::render_air(canvas, sighting, now, dim);
     }
 
     fn buttons(&self, canvas: &mut Canvas, grid: &Grid) {
@@ -212,12 +212,12 @@ impl Theme for LivingTokyo {
         alarms::render_ringing(canvas, kind, status, dim);
     }
 
-    fn find(&self, canvas: &mut Canvas, elapsed: Duration, _dim: bool) {
-        alarms::render_find(canvas, elapsed);
+    fn find(&self, canvas: &mut Canvas, elapsed: Duration, dim: bool) {
+        alarms::render_find(canvas, elapsed, dim);
     }
 
-    fn call(&self, canvas: &mut Canvas, call: &Call, _dim: bool) {
-        messages::render_call(canvas, call);
+    fn call(&self, canvas: &mut Canvas, call: &Call, dim: bool) {
+        messages::render_call(canvas, call, dim);
     }
 
     fn pairing(&self, canvas: &mut Canvas, passkey: u32, dim: bool) {

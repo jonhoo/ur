@@ -25,8 +25,10 @@ pairing (a ticket machine's display), an update (a train pulling in),
 storage mode's prompt (a shop's shutter half down), switching off
 (the city's lights going out), the alarms and the phone's (a station's
 departure board), the alarm editor (one departure, big), Info (a
-station's information board) and Settings (wooden menu tags on a
-rail). The rest are still copies of
+station's information board), Settings (wooden menu tags on a
+rail), the music (a record turning in a small bar), the air (a bowl
+steaming in a small room), a call (a phone booth on a corner) and
+finding the watch (HERE in a puddle). The rest are still copies of
 [Retro](../retro/)'s, in Tokyo
 Night's colours.
 
@@ -68,31 +70,41 @@ says.)
 |---|---|
 | Last night | <img src="shots/night-last-night.png" width="120" alt="Last night: LAST NIGHT on a blue neon sign, 7:20 big, ASLEEP, and a sleeper train from 23:20 to 06:55, the times on station signs over its ends, its carriages the deep, REM and light sleep in cyan, violet and grey, with their times under it; between the signs, a crescent moon setting towards the rails, and a few stars in the dark sky"> |
 | A notification's banner | <img src="shots/night-banner.png" width="120" alt="The clock face with a banner over its bottom: a dark sign outlined in the app's cyan neon, SIGNAL in cyan and Nora Lindqvist in white"> |
-| A notification | <img src="shots/night-notification.png" width="120" alt="A notification in the history at 21:30: SIGNAL on a cyan neon sign top left, the time top right, Nora Lindqvist big in the middle; under it a noodle bar, its cyan noren over a warmly lit doorway with diners at the counter, a red lantern either side, steam from its vent, and the light spilling onto the pavement"> |
+| A notification | <img src="shots/night-notification.png" width="120" alt="A notification in the history at 21:30: SIGNAL on a cyan neon sign top left, the time top right, Nora Lindqvist big in the middle; low under it a small noodle bar, its cyan noren over a warmly lit doorway, a red lantern beside it, a few stars over its roof"> |
 | An alarm ringing | <img src="shots/night-ringing.png" width="120" alt="An alarm ringing at 06:10: ALARM on a red neon sign, the time big, and a level crossing on the right, its crossbuck yellow, one red lamp lit and hazing, the yellow and black boom down across the screen over TAP: SNOOZE and BUTTON: STOP; behind, the far city against a dawn glowing yellow and violet, a few windows lit"> |
 | The button grid | <img src="shots/night-grid.png" width="120" alt="The button grid at 06:10: a dark drinks machine on a clear night, a moth over its roof, its two lit shelves each with three drinks on show, bottles and cans in red, cyan, yellow, green, violet and blue, a small dark button under each; at its foot, an empty tray and a dark readout"> |
 | A press sent | <img src="shots/night-grid-sent.png" width="120" alt="The same machine just after a tap on the top right slot: that part of the shelf lit green with 3 on it, big, its button green, TAP in green on the readout, and a yellow can lying in the tray"> |
 | Pairing | <img src="shots/night-pairing.png" width="120" alt="Pairing: PAIRING on a blue neon sign, ENTER ON PHONE:, and the passkey 482913, big, on a ticket machine's dark display, a row of fare buttons and the ticket slot under it"> |
 | An update arriving | <img src="shots/night-update.png" width="120" alt="An update: UPDATING on a blue neon sign, KEEP CLOSE, 42% big; under it a silver train with a green line and lit windows pulling into a platform from the left, its nose a little short of the middle, over the rails and the platform's yellow edge"> |
 | The alarms | <img src="shots/night-alarms.png" width="120" alt="The alarms as a departure board at dawn: ALARMS on a blue neon sign, and a dark board hanging on two rods, a row each in amber LEDs: SMART 06:30 IN 20M, its kind in red as the next to ring; the two alarms dark, off; a timer of 45 MIN dark; a timer running, 06:35 IN 25M; under the board, a few stars over the rail and the platform's yellow edge"> |
+| The music | <img src="shots/night-music.png" width="120" alt="The music at dawn: MUSIC on a magenta neon sign, the artist and Night Signals on a dark marquee, and under it a record turning, its magenta label the pause control, the tonearm on it, previous and next either side"> |
+| The air | <img src="shots/night-air.png" width="120" alt="The air: AIR on a blue neon sign beside a small window onto the night, the CO2 big, its band, the temperature and humidity, and at the foot a red bowl on the counter, its steam rising between them"> |
+| A call | <img src="shots/night-call.png" width="120" alt="A call: INCOMING CALL on a green neon sign, Nora Lindqvist big, and a small lit phone booth on the far city's horizon, its green phone's handset jumping; red DECLINE and green ANSWER keys under it"> |
+| Finding the watch | <img src="shots/night-find.png" width="120" alt="Finding the watch: HERE big in a puddle, blue ripples spreading round it, a drop falling from an eave, the far city low behind, TAP: FOUND IT under it"> |
 | LOOK, in Settings | <img src="shots/night-look-settings.png" width="120" alt="LOOK's settings, at night, in LIVING TOKYO: under a blue LOOK sign, three wooden menu tags hanging one under another on cords from a rail: THEME LIVING TOKYO, its top edge lit in the scheme's magenta, cyan, green and yellow; FORCE NONE, unlit, as it can't change in this build; and LIGHT AUTO"> |
 
 They change with the hour, the night's weather and what they show. A
 third of nights rain, picked from the date, the same on every screen
 that night: the rain falls and the streets are wet, the lights broken
-up in their puddles; on a clear night the stars are out, a star
-twinkles and the noodle bar's vent steams. The far city's windows are
-lit as its people are up, most in the evening and hardly any at 02:00,
-and from 04:00 the sky behind it glows, higher each hour. The noodle
-bar is busy in the evening, down to one regular in the small hours,
-and shut from 04:00. The sleeper train has a window lit for every share
-of the night spent lying awake, and the later the wearer woke, the
-lower the moon. A notification's noren and sign are in its app's own
-colour, the same on the banner, so the colour says which app before
-the letters do. The alarms (and the phone's) are a departure board: the
+up in their puddles; on a clear night the stars are out. The far
+city's windows are lit as its people are up, most in the evening and
+hardly any at 02:00, and from 04:00 the sky behind it glows, higher
+each hour. The noodle bar's doorway is lit in the evening, dimmer in
+the small hours, and shuttered from 04:00; the record bar's lamp keeps
+the same hours. The sleeper train has a window lit for every share of
+the night spent lying awake, and the later the wearer woke, the lower
+the moon. A notification's noren and sign are in its app's own colour,
+the same on the banner, so the colour says which app before the
+letters do. The alarms (and the phone's) are a departure board: the
 next to ring is flagged and counts down, a running timer ticks, and an
-alarm that's off is a dark row. The dim look keeps still: no rain, no
-glow, no light in the bar.
+alarm that's off is a dark row. Each street-level screen has one
+thing that moves with what it shows: the record turns while the music plays (and its sign
+goes dark when it's paused), the air's steam rises higher the stuffier
+the room (its window fogging with the humidity, its figures fading as
+the reading ages), a call's handset jumps with each ring (its booth
+dimming once it's silenced), and ripples spread round HERE, the rain
+falling harder the longer the phone looks. The dim look keeps still:
+no rain, no glow, no light in the bars.
 
 ## On the charger
 
