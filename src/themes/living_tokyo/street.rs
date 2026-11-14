@@ -166,26 +166,8 @@ pub(super) fn rails(canvas: &mut Canvas, x: i32, w: i32, y: i32) {
 }
 
 // ==============================================================================
-// Lanterns and steam
+// Steam
 // ==============================================================================
-
-/// A red paper lantern (chōchin), 5 wide and 7 tall from `(x, y)`, on a
-/// short cord from the row above: dark caps top and bottom, and a body
-/// that glows (with a haze round it, `glow`'s) when `lit`, or hangs dark.
-/// The lit body's middle column is the paper's warm light through it.
-pub(super) fn lantern(canvas: &mut Canvas, x: i32, y: i32, lit: bool) {
-    if lit {
-        glow(canvas, x, y + 1, 5, 2, Color::HEART);
-    }
-    canvas.pixel(x + 2, y - 1, Color::TEXT_FAINT);
-    canvas.fill_rect(x + 1, y, 3, 1, Color::TEXT_FAINT);
-    let body = if lit { Color::HEART } else { Color::TRACK };
-    canvas.fill_rect(x, y + 1, 5, 5, body);
-    if lit {
-        canvas.fill_rect(x + 2, y + 2, 1, 3, Color::HEART_SHINE);
-    }
-    canvas.fill_rect(x + 1, y + 6, 3, 1, Color::TEXT_FAINT);
-}
 
 /// How a wisp of steam sways, a column a row, over a cycle.
 const SWAY: [i32; 6] = [0, 1, 1, 0, -1, -1];
@@ -455,6 +437,166 @@ impl Night {
             hour: now.map_or(21, hour_of),
             rain: now.is_some_and(|second| rainy(evening(second))),
             tick: now.map_or(0, |second| second as u64),
+        }
+    }
+}
+
+// ==============================================================================
+// At the panel's resolution
+// ==============================================================================
+//
+// Pieces drawn in the panel's own pixels, three to a canvas pixel each
+// way (see `Canvas::fine_rect`): their coordinates are the panel's,
+// 0..240. A row drawn finely is drawn again on its own as it's sent, so
+// what's drawn a pixel at a time walks only the rows being drawn
+// (`Canvas::fine_rows`).
+
+/// Of the rows from `y`, `h` of them, those being drawn.
+fn drawn(canvas: &Canvas, y: i32, h: i32) -> core::ops::Range<i32> {
+    let rows = canvas.fine_rows();
+    y.max(rows.start)..(y + h).min(rows.end)
+}
+
+/// The columns of row `py` inside the ellipse in the box `w` by `h` from
+/// `(x, y)`, measured from pixel centres; empty off it.
+fn ellipse_span(x: i32, y: i32, w: i32, h: i32, py: i32) -> core::ops::Range<i32> {
+    let dy = 2 * (py - y) + 1 - h;
+    let inside = |dx: i32| {
+        let ex = 2 * dx + 1 - w;
+        ex * ex * h * h + dy * dy * w * w <= w * w * h * h
+    };
+    match (0..w).find(|&dx| inside(dx)) {
+        Some(first) => x + first..x + w - first,
+        None => x..x,
+    }
+}
+
+/// A filled ellipse in the box `w` by `h` from `(x, y)`.
+pub(super) fn fine_ellipse(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Color) {
+    for py in drawn(canvas, y, h) {
+        let span = ellipse_span(x, y, w, h, py);
+        canvas.fine_rect(span.start, py, span.len() as i32, 1, color);
+    }
+}
+
+/// A line a pixel thick from `from` to `to`, both drawn.
+pub(super) fn fine_line(canvas: &mut Canvas, from: (i32, i32), to: (i32, i32), color: Color) {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let steps = dx.abs().max(dy.abs()).max(1);
+    for i in 0..=steps {
+        let x = from.0 + (dx * i + dx.signum() * steps / 2) / steps;
+        let y = from.1 + (dy * i + dy.signum() * steps / 2) / steps;
+        canvas.fine_pixel(x, y, color);
+    }
+}
+
+/// A red paper lantern (chōchin) centred on column `x`, 12 wide and 18
+/// tall from `top`, on a cord from the 4 rows above: black caps, a body
+/// ribbed with its bamboo hoops, lit from inside (a haze round it, the
+/// flame's light down its middle) when `lit`, or hanging dark.
+pub(super) fn fine_lantern(canvas: &mut Canvas, x: i32, top: i32, lit: bool) {
+    const W: i32 = 12;
+    const H: i32 = 14;
+    let (left, body) = (x - W / 2, top + 2);
+    if lit {
+        fine_glow(canvas, left - 6, body - 5, W + 12, H + 10, Color::HEART);
+    }
+    canvas.fine_rect(x, top - 4, 1, 4, Color::TEXT_FAINT);
+    fine_ellipse(
+        canvas,
+        left,
+        body,
+        W,
+        H,
+        if lit { Color::HEART } else { Color::TRACK },
+    );
+    if lit {
+        canvas.fine_rect(x - 1, body + 3, 2, H - 6, Color::HEART_SHINE);
+    }
+    // The hoops, dark, across it.
+    for rib in [4, 7, 10] {
+        let span = ellipse_span(left, body, W, H, body + rib);
+        let w = span.len() as i32;
+        canvas.fine_rect(span.start, body + rib, w, 1, Color::SHADOW);
+    }
+    canvas.fine_rect(x - 3, top, 7, 2, Color::TEXT_FAINT);
+    canvas.fine_rect(x - 3, body + H, 7, 2, Color::TEXT_FAINT);
+}
+
+/// A haze of `color` round a light, in the ellipse in the box `w` by `h`
+/// from `(x, y)`: a pixel in four lit, thinning to one in eight at its
+/// edge. Drawn before the light, which covers its middle.
+pub(super) fn fine_glow(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Color) {
+    for py in drawn(canvas, y, h) {
+        let span = ellipse_span(x, y, w, h, py);
+        // Its outer quarter, each side, is sparser.
+        let edge = span.len() as i32 / 4;
+        for px in span.clone() {
+            let outer = px < span.start + edge || px >= span.end - edge;
+            let period = if outer { 4 } else { 2 };
+            if px.rem_euclid(period) == 0 && py.rem_euclid(2) == (px / period).rem_euclid(2) {
+                canvas.fine_pixel(px, py, color);
+            }
+        }
+    }
+}
+
+/// How a wisp of steam sways, a column a row, over a cycle of 16 rows.
+const FINE_SWAY: [i32; 16] = [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, -1, -1, -1, -1, 0, 0];
+
+/// Steam rising `height` rows from `(x, y)` (the bowl's rim), in `wisps`
+/// wisps side by side, swaying wider as they rise and broken up towards
+/// their tops: the steam of something hot. `tick` lifts it 4 rows a
+/// second.
+pub(super) fn fine_steam(canvas: &mut Canvas, x: i32, y: i32, height: i32, wisps: i32, tick: u64) {
+    let cycle = FINE_SWAY.len() as i32;
+    let lift = (tick % FINE_SWAY.len() as u64) as i32 * 4;
+    for wisp in 0..wisps {
+        let base = x + 5 * wisp - 5 * (wisps - 1) / 2;
+        for row in drawn(canvas, y - height, height) {
+            let up = y - row;
+            let phase = (up + lift + wisp * 6).rem_euclid(cycle);
+            // Solid low down; every other row above a third of the way,
+            // and every third above two thirds, so it thins out.
+            let gap = match 3 * up / height {
+                0 => false,
+                1 => phase % 2 == 1,
+                _ => phase % 3 != 0,
+            };
+            if gap {
+                continue;
+            }
+            let color = if 3 * up < 2 * height {
+                Color::TEXT
+            } else {
+                Color::TEXT_DIM
+            };
+            let sway = FINE_SWAY[phase as usize] * (1 + 2 * up / height);
+            // Two pixels wide low down, where it's thickest.
+            let w = if 3 * up < height { 2 } else { 1 };
+            canvas.fine_rect(base + sway, row, w, 1, color);
+        }
+    }
+}
+
+/// A light's reflection on a wet street, as [`reflection`] has it, `w`
+/// wide from `x`, from row `y` down `rows` rows: dashes in its colour,
+/// shorter and sparser away from it.
+pub(super) fn fine_reflection(
+    canvas: &mut Canvas,
+    x: i32,
+    w: i32,
+    y: i32,
+    rows: i32,
+    color: Color,
+) {
+    for row in 0..rows {
+        let dash = (10 - 2 * row).max(2);
+        let period = dash + 4 + 2 * row;
+        let mut dx = (row * 7) % period;
+        while dx < w {
+            canvas.fine_rect(x + dx, y + 2 * row, dash.min(w - dx), 1, color);
+            dx += period;
         }
     }
 }

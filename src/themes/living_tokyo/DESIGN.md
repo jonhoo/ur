@@ -66,7 +66,27 @@ squiggles posing as kanji would be wrong to anyone who reads them.
    showcase screens (an alarm ringing, Last night, a notification) set
    the level.
 
-## Colour
+## Resolution
+
+Living Tokyo isn't a retro theme, and needn't be as coarse as the
+canvas's 80×80. Its builds can draw rows at the panel's own 240×240
+(`Canvas::fine_rect`, `fine_tone`, `fine_text`, and the `fine_` pieces
+in [street.rs](street.rs), all in the panel's pixels), over and under
+the canvas's drawing in the order drawn. A tenth of a millimetre a
+pixel: detail that makes a thing read as what it is (a noren's slits
+and lettering, a stool's seat, a lantern's hoops), and tones (amber
+checkered over the dark is wood) beyond the sixteen roles.
+
+What it costs: a frame that draws finely is drawn again for every eight
+canvas rows it draws finely in, as they're sent (see `canvas.rs`), and
+a fine row that changes goes to the panel whole. So:
+
+- Draw finely where detail tells: the scene's subject. Text, signs and
+  the sky can stay on the canvas, at 3×, where they always were.
+- A fine row that moves costs a full row's SPI each second it does: keep
+  what moves in few rows (steam, not a whole rainy sky, for now).
+- Shapes drawn a pixel at a time walk only `canvas.fine_rows()`.
+
 
 The 16 roles are the Tokyo Night palettes' (see
 [schemes/mod.rs](schemes/mod.rs)); Living Tokyo gives them these jobs.
@@ -118,7 +138,6 @@ In [street.rs](street.rs):
 | `disc`, `in_disc` | A filled circle: the moon, a lamp's lens |
 | `glow` | A dithered halo round a light |
 | `stars` | Single pixels, every third brighter |
-| `lantern` | A red paper lantern, 5×7, lit (haloed) or dark |
 | `steam` | Two wisps rising and swaying with a tick |
 | `skyline` | The far city along a horizon, any height, its windows lit by a share |
 | `city_lights` | How many of the city's windows are lit at an hour |
@@ -129,6 +148,17 @@ In [street.rs](street.rs):
 | `horizon` | The dawn's (or dusk's) glow above a horizon: 4, 9, 15 or 22 rows, yellow at the bottom, violet above |
 | `evening`, `rainy` | Which evening a local second belongs to (noon to noon), and whether it rains that night (a third of nights) |
 | `local_now`, `hour_of` | The local time now, for a screen not handed it, and a local second's hour |
+
+At the panel's resolution (coordinates 0..240):
+
+| Piece | What it is |
+|---|---|
+| `fine_ellipse` | A filled ellipse in a box: a stool's seat, a lantern's body |
+| `fine_line` | A line a pixel thick: chopsticks, a board's legs |
+| `fine_glow` | A sparse haze round a light, thinning at its edge |
+| `fine_lantern` | A red paper lantern (chōchin), 12×18 on a cord: black caps, its hoops, lit from inside (and hazed) or dark |
+| `fine_steam` | Wisps rising from a bowl, swaying wider and thinning as they rise, lifted by the seconds |
+| `fine_reflection` | A light broken up in a wet street below it |
 
 The clock face's moon (the battery) is `clock::moon`, and its city
 `clock::city`. A screen handed the time (`Status::local_second`, an
@@ -141,7 +171,8 @@ screen does (one agent each, so two don't draw their own):
   its rows in `HEART_SHINE` like an LED board. Alarms, the phone's
   alarms, Info.
 - **noren**: the notification's (`messages::render_shop`), moved here
-  for the call's booth or Settings if they hang one.
+  for the call's booth or Settings if they hang one: panels in a neon,
+  slit, a fold under the rail and a hem, a letter dyed on each.
 
 ## The screens
 
@@ -167,7 +198,7 @@ it stays the night's city under the full dawn glow, with no stars.
 | `alarms` | medium (approved) | A station's departure board under a platform roof: smart wake, the alarms and the timers as departures | The next to ring flagged and counting down ("IN 7H05"); running timers tick; an alarm off is a dark row; rain past the platform's edge, or the night sky |
 | `phone_alarms` | subtle (approved) | The same board, ten rows | The next to ring flagged |
 | `editor` | subtle | One departure, big, on the board; its buttons as lit panel keys | A running timer ticks |
-| `notification` | everyday | *Done, calmed.* The app's neon sign hanging top left, who it's from big, and low under it a small noodle bar: the app's noren over its door, one red lantern, the pavement | The noren in the app's colour; the doorway lit in the evening, dimmer in the small hours, shuttered (lantern out) from 04:00; rainy, faint rain behind the name and the doorway's light in the wet pavement; clear, a few stars, fewer towards dawn. A long name pushes the roof down. Dim: the eave and the noren's outline only |
+| `notification` | everyday | *Done, at the panel's resolution.* The app's neon sign hanging top left, who it's from big, and under it a ramen stall: its roof, the app's noren lettered RAMEN over the counter, a red lantern at each end of the eaves, the stock pot and a bowl (chopsticks across it) on the lit counter, four red stools, a menu board on the street | The noren in the app's colour; the stall lit and the bowl steaming in the evening, dimmer and its steam thinner in the small hours, shuttered (noren in, lanterns out, no bowl) from 04:00; rainy, faint rain behind the name and the stall's and lanterns' light broken up in the wet street; clear, a few stars, fewer towards dawn, and the stall's light pooled on the street. A long name pushes the roof down, squeezing the stall (its noren shorter, unlettered, then hiding the bowl). Dim: red outlines (the eaves, posts, counter, stools), the unlit lanterns, and the noren and its letters in the app's colour |
 | `banner` | everyday | *Done.* The same sign, over the bottom of the screen | The app's colour |
 | `music` | medium | *Done.* The bar's MUSIC sign hanging top left, the artist and track on a dark marquee, and the turntable under it: play or pause on the record's label, previous and next either side | One living thing, the record: playing, the sign lit, the arm on it and a sheen going round a step a second; paused, the sign dark, the arm at rest, the record still. Quieter: the bar's lamp warming the record by the noodle bar's hours; a little rain or a few stars over the marquee. Dim: shapes and text, still |
 | `air` | medium | *Done.* A small room: the CO₂ figure on the wall as before, a little window high up beside the title, and a red bowl on the counter at the foot | One living thing, the bowl's steam, taller the stuffier the air (a wisp in fresh air, up to the band's bar past 2000 ppm). Quieter: the window fogs with the humidity and shows the rain or a star and the far city's lit windows; the big figure dims past ten minutes, every figure faint once stale. Dim: no steam, fog or weather |

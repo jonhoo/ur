@@ -12,9 +12,9 @@ use crate::themes::{Call, Music};
 // in the app's own colour (see `neon`), with when it arrived top right
 // in the history, as MUSIC's state is. Who it's from is under it, centred,
 // in a face that makes it the most important thing on the screen; and
-// under that, where the message is from: a little noodle bar with the
-// app's noren over its door (see `render_shop`), which keeps the hours
-// and the night's weather. The banner is the same sign in short, over
+// under that, where the message is from: a ramen stall with the app's
+// noren over its counter (see `render_shop`), drawn at the panel's own
+// resolution, which keeps the hours and the night's weather. The banner is the same sign in short, over
 // the bottom of whatever shows.
 //
 // Who it's from is the 3×5 at 2× if it fits on one line (up to about 9
@@ -155,7 +155,7 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str,
             street::stars(canvas, &CARD_STARS[..shown]);
         }
     }
-    render_shop(canvas, roof, tube, hour, rain, dim);
+    render_shop(canvas, roof, tube, hour, rain, dim, tick);
 
     // The app gives way to the time: 4 px between them (after the sign's
     // tube), and an ellipsis.
@@ -199,24 +199,53 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str,
     }
 }
 
-/// The shop's roof, under a name of a line or two; and the lowest it
-/// goes for a longer one, leaving the noren room.
-const SHOP_TOP: i32 = 57;
+/// The bar's roof, under a name of a line or two; and the lowest it goes
+/// for a longer one, leaving the noren room. Canvas rows.
+const SHOP_TOP: i32 = 47;
 const SHOP_LOWEST: i32 = 64;
-/// The pavement in front of the shop, down to the bottom edge.
-const PAVEMENT: i32 = 74;
-/// The doorway, its noren across it, and its lantern beside it.
-const DOOR_X: i32 = 26;
-const DOOR_W: i32 = 28;
-const LANTERN: i32 = 17;
+
+// The noodle bar itself is drawn at the panel's resolution (see
+// `Canvas::fine_rect`), in its pixels: 240 a side.
+
+/// The street, which the bar's stools and its menu board stand on.
+const GROUND: i32 = 228;
+/// How far the counter's top (where the bowl stands; under it, the
+/// stall's front) is above the street: a share of the stall's height,
+/// from its roof, so that a long name, which pushes the roof down,
+/// squeezes the stall rather than burying its stools.
+const COUNTER_MAX: i32 = 28;
+const COUNTER_MIN: i32 = 20;
+/// The stall's height (from its roof to the street) the counter has
+/// [`COUNTER_MAX`] of, under a name of a line or two.
+const STALL_H: i32 = 78;
+/// The stall's two posts (their left columns), the noren hanging between
+/// them; the roof overhangs them to `EAVES`.
+const POSTS: [i32; 2] = [46, 190];
+const POST_W: i32 = 4;
+const EAVES: core::ops::Range<i32> = 30..210;
+/// The noren: its panels, how wide each is and the slit between them, and
+/// what's dyed on them, a letter a panel, as noren have their shop's name.
+const NOREN_X: i32 = 50;
+const NOREN_PANEL: i32 = 26;
+const NOREN_SLIT: i32 = 2;
+const NOREN_LETTERS: [&str; 5] = ["R", "A", "M", "E", "N"];
+/// The lanterns' middles, hanging from the eaves' ends.
+const LANTERNS: [i32; 2] = [38, 202];
+/// The stools' middles, along the counter.
+const STOOLS: [i32; 4] = [74, 106, 138, 170];
+/// The bowl's middle, on the counter at the third stool.
+const BOWL: i32 = 138;
+/// The menu board standing on the street, right of the stall: its left
+/// column and width.
+const MENU: (i32, i32) = (213, 22);
 
 /// A few stars over the roof, in the corners the name leaves; as the sky
 /// lightens, the last go first.
 const CARD_STARS: [(i32, i32); 4] = [(70, 15), (6, 40), (74, 44), (12, 20)];
 
-/// How the shop is at `hour`: open in the evening, its doorway lit; in
-/// the small hours, dimmer; shut from 04:00 until the evening, its
-/// shutter down, its noren taken in and its lantern out.
+/// How the shop is at `hour`: open in the evening, brightly lit; in the
+/// small hours, dimmer, its steam thinner; shut from 04:00 until the
+/// evening, its shutter down, its noren taken in and its lanterns out.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shop {
     Busy,
@@ -234,88 +263,284 @@ impl Shop {
     }
 }
 
-/// The shop the notification is at, from its roof (`roof`) down, kept
-/// small and plain so the name has the screen: a noodle bar's front, its
-/// noren in the app's neon (`tube`) over a doorway that keeps the hours
-/// (see [`Shop`]), one lantern by it, and the pavement, which a rainy
-/// night (`rain`) wets, the doorway's light broken up in it. In the dim
-/// look, only its outline and its noren: no light.
-fn render_shop(canvas: &mut Canvas, roof: i32, tube: Color, hour: u8, rain: bool, dim: bool) {
+/// The noodle bar the notification is at, from its roof (`roof`, a
+/// canvas row) down, drawn at the panel's resolution: a ramen stall seen
+/// from the street, its noren in the app's neon (`tube`) over the counter,
+/// lit from inside as the hour has it (see [`Shop`]), a bowl steaming on
+/// the counter (`tick` lifts the steam), red stools along it, a red
+/// lantern at each end of the eaves, and its menu board out on the street.
+/// A rainy night (`rain`) wets the street, the lights broken up in it; a
+/// clear one leaves the stall's light pooled on it. In the dim look,
+/// outlines: the eaves, the noren and its letters, the counter, the
+/// stools and the lanterns, unlit.
+fn render_shop(
+    canvas: &mut Canvas,
+    roof: i32,
+    tube: Color,
+    hour: u8,
+    rain: bool,
+    dim: bool,
+    tick: u64,
+) {
     let shop = if dim { Shop::Shut } else { Shop::at(hour) };
-    let door_top = roof + 2;
-    let door_h = PAVEMENT - door_top;
-    // The wall, darker than the night, under the eave's edge.
-    canvas.fill_rect(0, roof, 80, PAVEMENT - roof, Color::SHADOW);
-    let eave = if dim { Color::TRACK } else { Color::TEXT_FAINT };
-    canvas.fill_rect(0, roof, 80, 1, eave);
+    let lit = shop != Shop::Shut;
+    // Panel rows: the roof's top, its underside (the noren's rail), and
+    // the noren's hem, which gives way to the counter for a long name.
+    let top = roof * 3;
+    let rail = top + 7;
+    let counter = GROUND - ((GROUND - top) * COUNTER_MAX / STALL_H).clamp(COUNTER_MIN, COUNTER_MAX);
+    let noren_h = (counter - rail - 14).clamp(8, 26);
+    let hem = rail + noren_h;
+    let (left, right) = (POSTS[0], POSTS[1] + POST_W);
+    if dim {
+        render_shop_dim(canvas, top, rail, hem, counter, tube);
+        return;
+    }
 
-    // The doorway: lit, dimmer in the small hours, or shuttered.
+    // The stall's inside: lit as the hour has it, or shuttered: boards
+    // across, dark, to the counter.
     match shop {
-        Shop::Busy => canvas.fill_rect(DOOR_X, door_top, DOOR_W, door_h, Color::HEART_SHINE),
-        Shop::Late => {
-            for y in door_top..PAVEMENT {
-                for x in DOOR_X..DOOR_X + DOOR_W {
-                    if (x + y) % 2 == 0 {
-                        canvas.pixel(x, y, Color::HEART_SHINE);
-                    }
-                }
-            }
+        Shop::Busy => {
+            canvas.fine_rect(left, rail, right - left, counter - rail, Color::HEART_SHINE)
         }
-        Shop::Shut if dim => {
-            // Its frame alone, a still outline.
-            canvas.fill_rect(DOOR_X - 1, door_top, 1, door_h, Color::TRACK);
-            canvas.fill_rect(DOOR_X + DOOR_W, door_top, 1, door_h, Color::TRACK);
+        Shop::Late => {
+            canvas.fine_rect(left, rail, right - left, counter - rail, Color::SHADOW);
+            canvas.fine_tone(
+                left,
+                rail,
+                right - left,
+                counter - rail,
+                2,
+                Color::HEART_SHINE,
+            );
         }
         Shop::Shut => {
-            canvas.fill_rect(DOOR_X, door_top, DOOR_W, door_h, Color::TRACK);
-            for y in (door_top + 1..PAVEMENT).step_by(2) {
-                canvas.fill_rect(DOOR_X, y, DOOR_W, 1, Color::SHADOW);
+            canvas.fine_rect(left, rail, right - left, counter - rail, Color::TRACK);
+            for y in (rail + 3..counter).step_by(4) {
+                canvas.fine_rect(left, y, right - left, 1, Color::SHADOW);
             }
         }
-    }
-    // The noren, across the top of the doorway (taken in when it's shut,
-    // bar in the dim look, where it's the shop's sign): three panels in
-    // the app's colour, slit apart, the light showing between them; in
-    // the dim look, their outlines only.
-    if shop != Shop::Shut || dim {
-        let noren_h = 8.min(door_h);
-        const PANEL: i32 = (DOOR_W - 4) / 3;
-        for panel in 0..3 {
-            let x = DOOR_X + panel * (PANEL + 2);
-            let w = if panel == 2 {
-                DOOR_X + DOOR_W - x
-            } else {
-                PANEL
-            };
-            canvas.fill_rect(x, door_top, w, noren_h, tube);
-            if dim {
-                canvas.fill_rect(x + 1, door_top + 1, w - 2, noren_h - 2, BACKGROUND);
-            } else if panel > 0 {
-                // A dark crease down the slit, so the panels part even
-                // where the cloth is the light's own yellow.
-                canvas.fill_rect(x - 1, door_top, 1, noren_h, Color::SHADOW);
-            }
-        }
-        if !dim && door_h > noren_h {
-            // Its hem's shadow on the light.
-            canvas.fill_rect(DOOR_X, door_top + noren_h, DOOR_W, 1, Color::SHADOW);
-        }
-    }
-    let lit = shop != Shop::Shut;
-    if !dim {
-        street::lantern(canvas, LANTERN, door_top + 1, lit);
     }
 
-    // The pavement: wet, the doorway's light broken up in it (once it's
-    // shut, only the wet's own sheen); dry, bare.
-    canvas.fill_rect(0, PAVEMENT, 80, 1, Color::TRACK);
-    if rain && !dim {
+    // Inside, behind the counter: the stock pot, a dull drum with its
+    // lid, at the cook's end.
+    if lit {
+        let (px, pw, ph) = (58, 22, 13);
+        canvas.fine_rect(px, counter - ph, pw, ph, Color::TRACK);
+        canvas.fine_rect(px - 2, counter - ph, pw + 4, 2, Color::TEXT_FAINT);
+        canvas.fine_rect(px - 3, counter - ph + 4, 3, 2, Color::TEXT_FAINT);
+        canvas.fine_rect(px + pw, counter - ph + 4, 3, 2, Color::TEXT_FAINT);
+    }
+
+    // The roof: a dark slab, its tiles' ends along its front, its edge
+    // catching the light.
+    canvas.fine_rect(EAVES.start, top, EAVES.len() as i32, 7, Color::TRACK);
+    canvas.fine_rect(EAVES.start, top, EAVES.len() as i32, 1, Color::TEXT_FAINT);
+    for x in (EAVES.start + 2..EAVES.end - 2).step_by(6) {
+        canvas.fine_rect(x, top + 2, 2, 3, Color::SHADOW);
+    }
+    canvas.fine_rect(
+        EAVES.start + 2,
+        rail - 1,
+        EAVES.len() as i32 - 4,
+        1,
+        Color::SHADOW,
+    );
+
+    // The posts, wood: amber over the dark, lit by the stall's light.
+    for x in POSTS {
+        canvas.fine_rect(x, rail, POST_W, GROUND - rail, Color::SHADOW);
         if lit {
-            street::reflection(canvas, DOOR_X, DOOR_W, PAVEMENT + 2, 3, Color::HEART_SHINE);
-        } else {
-            street::reflection(canvas, 4, 72, PAVEMENT + 2, 2, Color::TEXT_FAINT);
+            canvas.fine_tone(x, rail, POST_W, GROUND - rail, 1, Color::HEART_SHINE);
         }
     }
+
+    // The bowl on the counter, under the noren's hem (unless a long name
+    // has squeezed the stall so far that the noren hides it).
+    let bowl = lit && hem <= counter - 10;
+    if bowl {
+        let rim = counter - 8;
+        // Chopsticks across it, and the noodles' heap.
+        street::fine_line(
+            canvas,
+            (BOWL - 13, rim - 3),
+            (BOWL + 12, rim + 1),
+            Color::TEXT_DIM,
+        );
+        street::fine_line(
+            canvas,
+            (BOWL - 13, rim - 2),
+            (BOWL + 12, rim + 2),
+            Color::TEXT_DIM,
+        );
+        // A black bowl, its red band, wide at the rim and narrow at the
+        // foot.
+        for (dy, half) in [
+            (0, 10),
+            (1, 10),
+            (2, 9),
+            (3, 9),
+            (4, 8),
+            (5, 7),
+            (6, 6),
+            (7, 4),
+        ] {
+            let color = if dy == 2 { Color::HEART } else { Color::SHADOW };
+            canvas.fine_rect(BOWL - half, rim + dy, 2 * half, 1, color);
+        }
+        canvas.fine_rect(BOWL - 9, rim - 1, 18, 1, Color::TEXT_DIM);
+    }
+
+    // The noren, in the app's neon, slit into panels, its letters dyed in
+    // the dark; taken in when the shop's shut, its rail bare.
+    canvas.fine_rect(left, rail, right - left, 1, Color::TEXT_DIM);
+    if lit {
+        for (i, letter) in NOREN_LETTERS.iter().enumerate() {
+            let x = NOREN_X + i as i32 * (NOREN_PANEL + NOREN_SLIT);
+            canvas.fine_rect(x, rail + 1, NOREN_PANEL, noren_h, tube);
+            // The cloth's fold under the rail, and its hem.
+            canvas.fine_tone(x, rail + 1, NOREN_PANEL, 2, 2, Color::SHADOW);
+            canvas.fine_tone(x, hem - 1, NOREN_PANEL, 2, 2, Color::SHADOW);
+            if noren_h >= 20 {
+                let w = font::Face::Medium.width(letter) * 2;
+                let (x, y) = (x + (NOREN_PANEL - w) / 2, rail + 5);
+                canvas.fine_text(x, y, letter, font::Face::Medium, Color::SHADOW, 2);
+            }
+        }
+    }
+
+    // The bowl's steam, rising in front of the noren, thinner in the
+    // small hours.
+    if bowl {
+        let (height, wisps) = if shop == Shop::Busy { (34, 3) } else { (20, 2) };
+        let height = height.min(counter - 10 - rail);
+        street::fine_steam(canvas, BOWL, counter - 10, height, wisps, tick);
+    }
+
+    // The counter: its top, lit along its edge, over the stall's front,
+    // dark boards.
+    canvas.fine_rect(left - 6, counter, right - left + 12, 4, Color::SHADOW);
+    canvas.fine_tone(
+        left - 6,
+        counter,
+        right - left + 12,
+        4,
+        2,
+        Color::HEART_SHINE,
+    );
+    canvas.fine_rect(left - 6, counter, right - left + 12, 1, Color::TEXT_DIM);
+    canvas.fine_rect(
+        left,
+        counter + 4,
+        right - left,
+        GROUND - counter - 4,
+        Color::SHADOW,
+    );
+    for x in (left + 8..right - 4).step_by(12) {
+        canvas.fine_rect(x, counter + 4, 1, GROUND - counter - 4, Color::TRACK);
+    }
+
+    // The stools: red seats, a highlight along each, on chrome posts.
+    for x in STOOLS {
+        let seat = counter + 9;
+        canvas.fine_rect(x - 1, seat + 6, 2, GROUND - seat - 8, Color::TEXT_FAINT);
+        canvas.fine_rect(x - 5, GROUND - 2, 10, 2, Color::TEXT_FAINT);
+        street::fine_ellipse(canvas, x - 9, seat, 18, 7, Color::HEART);
+        canvas.fine_rect(x - 6, seat, 12, 1, Color::HEART_SHINE);
+    }
+
+    for x in LANTERNS {
+        street::fine_lantern(canvas, x, rail + 4, lit);
+    }
+
+    // The menu board, out on the street: a dark board on its legs, a bowl
+    // drawn at its head and the dishes' lines, chalk-white, under it.
+    let (mx, mw) = MENU;
+    let board = GROUND - 30;
+    street::fine_line(
+        canvas,
+        (mx + 2, board + 20),
+        (mx - 1, GROUND - 1),
+        Color::TEXT_FAINT,
+    );
+    street::fine_line(
+        canvas,
+        (mx + mw - 3, board + 20),
+        (mx + mw, GROUND - 1),
+        Color::TEXT_FAINT,
+    );
+    canvas.fine_rect(mx, board, mw, 22, Color::TEXT_FAINT);
+    canvas.fine_rect(mx + 1, board + 1, mw - 2, 20, Color::SHADOW);
+    canvas.fine_rect(mx + 7, board + 4, 8, 2, Color::HEART);
+    canvas.fine_rect(mx + 8, board + 6, 6, 1, Color::HEART);
+    for (row, w) in [(10, 14), (14, 10), (18, 12)] {
+        canvas.fine_rect(mx + 4, board + row, w, 1, Color::TEXT_DIM);
+    }
+
+    // The street: wet, the stall's lights broken up in it (once it's
+    // shut, only the wet's own sheen); dry, the light pooled on it.
+    canvas.fine_rect(0, GROUND, 240, 1, Color::TRACK);
+    if rain {
+        if lit {
+            street::fine_reflection(
+                canvas,
+                left,
+                right - left,
+                GROUND + 3,
+                5,
+                Color::HEART_SHINE,
+            );
+            for x in LANTERNS {
+                street::fine_reflection(canvas, x - 5, 10, GROUND + 3, 5, Color::HEART);
+            }
+        } else {
+            street::fine_reflection(canvas, 6, 228, GROUND + 3, 4, Color::TEXT_FAINT);
+        }
+    } else if lit {
+        // Fanning out from the counter, fading.
+        for row in 0..5 {
+            let spread = 4 + 3 * row;
+            let (x, w) = (left - spread, right - left + 2 * spread);
+            let level = if row < 1 { 2 } else { 1 };
+            canvas.fine_tone(x, GROUND + 1 + row, w, 1, level, Color::HEART_SHINE);
+        }
+    }
+}
+
+/// The bar in the dim look (idle mode's eight colours, still): its
+/// outlines in the structure's red and the noren's in the app's colour,
+/// its letters solid, and its lanterns, unlit.
+fn render_shop_dim(canvas: &mut Canvas, top: i32, rail: i32, hem: i32, counter: i32, tube: Color) {
+    let line = Color::TEXT_FAINT;
+    let (left, right) = (POSTS[0], POSTS[1] + POST_W);
+    canvas.fine_rect(EAVES.start, top, EAVES.len() as i32, 1, line);
+    canvas.fine_rect(EAVES.start, rail - 1, EAVES.len() as i32, 1, line);
+    for x in POSTS {
+        canvas.fine_rect(x, rail, 1, GROUND - rail, line);
+        canvas.fine_rect(x + POST_W - 1, rail, 1, GROUND - rail, line);
+    }
+    for (i, letter) in NOREN_LETTERS.iter().enumerate() {
+        let x = NOREN_X + i as i32 * (NOREN_PANEL + NOREN_SLIT);
+        let h = hem - rail;
+        canvas.fine_rect(x, rail, NOREN_PANEL, 1, tube);
+        canvas.fine_rect(x, rail + h - 1, NOREN_PANEL, 1, tube);
+        canvas.fine_rect(x, rail, 1, h, tube);
+        canvas.fine_rect(x + NOREN_PANEL - 1, rail, 1, h, tube);
+        if h >= 20 {
+            let w = font::Face::Medium.width(letter) * 2;
+            let (x, y) = (x + (NOREN_PANEL - w) / 2, rail + 5);
+            canvas.fine_text(x, y, letter, font::Face::Medium, tube, 2);
+        }
+    }
+    canvas.fine_rect(left - 6, counter, right - left + 12, 1, line);
+    for x in LANTERNS {
+        street::fine_lantern(canvas, x, rail + 4, false);
+    }
+    for x in STOOLS {
+        canvas.fine_rect(x - 8, counter + 9, 16, 1, line);
+        canvas.fine_rect(x - 1, counter + 10, 1, GROUND - counter - 10, line);
+    }
+    canvas.fine_rect(0, GROUND, 240, 1, line);
 }
 
 /// Line pitch of the small font in the banner: 5 px capitals, 2 accent
