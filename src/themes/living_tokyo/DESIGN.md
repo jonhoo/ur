@@ -131,8 +131,8 @@ lettering at the panel's resolution.
   who a message or call is from, a screen's title on its sign, big
   times and figures that change by the minute or slower. Done: every
   screen's title on its sign (`street::title`, `street::lettered`), the
-  banner's and the card's app signs, the noren's letters, and the
-  card's name.
+  banner's and the card's app signs, the card's name and a call's
+  caller, and the air's figures.
 - **The pixel fonts** (the small font, the medium face, the 5×7 digits):
   small labels and hints, and anything that changes every second (the
   clock's seconds, a countdown's last minutes, a marquee). A fine row
@@ -158,7 +158,7 @@ pixel; and `caps`. The card's, as a guide:
 | A name, big | 26 | 68 (4¼ px) | `TEXT_FAINT` | about 11 |
 | A name, longer | 16 | 44 (2¾ px) | `TEXT_FAINT` | about 17 |
 | A sign's title (`street::LETTERING`) | 12 | 28 (1¾ px) | none | about 19 |
-| A noren's letter | 12 | 48 (3 px) | none | one a panel |
+| The air's CO₂ | 52 | 112 (7 px) | `TEXT_FAINT` | four digits across 216 |
 
 Draw with `canvas.fine_type(x, y, text, style, color, edge)`, in panel
 pixels: `x` is the ink's left, `y` the top of the capitals' ink (an
@@ -213,7 +213,7 @@ canvas's grid, for the screens that need them so (see each).
 | `local_now`, `hour_of` | The local time now, for a screen not handed it, and a local second's hour |
 | `board` | A station board: a dark panel in a slate frame (on the canvas, so a ticking row on it stays coarse), on thin rods |
 | `led_digit`, `led_colon`, `LED_H` | A board's big digits, each dot a 3×3 of LEDs of 2×2 panel pixels; or, for a running timer's, a canvas square |
-| `fine_noren`, `NOREN_SLIT` | A shop's noren: panels in a neon, slit, a fold under the rail and a hem, a letter dyed on each in the fine face; in the dim look, outlines |
+| `fine_noren`, `NOREN_SLIT` | A shop's noren: panels in a neon, slit, a fold under the rail and a hem, a small crest (a bowl and chopsticks) dyed in a shade of the cloth on the middle one; no lettering, which drew the eye from a notification's sender; in the dim look, outlines |
 
 More at the panel's resolution:
 
@@ -268,7 +268,7 @@ it stays the night's city under the full dawn glow, with no stars.
 | `alarms` | medium (approved) | *Done, at the panel's resolution.* A station's departure board under a platform roof: smart wake, the alarms and the timers as departures, in its dot matrix of LEDs (a row that ticks every second in the canvas's lettering); the rail and the platform's studded yellow edge under it | The next to ring flagged and counting down ("IN 7H05"); running timers tick; an alarm off is a dark row; rain past the platform's edge, or the night sky |
 | `phone_alarms` | subtle (approved) | The same board, ten rows | The next to ring flagged |
 | `editor` | subtle | *Done.* One departure, big, on the board in its LEDs (a running timer's in canvas squares); its buttons as lit keys, rounded, lettered finely | A running timer ticks |
-| `notification` | everyday | *Done, at the panel's resolution.* The app's neon sign hanging top left, lettered finely, who it's from big in the fine lettering (as written, capitals and lowercase), and under it a ramen stall: its roof, the app's noren lettered RAMEN over the counter, a red lantern at each end of the eaves, the stock pot and a bowl (chopsticks across it) on the lit counter, four red stools, a menu board on the street | The noren in the app's colour; the stall lit and the bowl steaming in the evening, dimmer and its steam thinner in the small hours, shuttered (noren in, lanterns out, no bowl) from 04:00; rainy, faint rain behind the name and the stall's and lanterns' light broken up in the wet street; clear, a few stars, fewer towards dawn, and the stall's light pooled on the street. A long name pushes the roof down, squeezing the stall (its noren shorter, unlettered, then hiding the bowl). Dim: red outlines (the eaves, posts, counter, stools), the unlit lanterns, and the noren and its letters in the app's colour |
+| `notification` | everyday | *Done, at the panel's resolution.* The app's neon sign hanging top left, lettered finely, who it's from big in the fine lettering (as written, capitals and lowercase), and under it a ramen stall: its roof, the app's noren over the counter (a quiet bowl crest dyed on it, no lettering), a red lantern at each end of the eaves, the stock pot and a bowl (chopsticks across it) on the lit counter, four red stools, a menu board on the street | The noren in the app's colour; the stall lit and the bowl steaming in the evening, dimmer and its steam thinner in the small hours, shuttered (noren in, lanterns out, no bowl) from 04:00; rainy, faint rain behind the name and the stall's and lanterns' light broken up in the wet street; clear, a few stars, fewer towards dawn, and the stall's light pooled on the street. A long name pushes the roof down, squeezing the stall (its noren shorter, its crest gone, then hiding the bowl). Dim: red outlines (the eaves, posts, counter, stools), the unlit lanterns, and the noren's outline in the app's colour |
 | `banner` | everyday | *Done.* The same sign, over the bottom of the screen | The app's colour |
 | `music` | medium | *Done, the turntable at the panel's resolution.* The bar's MUSIC sign hanging top left, the artist and track on a dark marquee (on the canvas: it scrolls ten times a second), and under it a turntable under a pendant lamp: the record on its platter, its grooves catching the light, the tonearm from its pivot; play or pause on the record's label, previous and next either side | One living thing, the record: playing, the sign lit, the arm on its grooves and the lamp's sheen going round a step a second, the label's notch with it; paused, the sign dark, the arm lifted back to its rest, the record still. Quieter: the lamp keeps the noodle bar's hours, its light pooled wide on the plinth in the evening (and hazing round its shade), narrower in the small hours, out from 04:00; a little rain or a few stars over the marquee. Dim: shapes and text, still |
 | `air` | medium | *Done, at the panel's resolution.* A small room: the CO₂ figure big on the wall in the fine lettering (it changes only with a reading), the temperature and humidity under it so too, a little window high up beside the title (its frame, sash and sill), and the stall's ramen bowl on the counter at the foot | One living thing, the bowl's steam, taller and in more wisps the stuffier the air (a wisp in fresh air, up to the band's bar past 2000 ppm). Quieter: the window fogs with the humidity (a tone of mist from 40%, thicker at 60% and 75%) and shows the rain or a star and the far city's lit windows; the big figure dims past ten minutes, every figure faint once stale. Dim: no steam, fog or weather |

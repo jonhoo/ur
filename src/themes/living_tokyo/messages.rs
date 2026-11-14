@@ -220,12 +220,11 @@ const STALL_H: i32 = 78;
 const POSTS: [i32; 2] = [46, 190];
 const POST_W: i32 = 4;
 const EAVES: core::ops::Range<i32> = 30..210;
-/// The noren (see `street::fine_noren`): its panels, how wide each is,
-/// and what's dyed on them, a letter a panel, as noren have their shop's
-/// name.
+/// The noren (see `street::fine_noren`): where its panels start, how
+/// many, and how wide each is.
 const NOREN_X: i32 = 50;
+const NOREN_PANELS: i32 = 5;
 const NOREN_PANEL: i32 = 26;
-const NOREN_LETTERS: [&str; 5] = ["R", "A", "M", "E", "N"];
 /// The lanterns' middles, hanging from the eaves' ends.
 const LANTERNS: [i32; 2] = [38, 202];
 /// The stools' middles, along the counter.
@@ -268,8 +267,8 @@ impl Shop {
 /// lantern at each end of the eaves, and its menu board out on the street.
 /// A rainy night (`rain`) wets the street, the lights broken up in it; a
 /// clear one leaves the stall's light pooled on it. In the dim look,
-/// outlines: the eaves, the noren and its letters, the counter, the
-/// stools and the lanterns, unlit.
+/// outlines: the eaves, the noren, the counter, the stools and the
+/// lanterns, unlit.
 fn render_shop(
     canvas: &mut Canvas,
     roof: i32,
@@ -359,8 +358,8 @@ fn render_shop(
         street::fine_bowl(canvas, BOWL, counter);
     }
 
-    // The noren, in the app's neon, slit into panels, its letters dyed in
-    // the dark; taken in when the shop's shut, its rail bare.
+    // The noren, in the app's neon, slit into panels, the shop's crest
+    // dyed on it; taken in when the shop's shut, its rail bare.
     canvas.fine_rect(left, rail, right - left, 1, Color::TEXT_DIM);
     if lit {
         street::fine_noren(
@@ -369,7 +368,7 @@ fn render_shop(
             rail,
             noren_h,
             NOREN_PANEL,
-            &NOREN_LETTERS,
+            NOREN_PANELS,
             tube,
             false,
         );
@@ -475,7 +474,7 @@ fn render_shop(
 
 /// The bar in the dim look (idle mode's eight colours, still): its
 /// outlines in the structure's red and the noren's in the app's colour,
-/// its letters solid, and its lanterns, unlit.
+/// and its lanterns, unlit.
 fn render_shop_dim(canvas: &mut Canvas, top: i32, rail: i32, hem: i32, counter: i32, tube: Color) {
     let line = Color::TEXT_FAINT;
     let (left, right) = (POSTS[0], POSTS[1] + POST_W);
@@ -491,7 +490,7 @@ fn render_shop_dim(canvas: &mut Canvas, top: i32, rail: i32, hem: i32, counter: 
         rail,
         hem - rail,
         NOREN_PANEL,
-        &NOREN_LETTERS,
+        NOREN_PANELS,
         tube,
         true,
     );
@@ -589,9 +588,9 @@ const BOOTH: (i32, i32, i32, i32) = (98, 105, 44, 162);
 /// and width.
 const KEY_Y: i32 = CALL_BUTTONS_Y + 3;
 const KEY_H: i32 = 15;
+const KEY_W: i32 = 32;
 /// The middle of who's calling, lettered finely: the panel's row.
 const CALLER_Y: i32 = 64;
-const KEY_W: i32 = 32;
 
 /// Stars either side of the booth, over the far city.
 const BOOTH_STARS: [(i32, i32); 4] = [(9, 39), (66, 38), (24, 42), (75, 44)];
@@ -620,8 +619,8 @@ pub(super) fn call_overflow(caller: &str) -> i32 {
 pub(super) fn render_call(canvas: &mut Canvas, call: &Call, dim: bool) {
     canvas.clear(BACKGROUND);
     let night = street::Night::now();
-    let (_, top, _, floor) = BOOTH;
     let ringing = !call.silenced;
+    let (_, top, _, floor) = BOOTH;
 
     // Behind the booth: a little rain, or a few stars (fewer as the sky
     // lightens), and the far city, low.

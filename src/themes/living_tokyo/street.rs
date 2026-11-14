@@ -844,27 +844,21 @@ pub(super) fn fine_reflection(
     }
 }
 
-/// A [`fine_noren`]'s letters: a sign's [`LETTERING`], dyed bolder, as a
-/// brush lays it on cloth, and in 15 rows, as the shortest noren with
-/// letters has 19 under its fold.
-const NOREN_LETTERING: Style = Style {
-    cap: 12,
-    stroke: 48,
-    caps: true,
-};
-
 /// The slit between a [`fine_noren`]'s panels.
 pub(super) const NOREN_SLIT: i32 = 2;
 
 /// A shop's noren at the panel's resolution, hung from its rail at row
-/// `rail` and `h` rows long, from column `x`: a panel `panel` wide a
-/// letter of `letters` (as noren carry the shop's name), [`NOREN_SLIT`]
-/// apart, in `tube` (the app's neon, say), each with the cloth's fold
-/// under the rail and its hem shaded, its letter dyed in the dark in the
-/// signs' fine face, bolder, where there's room for it (`h` of 20 or
-/// more). In
-/// the dim look (`dim`), outlines in `tube`, from the rail itself, the
-/// letters solid in it.
+/// `rail` and `h` rows long, from column `x`: `panels` panels `panel`
+/// wide, [`NOREN_SLIT`] apart, in `tube` (the app's neon, say), each with
+/// the cloth's fold under the rail and its hem shaded; and where there's
+/// room (`h` of 20 or more), the shop's crest dyed small on the middle
+/// one, a bowl with chopsticks over it, in a shade of the cloth. In the
+/// dim look (`dim`), the panels' outlines in `tube`, from the rail
+/// itself, and no crest.
+///
+/// No lettering: the shop's name in letters across the cloth (RAMEN)
+/// drew the eye from the notification's sender; the crest is a quiet
+/// cue, and the counter, the bowl and its steam say the rest.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fine_noren(
     canvas: &mut Canvas,
@@ -872,28 +866,35 @@ pub(super) fn fine_noren(
     rail: i32,
     h: i32,
     panel: i32,
-    letters: &[&str],
+    panels: i32,
     tube: Color,
     dim: bool,
 ) {
-    for (i, letter) in letters.iter().enumerate() {
-        let x = x + i as i32 * (panel + NOREN_SLIT);
-        let ink = if dim {
+    for i in 0..panels {
+        let x = x + i * (panel + NOREN_SLIT);
+        if dim {
             canvas.fine_rect(x, rail, panel, 1, tube);
             canvas.fine_rect(x, rail + h - 1, panel, 1, tube);
             canvas.fine_rect(x, rail, 1, h, tube);
             canvas.fine_rect(x + panel - 1, rail, 1, h, tube);
-            tube
-        } else {
-            canvas.fine_rect(x, rail + 1, panel, h, tube);
-            canvas.fine_tone(x, rail + 1, panel, 2, 2, Color::SHADOW);
-            canvas.fine_tone(x, rail + h - 1, panel, 2, 2, Color::SHADOW);
-            Color::SHADOW
-        };
-        if h >= 20 {
-            let w = font::Face::Fine(NOREN_LETTERING).width(letter);
-            let (x, y) = (x + (panel - w) / 2, rail + 4);
-            canvas.fine_type(x, y, letter, NOREN_LETTERING, ink, None);
+            continue;
+        }
+        canvas.fine_rect(x, rail + 1, panel, h, tube);
+        canvas.fine_tone(x, rail + 1, panel, 2, 2, Color::SHADOW);
+        canvas.fine_tone(x, rail + h - 1, panel, 2, 2, Color::SHADOW);
+        if i == panels / 2 && h >= 20 {
+            // The crest, in a checker of the dark over the cloth: the
+            // bowl, wide at its rim, and two chopsticks leaning over it.
+            let (mx, top) = (x + panel / 2, rail + h / 2 + 2);
+            for (dy, half) in [(0, 7), (1, 7), (2, 6), (3, 5), (4, 3)] {
+                canvas.fine_tone(mx - half, top + dy, 2 * half, 1, 2, Color::SHADOW);
+            }
+            for (from, to) in [(-3, 3), (0, 6)] {
+                for step in 0..7 {
+                    let (cx, cy) = (mx + from + step * (to - from) / 6, top - 1 - step);
+                    canvas.fine_tone(cx, cy, 2, 1, 2, Color::SHADOW);
+                }
+            }
         }
     }
 }
