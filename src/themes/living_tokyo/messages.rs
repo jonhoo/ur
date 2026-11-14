@@ -4,6 +4,7 @@ use super::layout::{CALL_BUTTONS_Y, CALL_TEXT_WIDTH, MUSIC_CONTROLS_Y, MUSIC_TEX
 use super::{BACKGROUND, street};
 use crate::canvas::{Canvas, Color};
 use crate::font;
+use crate::font::fine::Style;
 use crate::themes::helpers::fitted;
 use crate::themes::{Call, Music};
 
@@ -17,15 +18,16 @@ use crate::themes::{Call, Music};
 // resolution, which keeps the hours and the night's weather. The banner is the same sign in short, over
 // the bottom of whatever shows.
 //
-// Who it's from is the 3×5 at 2× if it fits on one line (up to about 9
-// letters), or on two of about the same width (see `large`): a poster,
-// the size the watch's other big text is. Anything longer is in the
-// medium face (see `font::medium_glyph`), balanced over as few lines as
-// it takes (see `font::wrap`), never the small 1×, which is too small to
-// read at a glance. Either way it's centred, as a name on a screen of its
-// own is expected to be, and as it was before the medium face: the
-// balanced lines read as a block, and a short name doesn't sit in a
-// corner. (The banner, which has to be compact, is the exception: see
+// Who it's from is in the city's own lettering (see `font::fine`), drawn
+// at the panel's resolution, as it's written (a name in capitals and
+// lowercase, as the phone has it): big, if it fits on a line or two
+// without a word broken (a first name over a surname, typically), or
+// else smaller, balanced over as few lines as it takes (see
+// `font::wrap`). Either way it's centred, as a name on a screen of its
+// own is expected to be: the balanced lines read as a block, and a short
+// name doesn't sit in a corner. The sign's lettering is the same face,
+// in capitals, as a neon tube a pen's width thick. (The banner, which
+// has to be compact, keeps the canvas's small font: see
 // `render_banner`.)
 
 /// The neon an app's sign is lit in, on the card and the banner alike:
@@ -50,53 +52,54 @@ fn neon(app: &str) -> Color {
 const BANNER_TEXT: core::ops::Range<i32> = 4..76;
 const BANNER_TEXT_WIDTH: i32 = BANNER_TEXT.end - BANNER_TEXT.start;
 
-/// Line pitch of the medium face: 7 px capitals, 2 accent rows, and a
-/// row's gap, so an accent never touches the line above.
-const MEDIUM_PITCH: i32 = font::MEDIUM_HEIGHT + font::ACCENT_ROWS + 1;
+/// Who it's from, big (a line or two of about 9 letters) and smaller
+/// (about 13 a line), in the panel's pixels: bold enough to be the most
+/// important thing on the screen, and smoothed at their edges.
+const NAME_LARGE: Style = Style {
+    cap: 26,
+    stroke: 68,
+    caps: false,
+};
+const NAME_SMALL: Style = Style {
+    cap: 16,
+    stroke: 44,
+    caps: false,
+};
 
-/// The most lines who it's from takes in the card: 40 letters at about 11
+/// The app on its sign: capitals the canvas's small font's height, in a
+/// tube not quite two pixels thick, where the sign's box (`SIGN_H`) holds
+/// them.
+const SIGN_LETTERING: Style = Style {
+    cap: 12,
+    stroke: 28,
+    caps: true,
+};
+/// The sign's lettering's left and top, in the panel's pixels: where the
+/// small font's was, a pixel lower, as the face's capitals are a stroke
+/// shorter than its 5 rows.
+const SIGN_TEXT: (i32, i32) = (BANNER_TEXT.start * 3, 10);
+
+/// The most lines who it's from takes in the card: 40 letters at about 13
 /// a line, with room to spare for long words.
 const CARD_LINES: usize = 5;
 
-/// How unequal two lines at 2× may be: the shorter at least 7/10 of the
-/// longer, in pixels. In this all but monospaced font, a 5- and a 5-letter
-/// word are equal, 4 and 5 make 79%, 5 and 7 just make it at 70%, and 4
-/// and 6 (65%) or 3 and 8 (35%) don't. Below about this, the pair reads
-/// as a long line with a stub hanging off it rather than as a block.
-const BALANCE_TENTHS: i32 = 7;
-
-/// Who it's from at 2×, as `lines` of the small font: how many (one or
-/// two), or 0 if it's not short enough. Two only split at a space, about
-/// equal (see [`BALANCE_TENTHS`]): a first name and a surname, typically.
-/// Never hyphenated: a broken word in large type is harder to read than
-/// the same word whole in the medium face, and so is a big first line
-/// over a one-word second.
-fn large(who: &str, lines: &mut [font::Line; CARD_LINES]) -> usize {
-    // `wrap` balances the lines already: what's left is to check how it
-    // broke them. A break at a space is neither a hyphen nor a joint in a
-    // link; an ellipsis at the end means it needed more than two.
-    let count = font::wrap(
-        who,
-        font::Face::Small,
-        BANNER_TEXT_WIDTH / 2,
-        &mut lines[..2],
-    );
-    let [top, bottom, ..] = *lines;
-    match count {
-        1 => 1,
-        2 if bottom.tail == font::Tail::None && who.as_bytes().get(top.end) == Some(&b' ') => {
-            let (a, b) = (
-                top.width(who, font::Face::Small),
-                bottom.width(who, font::Face::Small),
-            );
-            if a.min(b) * 10 >= a.max(b) * BALANCE_TENTHS {
-                2
-            } else {
-                0
-            }
-        }
-        _ => 0,
+/// Who it's from, filled greedily into `lines`: how many it takes (at
+/// most [`CARD_LINES`]), and in which style. Big if it fits on two lines
+/// without a word broken (no hyphen or ellipsis), else smaller. Not yet
+/// balanced (see [`font::wrap`]), which only the passes that draw the
+/// name need: it takes as many lines either way.
+fn name(who: &str, lines: &mut [font::Line; CARD_LINES]) -> (usize, Style) {
+    let room = BANNER_TEXT_WIDTH * 3;
+    let count = font::fill(who, font::Face::Fine(NAME_LARGE), room, lines);
+    if count <= 2
+        && lines[..count]
+            .iter()
+            .all(|line| line.tail == font::Tail::None)
+    {
+        return (count, NAME_LARGE);
     }
+    let count = font::fill(who, font::Face::Fine(NAME_SMALL), room, lines);
+    (count.min(CARD_LINES), NAME_SMALL)
 }
 
 /// A notification, with the whole screen (one that arrived with the screen
@@ -114,33 +117,30 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str,
     let rain = now.is_some_and(|second| street::rainy(street::evening(second)));
     let tick = now.map_or(0, |second| second as u64);
 
-    // Who it's from: at 2× (pitch, capitals' height, and accents' rows,
-    // all doubled), or in the medium face.
+    // Who it's from, in the panel's pixels: its lines a cap and a half
+    // apart, which leaves an accent over a capital clear of the line
+    // above's descenders.
     let mut lines = [font::Line::default(); CARD_LINES];
-    let (count, face, scale, pitch, height) = match large(who, &mut lines) {
-        0 => (
-            font::wrap(who, font::Face::Medium, BANNER_TEXT_WIDTH, &mut lines),
-            font::Face::Medium,
-            1,
-            MEDIUM_PITCH,
-            font::MEDIUM_HEIGHT,
-        ),
-        count => (
-            count,
-            font::Face::Small,
-            2,
-            2 * (5 + font::ACCENT_ROWS + 2),
-            2 * 5,
-        ),
-    };
+    let (count, style) = name(who, &mut lines);
+    let pitch = i32::from(style.cap) * 3 / 2 + style.height() - i32::from(style.cap);
+    let (above, below) = style.reach();
     // The capitals centred between the sign and the shop's roof, which
     // is where the eye looks for them, but no nearer the sign than two
-    // clear rows above the accents. Accents above the first line are left
-    // out of the centring, as most names have none. A long name pushes
-    // the roof down, the shop giving up its height to it.
-    let block = pitch * (count as i32 - 1) + height;
-    let top = ((12 + SHOP_TOP - 3) / 2 - block / 2).max(12 + 2 + font::ACCENT_ROWS * scale);
-    let roof = (top + block + 4).clamp(SHOP_TOP, SHOP_LOWEST);
+    // pixels above an accent. Accents above the first line, and
+    // descenders below the last, are left out of the centring, as most
+    // names have few. A long name pushes the roof down, the shop giving
+    // up its height to it.
+    let block = pitch * (count as i32 - 1) + style.height();
+    let top = ((12 + SHOP_TOP - 3) * 3 / 2 - block / 2).max(3 * 12 + 2 + above);
+    let roof = ((top + block + below - style.height() + 12) / 3).clamp(SHOP_TOP, SHOP_LOWEST);
+    // Balanced (or cut with an ellipsis), only where it's drawn: in the
+    // frame's own pass, and the passes of the bands it's in (see
+    // `Canvas::refine`). Laying it out took a third of a band's pass.
+    let rows = canvas.fine_rows();
+    if top - above - 6 < rows.end && top + block - style.height() + below + 6 > rows.start {
+        let face = font::Face::Fine(style);
+        font::wrap(who, face, BANNER_TEXT_WIDTH * 3, &mut lines[..count]);
+    }
 
     // The night over the roof, quietly, behind the name: a few stars
     // (fewer as the sky lightens), or the rain, in the far buildings'
@@ -162,40 +162,50 @@ pub(super) fn render_card(canvas: &mut Canvas, app: &str, who: &str, time: &str,
     let time_width = font::small_text_width(time);
     let gap = if time.is_empty() { 0 } else { time_width + 6 };
     let mut line = [font::Line::default()];
-    let room = BANNER_TEXT_WIDTH - gap;
-    let width = match font::wrap(app, font::Face::Small, room, &mut line) {
+    let room = (BANNER_TEXT_WIDTH - gap) * 3;
+    let sign = font::Face::Fine(SIGN_LETTERING);
+    let width = match font::wrap(app, sign, room, &mut line) {
         0 => 0,
-        _ => line[0].width(app, font::Face::Small),
+        _ => line[0].width(app, sign),
     };
-    street::hanging(canvas, width, tube);
+    // The box round the lettering, in the canvas's pixels, a pixel of
+    // the panel's or two clear of its end.
+    street::hanging(canvas, (width + 2) / 3, tube);
     if width > 0 {
-        canvas.line(BANNER_TEXT.start, 3, app, line[0], font::Face::Small, tube);
+        let (x, y) = SIGN_TEXT;
+        canvas.line(x, y, app, line[0], sign, tube);
     }
     canvas.text_right(BANNER_TEXT.end, 3, time, Color::TEXT_DIM);
 
+    // Smoothed against the night (`TEXT_FAINT` between the name's
+    // `TEXT` and the dark), but not in the dim look, whose eight colours
+    // have no shade between white and black.
+    let edge = (!dim).then_some(Color::TEXT_FAINT);
+    // Each line where it's centred: its left and its width (its tail, an
+    // ellipsis or a hyphen, included).
+    let place = |line: font::Line| {
+        let w = line.width(who, font::Face::Fine(style));
+        (120 - w / 2, w)
+    };
+    // The rain passes behind the name, not through its letters, which
+    // it would break up: a canvas pixel clear round each line, its
+    // accents and descenders included. All of them first, as a line's
+    // reaches into the one above's descenders.
+    if rain && !dim {
+        for (i, &line) in lines[..count].iter().enumerate() {
+            let y = top + pitch * i as i32;
+            let (x, w) = place(line);
+            let (left, right) = (x / 3 - 1, (x + w + 2) / 3 + 1);
+            let (high, low) = ((y - above) / 3 - 1, (y + below + 2) / 3 + 1);
+            canvas.fill_rect(left, high, right - left, low - high, BACKGROUND);
+        }
+    }
     for (i, &line) in lines[..count].iter().enumerate() {
         let y = top + pitch * i as i32;
-        // The tail (an ellipsis or a hyphen) is part of the width.
-        let w = line.width(who, face) * scale;
-        let x = 40 - w / 2;
-        if rain && !dim {
-            // The rain passes behind the name, not through its letters,
-            // which it would break up: a pixel clear round each line,
-            // its accents' rows included.
-            let accents = font::ACCENT_ROWS * scale;
-            canvas.fill_rect(
-                x - 1,
-                y - accents - 1,
-                w + 2,
-                height + accents + 2,
-                BACKGROUND,
-            );
-        }
-        if scale == 2 {
-            canvas.text_scaled(x, y, line.of(who), Color::TEXT, 2);
-        } else {
-            canvas.line(x, y, who, line, face, Color::TEXT);
-        }
+        let (x, _) = place(line);
+        let end = canvas.fine_type(x, y, line.of(who), style, Color::TEXT, edge);
+        let end = if line.end > line.start { end } else { x };
+        canvas.fine_type(end, y, line.tail.as_str(), style, Color::TEXT, edge);
     }
 }
 

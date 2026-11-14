@@ -70,8 +70,9 @@ squiggles posing as kanji would be wrong to anyone who reads them.
 
 Living Tokyo isn't a retro theme, and needn't be as coarse as the
 canvas's 80×80. Its builds can draw rows at the panel's own 240×240
-(`Canvas::fine_rect`, `fine_tone`, `fine_text`, and the `fine_` pieces
-in [street.rs](street.rs), all in the panel's pixels), over and under
+(`Canvas::fine_rect`, `fine_tone`, `fine_text`, `fine_type` (see
+Type), and the `fine_` pieces in [street.rs](street.rs), all in the
+panel's pixels), over and under
 the canvas's drawing in the order drawn. A tenth of a millimetre a
 pixel: detail that makes a thing read as what it is (a noren's slits
 and lettering, a stool's seat, a lantern's hoops), and tones (amber
@@ -81,8 +82,9 @@ What it costs: a frame that draws finely is drawn again for every eight
 canvas rows it draws finely in, as they're sent (see `canvas.rs`), and
 a fine row that changes goes to the panel whole. So:
 
-- Draw finely where detail tells: the scene's subject. Text, signs and
-  the sky can stay on the canvas, at 3×, where they always were.
+- Draw finely where detail tells: the scene's subject, and the big,
+  still text (see Type). Small text and the sky can stay on the canvas,
+  at 3×, where they always were.
 - A fine row that moves costs a full row's SPI each second it does: keep
   what moves in few rows (steam, not a whole rainy sky, for now).
 - Shapes drawn a pixel at a time walk only `canvas.fine_rows()`.
@@ -119,12 +121,69 @@ A sign's colour says whose it is:
 
 ## Type
 
-- Information in `TEXT`: big figures in the 5×7 digits at 2× to 4×, with
-  a `SHADOW` drop shadow (`draw_digit`); names in the small font at 2×
-  or the medium face, as before.
-- Sign lettering in the small font at 1×, in the sign's tube colour.
-- Labels `TEXT_DIM`, hints `TEXT_FAINT`, both 1×.
-- No fake Japanese; no lowercase (the font has none).
+Two kinds of type: the canvas's pixel fonts, and the city's own
+lettering at the panel's resolution.
+
+- **The lettering** (`font::fine`, drawn with `Canvas::fine_type`): a
+  monoline sans traced with a round pen, like a neon tube's lettering or
+  a station sign's rounded face, at any size and weight, in capitals and
+  lowercase, with Latin-1's letters. For what's big and mostly still:
+  who a message or call is from, a screen's title on its sign, big
+  times and figures that change by the minute or slower. Done: the
+  notification card's name and its app's sign.
+- **The pixel fonts** (the small font, the medium face, the 5×7 digits):
+  small labels and hints, and anything that changes every second (the
+  clock's seconds, a countdown's last minutes, a marquee). A fine row
+  that changes goes to the panel whole, and every band of fine rows is
+  drawn again each frame (see Resolution), where the canvas sends a
+  changed figure as a narrow span.
+- Information in `TEXT`; labels `TEXT_DIM`, hints `TEXT_FAINT`; a
+  sign's lettering in its tube's colour.
+- Names as the phone writes them, capitals and lowercase; signs in
+  capitals (`Style::caps`), as signs are. The pixel fonts have no
+  lowercase.
+- No fake Japanese.
+
+### Using the lettering
+
+A `font::fine::Style` is a size and a weight: `cap`, the capitals'
+height in panel pixels (from the middle of the top stroke to the
+middle of the baseline's); `stroke`, the pen's width in sixteenths of a
+pixel; and `caps`. The card's, as a guide:
+
+| Use | `cap` | `stroke` | Edge | Letters across the card (216 px) |
+|---|---|---|---|---|
+| A name, big | 26 | 68 (4¼ px) | `TEXT_FAINT` | about 11 |
+| A name, longer | 16 | 44 (2¾ px) | `TEXT_FAINT` | about 17 |
+| A sign's title | 12 | 28 (1¾ px) | none | about 19 |
+
+Draw with `canvas.fine_type(x, y, text, style, color, edge)`, in panel
+pixels: `x` is the ink's left, `y` the top of the capitals' ink (an
+accent over a capital reaches `style.reach().0` above it, a descender
+`style.reach().1` below), and it returns where the next letter would
+start. `edge` smooths the strokes' edges in a shade between `color` and
+what's under them: `Some(TEXT_FAINT)` for `TEXT` on the night's dark,
+`None` for neon (no shade between a neon and the dark) and in the dim
+look (whose eight colours have none). Measure with
+`font::Face::Fine(style).width(text)` (the ink), `style.height()` (the
+capitals' ink) and `style.advance(c)`.
+
+To wrap or cut it, it's a layout face: `font::Face::Fine(style)` in
+`font::wrap` and `font::fill`, with widths and rooms in panel pixels,
+breaking and balancing as the pixel fonts do; `Canvas::line` draws a
+laid-out line (with its hyphen or ellipsis) in it, without an edge. A
+line's ink is wholly skipped in a band it isn't in, but laying text out
+isn't: lay it out (`wrap` balances by filling it a few times) only in
+the passes that draw it, `canvas.fine_rows()` says which, as
+`messages::render_card` does; a cheap `fill` gives the line count the
+rest of the screen's layout needs.
+
+What it costs: about 1.3 KB of flash for the face (every glyph about 11
+bytes); CPU in proportion to the ink, about 0.6 M instructions a frame
+(about 10 ms) for the card's two-line name, which is drawn again in
+each band it's in. A screen whose big text sits on a sign or board
+behind it is cheaper drawn there than over rain, whose every second
+changes the rows under it.
 
 ## The shared pieces
 
@@ -208,7 +267,7 @@ it stays the night's city under the full dawn glow, with no stars.
 | `alarms` | medium (approved) | A station's departure board under a platform roof: smart wake, the alarms and the timers as departures | The next to ring flagged and counting down ("IN 7H05"); running timers tick; an alarm off is a dark row; rain past the platform's edge, or the night sky |
 | `phone_alarms` | subtle (approved) | The same board, ten rows | The next to ring flagged |
 | `editor` | subtle | One departure, big, on the board; its buttons as lit panel keys | A running timer ticks |
-| `notification` | everyday | *Done, at the panel's resolution.* The app's neon sign hanging top left, who it's from big, and under it a ramen stall: its roof, the app's noren lettered RAMEN over the counter, a red lantern at each end of the eaves, the stock pot and a bowl (chopsticks across it) on the lit counter, four red stools, a menu board on the street | The noren in the app's colour; the stall lit and the bowl steaming in the evening, dimmer and its steam thinner in the small hours, shuttered (noren in, lanterns out, no bowl) from 04:00; rainy, faint rain behind the name and the stall's and lanterns' light broken up in the wet street; clear, a few stars, fewer towards dawn, and the stall's light pooled on the street. A long name pushes the roof down, squeezing the stall (its noren shorter, unlettered, then hiding the bowl). Dim: red outlines (the eaves, posts, counter, stools), the unlit lanterns, and the noren and its letters in the app's colour |
+| `notification` | everyday | *Done, at the panel's resolution.* The app's neon sign hanging top left, lettered finely, who it's from big in the fine lettering (as written, capitals and lowercase), and under it a ramen stall: its roof, the app's noren lettered RAMEN over the counter, a red lantern at each end of the eaves, the stock pot and a bowl (chopsticks across it) on the lit counter, four red stools, a menu board on the street | The noren in the app's colour; the stall lit and the bowl steaming in the evening, dimmer and its steam thinner in the small hours, shuttered (noren in, lanterns out, no bowl) from 04:00; rainy, faint rain behind the name and the stall's and lanterns' light broken up in the wet street; clear, a few stars, fewer towards dawn, and the stall's light pooled on the street. A long name pushes the roof down, squeezing the stall (its noren shorter, unlettered, then hiding the bowl). Dim: red outlines (the eaves, posts, counter, stools), the unlit lanterns, and the noren and its letters in the app's colour |
 | `banner` | everyday | *Done.* The same sign, over the bottom of the screen | The app's colour |
 | `music` | medium | *Done.* The bar's MUSIC sign hanging top left, the artist and track on a dark marquee, and the turntable under it: play or pause on the record's label, previous and next either side | One living thing, the record: playing, the sign lit, the arm on it and a sheen going round a step a second; paused, the sign dark, the arm at rest, the record still. Quieter: the bar's lamp warming the record by the noodle bar's hours; a little rain or a few stars over the marquee. Dim: shapes and text, still |
 | `air` | medium | *Done.* A small room: the CO₂ figure on the wall as before, a little window high up beside the title, and a red bowl on the counter at the foot | One living thing, the bowl's steam, taller the stuffier the air (a wisp in fresh air, up to the band's bar past 2000 ppm). Quieter: the window fogs with the humidity and shows the rain or a star and the far city's lit windows; the big figure dims past ten minutes, every figure faint once stale. Dim: no steam, fog or weather |

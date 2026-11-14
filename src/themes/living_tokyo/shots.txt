@@ -210,3 +210,15 @@ find on
 wait 1s
 shot night-find.png
 find off
+
+# The city's fine lettering for a name too long for two big lines: in
+# its smaller size, balanced over two, the accents over the capitals
+# clear of them; at dawn, the stall shut.
+wait 1s
+notify Telegram "Øyvind Åsheim-Brekke"
+wait 7s
+down
+wait 1s
+shot night-notification-long.png
+button
+wait 1s
