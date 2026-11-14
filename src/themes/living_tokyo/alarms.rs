@@ -5,126 +5,395 @@ use core::fmt::Write as _;
 
 use embassy_time::Duration;
 
-use super::layout::{ALARMS_TOP, EDITOR_BUTTONS_Y, SMART_TOP, TIMERS_TOP};
+use super::layout::{ALARM_ROW, ALARM_ROWS_TOP, EDITOR_BUTTONS_Y};
 use super::{BACKGROUND, draw_digit, street};
 use crate::alarm;
 use crate::canvas::{Canvas, Color};
+use crate::font;
 use crate::themes::Editor;
-use crate::themes::helpers::{countdown, duration, hhmm};
+use crate::themes::helpers::{duration, hhmm};
 use crate::ui::{Editing, Fits, Status};
 
-/// Smart wake across the top (label and state, then both times), then the
-/// two alarms and the two timers in pairs of cells, each cell a label, its
-/// time, and its state.
+// ==============================================================================
+// The alarms: a departure board
+// ==============================================================================
+
+// The watch's alarms as a station's departure board, hanging under a
+// platform's roof: a row a departure (smart wake, the two alarms, the two
+// timers), each its kind, when it goes and its state, in the board's
+// amber LEDs. It's a board to read, not a station to look at: the rows
+// have the screen, and the platform is a strip under them.
+//
+// What lives is the data. The next to ring is flagged (its kind in red,
+// what rings) and counts down ("IN 7H05", its seconds in the last ten
+// minutes); a running timer goes at the time it'll ring, counting down
+// too, its colon ticking; and what's off, or a timer not running, is a
+// dark row. Under the board, past the platform's edge, the night's
+// weather, quietly: rain falling, or a few stars. Dim, the board alone,
+// still.
+
+/// The board's columns: its kind, when it goes, and (right-aligned to
+/// the last) its state.
+const KIND_X: i32 = 4;
+const TIME_X: i32 = 27;
+const STATE_RIGHT: i32 = 76;
+/// The rods the boards hang from, clear of the longest title they hang
+/// beside (PHONE ALARMS).
+const RODS: [i32; 2] = [59, 73];
+/// The rail beyond the platform's edge, and the edge itself, the
+/// last row.
+const RAILS: i32 = 76;
+const PLATFORM_EDGE: i32 = 79;
+/// How far above the platform's edge the rain shows, at most.
+const RAIN_ROWS: i32 = 24;
+
+/// How a board's row is lit.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lit {
+    /// The next to ring.
+    Next,
+    /// On, or running.
+    On,
+    /// Off, or a timer not running: a dark row.
+    Dark,
+}
+
+/// Seconds until something goes, for a board: the minutes and seconds
+/// in its last ten minutes ("9:41"), then the minutes, rounded up
+/// ("45M"), then hours and minutes ("7H05"), and past ten hours, the
+/// hours ("11H"), to keep to a board's column.
+fn until(seconds: i64) -> heapless::String<8> {
+    let seconds = seconds.max(0);
+    let minutes = (seconds + 59) / 60;
+    let mut text = heapless::String::new();
+    let result = if seconds < 10 * 60 {
+        write!(text, "{}:{:02}", seconds / 60, seconds % 60)
+    } else if minutes < 60 {
+        write!(text, "{minutes}M")
+    } else if minutes < 10 * 60 {
+        write!(text, "{}H{:02}", minutes / 60, minutes % 60)
+    } else {
+        write!(text, "{}H", minutes / 60)
+    };
+    result.fits();
+    text
+}
+
+/// A time of day, from local minutes (any day's), as HH:MM, its colon
+/// left out on a `tick` (a running timer's, a second in two).
+fn clock(minutes: i64, tick: bool) -> heapless::String<8> {
+    let minutes = minutes.rem_euclid(24 * 60);
+    let colon = if tick { ' ' } else { ':' };
+    let mut text = heapless::String::new();
+    write!(text, "{:02}{colon}{:02}", minutes / 60, minutes % 60).fits();
+    text
+}
+
+/// One of the alarms board's rows.
+struct Departure {
+    kind: &'static str,
+    /// When it goes (or a timer not running, how long it runs).
+    time: heapless::String<8>,
+    /// Seconds until it goes, if it's set to and that's known.
+    left: Option<i64>,
+    /// Whether it's on (a timer: running).
+    on: bool,
+    timer: bool,
+}
+
+/// The board: smart wake's next time (weekday's or weekend's, whichever
+/// comes first), each alarm's, and each timer's, in rows a tap on which
+/// opens it in the editor (see `LivingTokyo::alarm_at`).
 pub(super) fn render_alarms(
     canvas: &mut Canvas,
     settings: &alarm::Settings,
     state: &alarm::State,
     status: &Status,
+    dim: bool,
 ) {
     canvas.clear(BACKGROUND);
-    canvas.text(4, 3, "ALARMS", Color::ACCENT);
-    let switch = |on: bool| {
-        if on {
-            ("ON", Color::GOOD)
+    let now = status.local_second;
+    let uptime = status.uptime_secs as i64;
+    let bottom = ALARM_ROWS_TOP + ALARM_ROW * 5;
+    render_platform(
+        canvas,
+        bottom + 1,
+        status.local_second,
+        status.uptime_secs,
+        dim,
+    );
+    street::board(
+        canvas,
+        0,
+        ALARM_ROWS_TOP - 1,
+        80,
+        bottom - ALARM_ROWS_TOP + 2,
+        RODS,
+    );
+    street::title(canvas, "ALARMS", Color::ACCENT);
+
+    // Each departure, and when it goes. Smart wake's next is the one
+    // still to ring: tomorrow's, once this morning's has.
+    let minute = now.map(|second| second.div_euclid(60));
+    let smart = minute.map(|minute| {
+        let next = alarm::next_smart(settings, minute);
+        if state.smart_rang() == Some(next) {
+            alarm::next_smart(settings, next)
         } else {
-            ("OFF", Color::TEXT_FAINT)
+            next
         }
-    };
-
-    let (text, color) = switch(settings.smart);
-    canvas.text(4, SMART_TOP + 1, "SMART WAKE", Color::TEXT_DIM);
-    canvas.text_right(77, SMART_TOP + 1, text, color);
-    let mut times = heapless::String::<20>::new();
-    write!(
-        times,
-        "{} / {}",
-        hhmm(settings.smart_weekday.into()),
-        hhmm(settings.smart_weekend.into())
-    )
-    .fits();
-    canvas.text(4, SMART_TOP + 8, &times, Color::TEXT);
-
-    // Hairlines between the bands, so the pairs read as pairs.
-    for y in [ALARMS_TOP - 2, TIMERS_TOP - 2] {
-        canvas.fill_rect(4, y, 72, 1, Color::TEXT_FAINT);
-    }
-    let cell = |canvas: &mut Canvas,
-                column: usize,
-                top: i32,
-                label: &str,
-                value: &str,
-                status: (&str, Color)| {
-        let x = 4 + 40 * column as i32;
-        canvas.text(x, top + 1, label, Color::TEXT_DIM);
-        canvas.text(x, top + 8, value, Color::TEXT);
-        canvas.text(x, top + 15, status.0, status.1);
-    };
+    });
+    let after =
+        |at: Option<i64>, on: bool| now.zip(at).filter(|_| on).map(|(now, at)| at * 60 - now);
+    let mut rows: heapless::Vec<Departure, 5> = heapless::Vec::new();
+    rows.push(Departure {
+        kind: "SMART",
+        time: clock(smart.unwrap_or(settings.smart_weekday.into()), false),
+        left: after(smart, settings.smart),
+        on: settings.smart,
+        timer: false,
+    })
+    .ok();
     for i in 0..alarm::ALARMS {
-        let time = hhmm(settings.at_time[i].into());
-        cell(
-            canvas,
-            i,
-            ALARMS_TOP,
-            ["ALARM 1", "ALARM 2"][i],
-            &time,
-            switch(settings.at[i]),
-        );
+        let time = settings.at_time[i];
+        let at = minute.map(|minute| alarm::next_at(time, 0, minute));
+        rows.push(Departure {
+            kind: "ALARM",
+            time: clock(time.into(), false),
+            left: after(at, settings.at[i]),
+            on: settings.at[i],
+            timer: false,
+        })
+        .ok();
     }
     for t in 0..alarm::TIMERS {
-        // While running: time left, ticking; otherwise the duration.
-        let left = state.remaining(t, status.uptime_secs as i64);
-        let (value, running) = match left {
-            Some(left) => (countdown(left), ("RUNNING", Color::GOOD)),
-            None => (duration(settings.timers[t]), ("", Color::TEXT_FAINT)),
+        // Running: the time of day it rings, if that's known, its colon
+        // ticking, as an LED clock's does. Not: how long it runs.
+        let left = state.remaining(t, uptime);
+        let tick = !dim && status.uptime_secs % 2 == 1;
+        let time = match (left, now) {
+            (Some(left), Some(now)) => clock((now + left).div_euclid(60), tick),
+            _ => duration(settings.timers[t]),
         };
-        cell(
-            canvas,
-            t,
-            TIMERS_TOP,
-            ["TIMER 1", "TIMER 2"][t],
-            &value,
-            running,
-        );
+        rows.push(Departure {
+            kind: "TIMER",
+            time,
+            left,
+            on: left.is_some(),
+            timer: true,
+        })
+        .ok();
+    }
+
+    let next = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| Some((i, row.left?)))
+        .min_by_key(|&(_, left)| left)
+        .map(|(i, _)| i);
+    for (i, row) in rows.iter().enumerate() {
+        let top = ALARM_ROWS_TOP + ALARM_ROW * i as i32;
+        if i > 0 {
+            seam(canvas, top - 1);
+        }
+        let lit = if Some(i) == next {
+            Lit::Next
+        } else if row.on {
+            Lit::On
+        } else {
+            Lit::Dark
+        };
+        let mut state = heapless::String::<8>::new();
+        match row.left {
+            Some(left) if row.timer || lit == Lit::Next => {
+                write!(state, "IN {}", until(left)).fits();
+            }
+            _ if row.on => state.push_str("ON").fits(),
+            _ if row.timer => {}
+            _ => state.push_str("OFF").fits(),
+        }
+        let y = top + (ALARM_ROW - 1 - 5) / 2;
+        departure(canvas, y, row.kind, &row.time, &state, lit);
     }
 }
 
-/// The phone's alarms, a row each: the time, the weekdays it rings on (or
-/// "ONCE"), and whether it's on. Ten rows fit, as many as Gadgetbridge
-/// sends.
-pub(super) fn render_phone_alarms(canvas: &mut Canvas, phone: &alarm::Phone) {
+/// A seam between a board's rows, at row `y`: its panels' join, dotted,
+/// so a row reads as a strip to tap.
+fn seam(canvas: &mut Canvas, y: i32) {
+    for x in (2..78).step_by(2) {
+        canvas.pixel(x, y, Color::TRACK);
+    }
+}
+
+/// A departure on the alarms board, its lettering's top at `y`: its kind
+/// (red if it's the next to ring), its time and its state in the
+/// board's amber, "ON" in green; a dark row, all faint.
+fn departure(canvas: &mut Canvas, y: i32, kind: &str, time: &str, state: &str, lit: Lit) {
+    let (kind_color, text) = match lit {
+        Lit::Next => (Color::HEART, Color::HEART_SHINE),
+        Lit::On => (Color::HEART_SHINE, Color::HEART_SHINE),
+        Lit::Dark => (Color::TEXT_FAINT, Color::TEXT_FAINT),
+    };
+    let state_color = if state == "ON" { Color::GOOD } else { text };
+    canvas.text(KIND_X, y, kind, kind_color);
+    let end = canvas.text(TIME_X, y, time, text);
+    debug_assert!(
+        end < STATE_RIGHT - font::small_text_width(state),
+        "{state} runs into {time}"
+    );
+    canvas.text_right(STATE_RIGHT, y, state, state_color);
+}
+
+/// Under a board whose bottom edge is row `top`, past the platform's
+/// edge: the night (rain falling on a rainy night, a few stars on a
+/// clear one, one twinkling, fewer as dawn comes), the rails, and the
+/// platform's edge. Dim, the rails and the edge alone.
+fn render_platform(canvas: &mut Canvas, top: i32, now: Option<i64>, tick: u64, dim: bool) {
+    let rain = now.is_some_and(|second| street::rainy(street::evening(second)));
+    let light = street::daylight(now.map_or(0, street::hour_of));
+    if !dim && rain {
+        // Over the rails alone, however much sky the board leaves: rain
+        // seen past the edge, not a screen of it.
+        let from = (top + 1).max(PLATFORM_EDGE - RAIN_ROWS);
+        street::rain(canvas, from, PLATFORM_EDGE, tick, Color::TEXT_FAINT);
+    } else if !rain {
+        // Stars from the table where the board leaves sky, as many as
+        // the dawn leaves out.
+        let mut shown: heapless::Vec<(i32, i32), 12> = heapless::Vec::new();
+        let count =
+            PLATFORM_STARS.len() * (street::DAYLIGHT - light) as usize / street::DAYLIGHT as usize;
+        for &star in PLATFORM_STARS[..count]
+            .iter()
+            .filter(|&&(_, y)| y > top && y < RAILS - 1)
+        {
+            shown.push(star).fits();
+        }
+        street::stars(canvas, &shown);
+        if !dim && !shown.is_empty() && tick.is_multiple_of(3) {
+            let (x, y) = shown[(tick / 3) as usize % shown.len()];
+            canvas.pixel(x, y, Color::TEXT);
+        }
+    }
+    // The rail, and the platform's edge: its yellow tactile strip, in
+    // dashes. (Not `street::rails`' sleepers: in so thin a strip, one
+    // line fewer keeps it calm under the board.)
+    canvas.fill_rect(0, RAILS, 80, 1, Color::TEXT_FAINT);
+    for x in (0..80).step_by(4) {
+        canvas.fill_rect(x + 1, PLATFORM_EDGE, 2, 1, Color::HEART_SHINE);
+    }
+}
+
+/// Stars over the rails: few, spread along the open sky, for a board of
+/// any height; as the sky lightens, the last go first.
+const PLATFORM_STARS: [(i32, i32); 12] = [
+    (12, 71),
+    (63, 70),
+    (35, 46),
+    (70, 33),
+    (8, 52),
+    (50, 60),
+    (24, 30),
+    (44, 72),
+    (17, 63),
+    (58, 41),
+    (31, 56),
+    (74, 50),
+];
+
+/// The phone's alarms on the same board, a row each: the time, the
+/// weekdays it rings on (or "ONCE"), and whether it's on; the next to ring
+/// flagged, its time red, counting down. As many rows as it has (ten,
+/// at most, as many as Gadgetbridge sends), the board as tall as they
+/// are, the night under it.
+pub(super) fn render_phone_alarms(canvas: &mut Canvas, phone: &alarm::Phone, dim: bool) {
     canvas.clear(BACKGROUND);
-    canvas.text(4, 3, "PHONE ALARMS", Color::ACCENT);
-    for (row, alarm) in phone.alarms().iter().enumerate() {
-        let y = 11 + 7 * row as i32;
+    let alarms = phone.alarms();
+    let now = street::local_now();
+    // Ten rows a little closer, to leave the platform's edge its room.
+    let pitch = if alarms.len() > 8 { 6 } else { 7 };
+    let top = ALARM_ROWS_TOP;
+    let bottom = top + pitch * alarms.len().max(1) as i32 + 1;
+    render_platform(
+        canvas,
+        bottom,
+        now,
+        now.map_or(0, |second| second as u64),
+        dim,
+    );
+    street::board(canvas, 0, top - 1, 80, bottom - top + 2, RODS);
+    street::title(canvas, "PHONE ALARMS", Color::ACCENT);
+    if alarms.is_empty() {
+        canvas.text(KIND_X, top + 1, "NONE", Color::TEXT_FAINT);
+        return;
+    }
+
+    let next = now.and_then(|now| {
+        let minute = now.div_euclid(60);
+        alarms
+            .iter()
+            .enumerate()
+            .filter(|(_, alarm)| alarm.on())
+            .map(|(i, alarm)| (i, alarm::next_at(alarm.time, alarm.days, minute) * 60 - now))
+            .min_by_key(|&(_, left)| left)
+    });
+    for (row, alarm) in alarms.iter().enumerate() {
+        let y = top + 1 + pitch * row as i32;
         let on = alarm.on();
-        let text = if on { Color::TEXT } else { Color::TEXT_FAINT };
-        canvas.text(4, y, &hhmm(alarm.time.into()), text);
-        if alarm.days == 0 {
-            canvas.text(26, y, "ONCE", text);
+        let lit = match next {
+            Some((i, _)) if i == row => Lit::Next,
+            _ if on => Lit::On,
+            _ => Lit::Dark,
+        };
+        let text = if on {
+            Color::HEART_SHINE
         } else {
-            // Its weekdays bright, the others faint, so the row reads as
-            // a little calendar.
+            Color::TEXT_FAINT
+        };
+        let time = if lit == Lit::Next { Color::HEART } else { text };
+        canvas.text(KIND_X, y, &hhmm(alarm.time.into()), time);
+        if alarm.days == 0 {
+            canvas.text(TIME_X, y, "ONCE", text);
+        } else {
+            // Its weekdays lit, the others dark LEDs (faint, dim, where
+            // the dark's half-tone would break the letters up), so the
+            // row reads as a little calendar.
+            let unlit = if dim { Color::TEXT_FAINT } else { Color::TRACK };
             for (day, letter) in ["M", "T", "W", "T", "F", "S", "S"].into_iter().enumerate() {
-                let color = if on && alarm.days >> day & 1 != 0 {
-                    Color::TEXT
+                let color = if alarm.days >> day & 1 != 0 {
+                    text
                 } else {
-                    Color::TEXT_FAINT
+                    unlit
                 };
-                canvas.text(26 + 4 * day as i32, y, letter, color);
+                canvas.text(TIME_X + 4 * day as i32, y, letter, color);
             }
         }
-        let (state, color) = if on {
-            ("ON", Color::GOOD)
-        } else {
-            ("OFF", Color::TEXT_FAINT)
+        // No room for "IN" beside the weekdays: the red time says it's
+        // the next.
+        let (state, color) = match (lit, next) {
+            (Lit::Next, Some((_, left))) => (until(left), Color::HEART_SHINE),
+            (_, _) if on => ("ON".try_into().unwrap_or_default(), Color::GOOD),
+            _ => ("OFF".try_into().unwrap_or_default(), Color::TEXT_FAINT),
         };
-        canvas.text_right(77, y, state, color);
+        canvas.text_right(STATE_RIGHT, y, &state, color);
     }
 }
 
-/// One setting, big, with how to change it.
-pub(super) fn render_editor(canvas: &mut Canvas, editor: &Editor) {
+// ==============================================================================
+// The editor: one departure, big
+// ==============================================================================
+
+/// The editor's board, under the title, down to its bottom edge.
+const EDITOR_BOARD_BOTTOM: i32 = 54;
+/// The big digits' top, and their columns: the hours on the left half and
+/// the minutes on the right, matching where to swipe.
+const EDITOR_DIGITS_Y: i32 = 15;
+const EDITOR_DIGITS_X: [i32; 4] = [5, 22, 43, 60];
+const EDITOR_COLON_X: i32 = 38;
+
+/// One departure, big, on the board: the setting (or a running timer's
+/// time left, its colon ticking) in the board's big LED digits, how to
+/// change it, and its two buttons as lit keys under it.
+pub(super) fn render_editor(canvas: &mut Canvas, editor: &Editor, dim: bool) {
     let Editor {
         editing,
         settings,
@@ -152,60 +421,84 @@ pub(super) fn render_editor(canvas: &mut Canvas, editor: &Editor) {
             left.is_some(),
         ),
     };
-    canvas.text_centered(40, 4, title, Color::ACCENT);
+    street::board(
+        canvas,
+        0,
+        ALARM_ROWS_TOP - 1,
+        80,
+        EDITOR_BOARD_BOTTOM - ALARM_ROWS_TOP + 2,
+        RODS,
+    );
+    street::title(canvas, title, Color::ACCENT);
 
-    // Two pairs of the clock's 2× digits (10 px cells, 2 px gaps), the
-    // colon between; for settings, hours on the left half and minutes on
-    // the right, matching where to swipe.
-    let (pair, labels, color) = match left {
-        Some(left) if left < 60 * 60 => ((left / 60, left % 60), ("MIN", "SEC"), Color::ACCENT),
+    let (pair, labels) = match left {
+        Some(left) if left < 60 * 60 => ((left / 60, left % 60), ("MIN", "SEC")),
         // Two digits of hours: a timer is at most `alarm::MAX_TIMER`, but
         // should more ever be left, it reads 99:59 rather than overflowing.
         Some(left) => {
             let left = left.min(100 * 3600 - 1);
-            (
-                (left / 3600, left / 60 % 60),
-                ("HOURS", "MINUTES"),
-                Color::ACCENT,
-            )
+            ((left / 3600, left / 60 % 60), ("HOURS", "MINUTES"))
         }
         None => (
             (i64::from(value / 60), i64::from(value % 60)),
             ("HOURS", "MINUTES"),
-            Color::TEXT,
         ),
     };
     let digits = [pair.0 / 10, pair.0 % 10, pair.1 / 10, pair.1 % 10];
-    for (&digit, x) in digits.iter().zip([12, 24, 44, 56]) {
-        draw_digit(canvas, x, 22, digit as u64, 2, color);
+    for (&digit, x) in digits.iter().zip(EDITOR_DIGITS_X) {
+        street::led_digit(
+            canvas,
+            x,
+            EDITOR_DIGITS_Y,
+            digit as u64,
+            Color::HEART_SHINE,
+            None,
+        );
     }
-    for y in [26, 32] {
-        canvas.fill_rect(39, y, 2, 2, Color::ACCENT);
+    // The colon ticks while a timer runs.
+    if left.is_none() || dim || uptime % 2 == 0 {
+        street::led_colon(canvas, EDITOR_COLON_X, EDITOR_DIGITS_Y, Color::HEART_SHINE);
     }
-    canvas.text_centered(20, 44, labels.0, Color::TEXT_FAINT);
-    canvas.text_centered(60, 44, labels.1, Color::TEXT_FAINT);
+    let labels_y = EDITOR_DIGITS_Y + street::LED_H + 4;
+    canvas.text_centered(20, labels_y, labels.0, Color::TEXT_FAINT);
+    canvas.text_centered(59, labels_y, labels.1, Color::TEXT_FAINT);
     let hint = if left.is_some() {
         "LEFT"
     } else {
         "SWIPE UP/DOWN"
     };
-    canvas.text_centered(40, 51, hint, Color::TEXT_FAINT);
+    canvas.text_centered(40, labels_y + 8, hint, Color::TEXT_FAINT);
 
     let (left, left_color) = match (editing, on) {
-        (Editing::Timer(_), true) => ("STOP", Color::BAD),
-        (Editing::Timer(_), false) => ("START", Color::GOOD),
-        (_, true) => ("ON", Color::GOOD),
-        (_, false) => ("OFF", Color::TEXT_FAINT),
+        (Editing::Timer(_), true) => ("STOP", Some(Color::BAD)),
+        (Editing::Timer(_), false) => ("START", Some(Color::GOOD)),
+        (_, true) => ("ON", Some(Color::GOOD)),
+        (_, false) => ("OFF", None),
     };
     let right = if editing == Editing::SmartWeekday {
         "NEXT"
     } else {
         "DONE"
     };
-    canvas.fill_rect(2, EDITOR_BUTTONS_Y, 36, 18, left_color);
-    canvas.text_centered(20, EDITOR_BUTTONS_Y + 7, left, BACKGROUND);
-    canvas.fill_rect(42, EDITOR_BUTTONS_Y, 36, 18, Color::ACCENT);
-    canvas.text_centered(60, EDITOR_BUTTONS_Y + 7, right, BACKGROUND);
+    key(canvas, 2, left, left_color);
+    key(canvas, 42, right, Some(Color::ACCENT));
+}
+
+/// One of the editor's buttons, 36 wide from `x`: a panel key, its face
+/// lit in `lit` (or unlit, dark, for a switch that's off) in a slate
+/// bezel, a row deeper at the bottom, as a key stands proud of its
+/// panel.
+fn key(canvas: &mut Canvas, x: i32, label: &str, lit: Option<Color>) {
+    const W: i32 = 36;
+    const H: i32 = 18;
+    let y = EDITOR_BUTTONS_Y;
+    canvas.fill_rect(x, y, W, H, Color::TRACK);
+    let (face, ink) = match lit {
+        Some(color) => (color, BACKGROUND),
+        None => (Color::SHADOW, Color::TEXT_DIM),
+    };
+    canvas.fill_rect(x + 1, y + 1, W - 2, H - 3, face);
+    canvas.text_centered(x + W / 2, y + 6, label, ink);
 }
 
 // ==============================================================================

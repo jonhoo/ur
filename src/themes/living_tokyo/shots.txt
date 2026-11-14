@@ -111,9 +111,9 @@ button
 wait 1s
 left
 wait 1s
-long 20,60
+long 40,50
 wait 1s
-long 60,60
+long 40,61
 wait 1s
 button
 wait 11s
@@ -147,6 +147,17 @@ until 06:10
 wait 1s
 expect buzzing
 shot night-ringing.png
+
+# The alarms as a departure board at dawn, the ringing stopped: smart
+# wake next, its kind red, counting down, and a timer running.
+button
+wait 1s
+timer 2 25
+left
+wait 1s
+long 40,61
+wait 1s
+shot night-alarms.png
 
 # The button grid, a drinks machine on the street, at rest and as a press
 # is sent (its slot lit with the code, a can in the tray); then the

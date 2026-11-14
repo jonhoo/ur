@@ -371,3 +371,64 @@ pub(super) fn rainy(evening: i64) -> bool {
     hash ^= hash >> 16;
     hash.is_multiple_of(3)
 }
+
+// ==============================================================================
+// Station boards: the alarms, the phone's alarms, the editor, and Info
+// ==============================================================================
+
+/// A station board, `w` by `h` from `(x, y)`, hanging from the top edge
+/// (a platform's roof) on a rod at each of the columns `rods`: a dark
+/// panel (the near buildings' colour, black in the dim look) in a frame
+/// of the far buildings' slate a pixel thick (a half-tone there). Its
+/// rows are the caller's, lit as an LED board's: what it announces in
+/// the windows' warm yellow ([`Color::HEART_SHINE`]), what's off as a
+/// dark row (in the hints' colour), and a time to read from along the
+/// platform in [`led_digit`]s. Rods behind a title's sign are covered by
+/// it, as if it hung in front of them.
+pub(super) fn board(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, rods: [i32; 2]) {
+    for rod in rods {
+        canvas.fill_rect(rod, 0, 1, y, Color::TEXT_FAINT);
+    }
+    canvas.fill_rect(x, y, w, h, Color::TRACK);
+    canvas.fill_rect(x + 1, y + 1, w - 2, h - 2, Color::SHADOW);
+}
+
+/// How far apart a big [`led_digit`]'s dots are; each is a pixel less
+/// across, the gap between them the board's dark.
+pub(super) const LED_PITCH: i32 = 3;
+/// A big [`led_digit`]'s height: the 5×7 digits' seven rows of dots.
+pub(super) const LED_H: i32 = 7 * LED_PITCH - 1;
+
+/// One of the 5×7 digits, big, from `(x, y)`, as an LED board shows it:
+/// a dot (2×2) a pixel of the glyph, lit in `color`, and, given an
+/// `unlit` colour, the rest of its grid's dots dark in it, as a board's
+/// LEDs show when they're off (none in the dim look, where a half-tone's
+/// dots would only be noise).
+pub(super) fn led_digit(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    digit: u64,
+    color: Color,
+    unlit: Option<Color>,
+) {
+    let glyph = crate::themes::helpers::digit_glyph(digit);
+    for (row, &bits) in glyph.iter().enumerate() {
+        for column in 0..5 {
+            let on = bits & (1 << (4 - column)) != 0;
+            let Some(color) = (if on { Some(color) } else { unlit }) else {
+                continue;
+            };
+            let (dx, dy) = (column * LED_PITCH, row as i32 * LED_PITCH);
+            canvas.fill_rect(x + dx, y + dy, LED_PITCH - 1, LED_PITCH - 1, color);
+        }
+    }
+}
+
+/// The colon between two pairs of [`led_digit`]s, from column `x`: a dot
+/// level with each of their third and fifth rows of dots.
+pub(super) fn led_colon(canvas: &mut Canvas, x: i32, y: i32, color: Color) {
+    for row in [2, 4] {
+        canvas.fill_rect(x, y + row * LED_PITCH, LED_PITCH - 1, LED_PITCH - 1, color);
+    }
+}

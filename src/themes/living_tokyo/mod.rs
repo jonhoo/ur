@@ -77,12 +77,11 @@ const fn wrap<const N: usize>(list: [&'static LivingTokyo; N]) -> [Scheme; N] {
 /// Where Living Tokyo draws what can be tapped, for the drawing and the
 /// taps alike (see [`Theme::alarm_at`] and the like).
 mod layout {
-    /// The alarms screen: smart wake across the top, then the two alarms
-    /// side by side, then the two timers side by side, each half of the
-    /// screen's width. These are the tops of those bands.
-    pub const SMART_TOP: i32 = 11;
-    pub const ALARMS_TOP: i32 = 30;
-    pub const TIMERS_TOP: i32 = 53;
+    /// The alarms screen's departure board: its first row's top, and how
+    /// tall each of its five rows is (smart wake, the two alarms, and the
+    /// two timers, top to bottom, each across the screen).
+    pub const ALARM_ROWS_TOP: i32 = 12;
+    pub const ALARM_ROW: i32 = 11;
     /// Where the editor's buttons start: on/off on the left half, next or
     /// done on the right. Above them, a swipe up or down on the left half
     /// changes the hours, on the right the minutes.
@@ -140,13 +139,13 @@ impl Theme for LivingTokyo {
         settings: &alarm::Settings,
         state: &alarm::State,
         status: &Status,
-        _dim: bool,
+        dim: bool,
     ) {
-        alarms::render_alarms(canvas, settings, state, status);
+        alarms::render_alarms(canvas, settings, state, status, dim);
     }
 
-    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone, _dim: bool) {
-        alarms::render_phone_alarms(canvas, phone);
+    fn phone_alarms(&self, canvas: &mut Canvas, phone: &alarm::Phone, dim: bool) {
+        alarms::render_phone_alarms(canvas, phone, dim);
     }
 
     fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str, dim: bool) {
@@ -165,8 +164,8 @@ impl Theme for LivingTokyo {
         grid::render_buttons(canvas, grid);
     }
 
-    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage, _dim: bool) {
-        settings::render_settings(canvas, page);
+    fn settings(&self, canvas: &mut Canvas, page: &SettingsPage, dim: bool) {
+        settings::render_settings(canvas, page, dim);
     }
 
     fn info(&self, canvas: &mut Canvas, status: &Status, _dim: bool) {
@@ -205,8 +204,8 @@ impl Theme for LivingTokyo {
         messages::render_banner(canvas, app, who);
     }
 
-    fn editor(&self, canvas: &mut Canvas, editor: &Editor, _dim: bool) {
-        alarms::render_editor(canvas, editor);
+    fn editor(&self, canvas: &mut Canvas, editor: &Editor, dim: bool) {
+        alarms::render_editor(canvas, editor, dim);
     }
 
     fn ringing(&self, canvas: &mut Canvas, kind: alarm::Kind, status: &Status, dim: bool) {
@@ -237,18 +236,21 @@ impl Theme for LivingTokyo {
         glance::render_charged(canvas, status);
     }
 
-    fn alarm_at(&self, x: i32, y: i32) -> Option<Editing> {
-        use layout::{ALARMS_TOP, SMART_TOP, TIMERS_TOP};
-        let right = u8::from(x >= 40);
-        if y < SMART_TOP {
-            None
-        } else if y < ALARMS_TOP {
-            Some(Editing::SmartWeekday)
-        } else if y < TIMERS_TOP {
-            Some(Editing::At(right))
-        } else {
-            Some(Editing::Timer(right))
+    fn alarm_at(&self, _x: i32, y: i32) -> Option<Editing> {
+        use layout::{ALARM_ROW, ALARM_ROWS_TOP};
+        // The board's rows, across the screen: nothing in the title's
+        // strip above the board, and the last row reaches the bottom
+        // edge, over the platform.
+        if y < ALARM_ROWS_TOP - 1 {
+            return None;
         }
+        Some(match (y - ALARM_ROWS_TOP).max(0) / ALARM_ROW {
+            0 => Editing::SmartWeekday,
+            1 => Editing::At(0),
+            2 => Editing::At(1),
+            3 => Editing::Timer(0),
+            _ => Editing::Timer(1),
+        })
     }
 
     fn editor_button(&self, x: i32, y: i32) -> Option<EditorButton> {

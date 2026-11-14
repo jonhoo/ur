@@ -22,8 +22,11 @@ buildings, one an hour, under the heart rate's neon tube), Last night
 noren over a noodle bar's door), an alarm ringing (a level crossing
 at night), the button grid (a drinks machine on a street corner),
 pairing (a ticket machine's display), an update (a train pulling in),
-storage mode's prompt (a shop's shutter half down) and switching off
-(the city's lights going out). The rest are still copies of
+storage mode's prompt (a shop's shutter half down), switching off
+(the city's lights going out), the alarms and the phone's (a station's
+departure board), the alarm editor (one departure, big), Info (a
+station's information board) and Settings (wooden menu tags on a
+rail). The rest are still copies of
 [Retro](../retro/)'s, in Tokyo
 Night's colours.
 
@@ -71,7 +74,8 @@ says.)
 | A press sent | <img src="shots/night-grid-sent.png" width="120" alt="The same machine just after a tap on the top right slot: that part of the shelf lit green with 3 on it, big, its button green, TAP in green on the readout, and a yellow can lying in the tray"> |
 | Pairing | <img src="shots/night-pairing.png" width="120" alt="Pairing: PAIRING on a blue neon sign, ENTER ON PHONE:, and the passkey 482913, big, on a ticket machine's dark display, a row of fare buttons and the ticket slot under it"> |
 | An update arriving | <img src="shots/night-update.png" width="120" alt="An update: UPDATING on a blue neon sign, KEEP CLOSE, 42% big; under it a silver train with a green line and lit windows pulling into a platform from the left, its nose a little short of the middle, over the rails and the platform's yellow edge"> |
-| LOOK, in Settings | <img src="shots/night-look-settings.png" width="120" alt="LOOK's settings, at night, in LIVING TOKYO"> |
+| The alarms | <img src="shots/night-alarms.png" width="120" alt="The alarms as a departure board at dawn: ALARMS on a blue neon sign, and a dark board hanging on two rods, a row each in amber LEDs: SMART 06:30 IN 20M, its kind in red as the next to ring; the two alarms dark, off; a timer of 45 MIN dark; a timer running, 06:35 IN 25M; under the board, a few stars over the rail and the platform's yellow edge"> |
+| LOOK, in Settings | <img src="shots/night-look-settings.png" width="120" alt="LOOK's settings, at night, in LIVING TOKYO: under a blue LOOK sign, three wooden menu tags hanging one under another on cords from a rail: THEME LIVING TOKYO, its top edge lit in the scheme's magenta, cyan, green and yellow; FORCE NONE, unlit, as it can't change in this build; and LIGHT AUTO"> |
 
 They change with the hour, the night's weather and what they show. A
 third of nights rain, picked from the date, the same on every screen
@@ -85,8 +89,10 @@ and shut from 04:00. The sleeper train has a window lit for every share
 of the night spent lying awake, and the later the wearer woke, the
 lower the moon. A notification's noren and sign are in its app's own
 colour, the same on the banner, so the colour says which app before
-the letters do. The dim look keeps still: no rain, no glow, no light
-in the bar.
+the letters do. The alarms (and the phone's) are a departure board: the
+next to ring is flagged and counts down, a running timer ticks, and an
+alarm that's off is a dark row. The dim look keeps still: no rain, no
+glow, no light in the bar.
 
 ## On the charger
 
