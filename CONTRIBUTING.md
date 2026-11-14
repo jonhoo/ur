@@ -20,6 +20,7 @@ needs nothing special; LFS stores it.
   each module's documentation explains its part. The hardware-free ones
   (`ppg`, `sleep`, `stages`, `alarm`, `aranet` and `bthome_sensor`,
   `glance`, `heart_schedule`, `brightness`, `temperature`, `battery`,
+  `game` (the hidden puzzle's rules),
   `snapshot`, `nav`, `day`, `route`, `arrival`, `calendar` (`clock`'s dates), `decimal`, `gesture`,
   `wake`, `gb`, `phone`, `gb_buckets` and `sleep_hold` (the activity as
   Gadgetbridge fetches it), `live`, `link`, `buttons`, `qr`, `font`,
