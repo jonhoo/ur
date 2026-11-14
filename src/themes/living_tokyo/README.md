@@ -10,27 +10,25 @@ for notifications nobody has seen. It's drawn once a
 second and stays still in the dim look. No weather.
 (`theme-living_tokyo`.)
 
-Its other screens are being restyled as the same city at street level
-(see [DESIGN.md](DESIGN.md)), and live as the clock face does, on the
-hour, the night's weather and what they show. So far: the glance on the
-charger (the clock face's moon, big), the full charge's (the city under
-a full moon, struck by lightning, FULL in neon), the time's glance (the
-day's steps as a row of lit windows at its foot) and the route's (the
-street on a street plate), Today (the day's steps as a street of
-buildings, one an hour, under the heart rate's neon tube), Last night
-(an overnight sleeper train), a notification and its banner (the app's
-noren over a noodle bar's door), an alarm ringing (a level crossing
-at night), the button grid (a drinks machine on a street corner),
-pairing (a ticket machine's display), an update (a train pulling in),
-storage mode's prompt (a shop's shutter half down), switching off
-(the city's lights going out), the alarms and the phone's (a station's
-departure board), the alarm editor (one departure, big), Info (a
-station's information board), Settings (wooden menu tags on a
-rail), the music (a record turning in a small bar), the air (a bowl
-steaming in a small room), a call (a phone booth on a corner) and
-finding the watch (HERE in a puddle). The rest are still copies of
-[Retro](../retro/)'s, in Tokyo
-Night's colours.
+Its other screens are the same city at street level (see
+[DESIGN.md](DESIGN.md)), and live as the clock face does, on the hour,
+the night's weather and what they show: the glance on the charger (the
+clock face's moon, big), the full charge's (the city under a full moon,
+struck by lightning, FULL in neon), the time's glance (the day's steps
+as a row of lit windows at its foot) and the route's (the street on a
+street plate), Today (the day's steps as a street of buildings, one an
+hour, under the heart rate's neon tube), Last night (an overnight
+sleeper train), a notification and its banner (the app's noren over a
+noodle bar's door), an alarm ringing (a level crossing at night), the
+alarms and the phone's (a station's departure board), the alarm editor
+(one departure, big), Settings (wooden menu tags on a rail), Info (a
+station's information board), the music (a record turning in a small
+bar), the air (a bowl steaming in a small room), a call (a phone booth
+on a corner), finding the watch (HERE in a puddle), the button grid (a
+drinks machine on a street corner), pairing (a ticket machine's
+display), an update (a train pulling in), storage mode's prompt (a
+shop's shutter half down) and switching off (the city's lights going
+out).
 
 ## Colour schemes
 

@@ -3,18 +3,14 @@
 //! night, as the city is the night's (see [`schemes`]), and the black,
 //! white and red dim look ([`GLANCE`]).
 //!
-//! The clock face is the city seen from afar; the other screens are
-//! being restyled as the same city at street level, each living on the
-//! time and on what it shows, from the shared pieces in [`street`] (see
-//! DESIGN.md beside this file for the language and the plan). Restyled so
-//! far: the glances (the time's, its timers', the route's and the
-//! charge's) and the full charge, Today, Last night, a notification and
-//! its banner, and an alarm ringing. Every other screen, and where its taps land, started as a
-//! copy of Retro's (`scripts/new-theme.sh`): the files beside this one,
-//! a file a group of screens, in Living Tokyo's colours, its own code
-//! from here on. [`LivingTokyo`]'s [`Theme`] says which draws which.
-//!
-//! TODO: the rest of the screens in the city's style (DESIGN.md's plan).
+//! The clock face is the city seen from afar; every other screen is the
+//! same city at street level, each living on the time, the night's
+//! weather and what it shows, from the shared pieces in [`street`] (see
+//! DESIGN.md beside this file for the language). The screens started as
+//! a copy of Retro's (`scripts/new-theme.sh`): the files beside this
+//! one, a file a group of screens, Living Tokyo's own code from there
+//! on. [`LivingTokyo`]'s [`Theme`] says which draws which, and where
+//! taps land.
 
 // Its own code is held to dead code in every build, even one where the
 // shared code a theme draws with isn't (see `main.rs`), so that a copy
