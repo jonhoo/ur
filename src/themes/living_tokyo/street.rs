@@ -106,6 +106,19 @@ pub(super) fn hanging(canvas: &mut Canvas, width: i32, tube: Color) -> i32 {
 /// look: it's still (idle mode's limit is motion and colours, and the
 /// tube's are its own), and without it the tube is a hairline.
 pub(super) fn fine_sign(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, tube: Color) {
+    fine_sign_in(canvas, (x, y, w, h), tube, false);
+}
+
+/// A [`fine_sign`], or in the dim look (`dim`), its glow as solid as its
+/// tube, a tube two pixels thick: the glow's checkerboard flickers in
+/// idle mode (see `Palette::columns`), and a tube a pixel thick alone is
+/// a hairline.
+pub(super) fn fine_sign_in(
+    canvas: &mut Canvas,
+    (x, y, w, h): (i32, i32, i32, i32),
+    tube: Color,
+    dim: bool,
+) {
     // The box, its corners cut round the tube's.
     canvas.fine_rect(x + 2, y, w - 4, h, Color::SHADOW);
     canvas.fine_rect(x, y + 2, w, h - 4, Color::SHADOW);
@@ -127,7 +140,7 @@ pub(super) fn fine_sign(canvas: &mut Canvas, x: i32, y: i32, w: i32, h: i32, tub
             canvas.fine_tone(cx, y + h - 1 - (cy - y), 1, 1, level, tube);
         }
     };
-    ring(canvas, 0, 2);
+    ring(canvas, 0, if dim { 4 } else { 2 });
     ring(canvas, 1, 4);
 }
 

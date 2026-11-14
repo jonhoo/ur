@@ -351,14 +351,9 @@ fn render_route_glance(canvas: &mut Canvas, status: &Status, step: &crate::route
     };
     let plate_h = 3 * street::SIGN_H + 21 * (count as i32 - 1) + accents;
     let (plate_x, plate_y) = ((FINE - plate_w) / 2, PLATE_Y + (PLATE_H - plate_h) / 2);
-    street::fine_sign(
-        canvas,
-        plate_x,
-        plate_y,
-        plate_w,
-        plate_h,
-        Color::TEXT_FAINT,
-    );
+    // Always dim (a glance): its glow solid, untoned.
+    let plate = (plate_x, plate_y, plate_w, plate_h);
+    street::fine_sign_in(canvas, plate, Color::TEXT_FAINT, true);
     for (i, &line) in lines.iter().enumerate() {
         let x = (FINE - line.width(street, face)) / 2;
         let y = plate_y + street::LETTERING_AT.1 - 3 + accents + 21 * i as i32;
@@ -501,9 +496,9 @@ const CHARGED_STARS: [(i32, i32); 8] = [
 ];
 
 /// The lightning's path down the sky, in the panel's pixels, from the top
-/// edge to the tallest far building's roof (`clock`'s `FAR`, at canvas x
-/// 28–33, its top at 35): a stroke between each point and the next; and
-/// a fork off it, from its first kink.
+/// edge to the far city's tallest roof (`clock`'s far city, shifted by
+/// its `FAR_SHIFT` to stand here, its top at row 104): a stroke between
+/// each point and the next; and a fork off it, from its first kink.
 const LIGHTNING: [(i32, i32); 8] = [
     (34, 0),
     (46, 18),
@@ -512,7 +507,7 @@ const LIGHTNING: [(i32, i32); 8] = [
     (67, 70),
     (55, 75),
     (78, 96),
-    (90, 106),
+    (89, 104),
 ];
 const FORK: [(i32, i32); 4] = [(52, 31), (37, 46), (31, 58), (24, 64)];
 

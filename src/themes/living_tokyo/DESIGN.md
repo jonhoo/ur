@@ -196,7 +196,7 @@ canvas's grid, for the screens that need them so (see each).
 
 | Piece | What it is |
 |---|---|
-| `fine_sign` | A sign's box: dark inside a neon tube a pixel thick, a pixel in from its edge, its corners rounded, a glow either side of it; in the canvas `sign`'s footprint, three times over |
+| `fine_sign`, `fine_sign_in` | A sign's box: dark inside a neon tube a pixel thick, a pixel in from its edge, its corners rounded, a glow either side of it; in the canvas `sign`'s footprint, three times over. `fine_sign_in` with `dim`: the glow solid, a tube two pixels thick and no checkerboard (the route glance's street plate) |
 | `title`, `lettered` | A screen's title as a `fine_sign` hanging from the top edge on wires, its lettering in the fine face (`LETTERING`) where titles always were (`LETTERING_AT`), so what's under it keeps its place; `lettered` in an ink of its own, for a sign that's off |
 | `hanging`, `lettering_width` | The same box, round lettering the screen draws itself (cut to fit, say), its width in canvas pixels |
 | `sign`, `SIGN_H` | The canvas's sign, a tube a canvas pixel thick: only the music's marquee, which scrolls ten times a second, still has it |
