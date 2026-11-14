@@ -612,6 +612,14 @@ impl UiLoop {
                 }
                 _ => canvas.flush(board.display()).await,
             }
+            // Then the rows drawn at the panel's own resolution, each drawn
+            // again as it's sent (see `Canvas::refine`).
+            #[cfg(feature = "theme-living_tokyo")]
+            canvas
+                .refine(board.display(), &mut |canvas| {
+                    app.render(canvas, &status, now)
+                })
+                .await;
             self.first_frame = false;
             #[cfg(feature = "compare")]
             crate::compare::rendered();

@@ -255,7 +255,9 @@ beyond `ui::Status` (`Face`, `Glance`, `Music`, `Grid`, …, and
 `STEP_GOAL`). Drawing is on the 80×80 canvas
 ([src/canvas.rs](src/canvas.rs)), in colour roles, with the fonts and
 glyphs of [src/font.rs](src/font.rs). Retro's code, a file per group of
-screens, is a working example of every method.
+screens, is a working example of every method. Living Tokyo also draws
+some rows at the panel's own 240×240 (`Canvas::fine_rect` and the
+like, in its builds only): see the canvas's docs for what that costs.
 
 [`themes::helpers`](src/themes/helpers.rs) has what any theme is likely
 to need, whatever it looks like: mechanics that choose no colour,

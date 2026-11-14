@@ -9,6 +9,11 @@
 //! ~115 ms per frame at 8 MHz SPI, so we keep a copy of what the panel
 //! currently shows (`front`) and [`Canvas::flush`] only sends the rows that
 //! differ from it. A typical clock tick touches a handful of rows.
+//!
+//! Living Tokyo isn't a retro theme, and draws some rows at the panel's
+//! own resolution instead (see [`Canvas::fine_rect`]): those rows are
+//! drawn again, a canvas row at a time, as they're sent ([`Canvas::refine`]),
+//! as the panel's resolution has no room in RAM for a frame of its own.
 
 use core::ops::Range;
 
@@ -67,6 +72,11 @@ pub struct Canvas {
     batch: [u8; BATCH],
     /// While set, drawing only touches these columns (for [`Canvas::marquee`]).
     clip: Option<Range<i32>>,
+    /// The rows drawn at the panel's resolution. Last, so that
+    /// `scripts/screenshot.py` and the dev kit compare find the rest
+    /// where they always were.
+    #[cfg(feature = "theme-living_tokyo")]
+    fine: Fine,
 }
 
 impl Canvas {
@@ -83,6 +93,8 @@ impl Canvas {
             qr_shown: false,
             batch: [0; BATCH],
             clip: None,
+            #[cfg(feature = "theme-living_tokyo")]
+            fine: Fine::NONE,
         }
     }
 
@@ -102,8 +114,19 @@ impl Canvas {
 
     /// Clears the frame, starting a new one: every screen starts here.
     pub fn clear(&mut self, color: Color) {
+        #[cfg(feature = "theme-living_tokyo")]
+        if let Some((first, end)) = self.fine.band {
+            let bytes = (end - first) as usize * BAND;
+            self.back[..bytes].fill(color.0 | (color.0 << 4));
+            return;
+        }
         self.back.fill(color.0 | (color.0 << 4));
         self.qr_wanted = false;
+        #[cfg(feature = "theme-living_tokyo")]
+        {
+            debug_assert!(!self.fine.pending, "fine rows drawn but never sent");
+            self.fine.rows = 0;
+        }
     }
 
     /// Shows `matrix` over this frame, at the panel's own resolution
@@ -144,6 +167,14 @@ impl Canvas {
         if self.clip.as_ref().is_some_and(|clip| !clip.contains(&x)) {
             return;
         }
+        // Redrawing rows finely (see `refine`): a canvas pixel is
+        // SCALE × SCALE of the band's.
+        #[cfg(feature = "theme-living_tokyo")]
+        if self.fine.band.is_some() {
+            let scale = SCALE as i32;
+            self.fine_rect(x * scale, y * scale, scale, scale, color);
+            return;
+        }
         set_nibble(&mut self.back, y as usize * WIDTH + x as usize, color.0);
     }
 
@@ -166,6 +197,15 @@ impl Canvas {
     /// A rectangle, wherever it is: what's of it on the canvas. For the
     /// sprites' pixels, which may hang off an edge (see [`Canvas::pixel`]).
     fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
+        // Redrawing rows finely (see `refine`), only those rows of it, a
+        // run at a time, so that drawing the rest of the screen again
+        // costs little.
+        #[cfg(feature = "theme-living_tokyo")]
+        if self.fine.band.is_some() {
+            let scale = SCALE as i32;
+            self.fine_rect(x * scale, y * scale, w * scale, h * scale, color);
+            return;
+        }
         for yy in y..y + h {
             for xx in x..x + w {
                 self.pixel(xx, yy, color);
@@ -256,6 +296,16 @@ impl Canvas {
     fn glyphs(&mut self, x: i32, y: i32, text: &str, color: Color, scale: i32) -> i32 {
         let mut cursor = x;
         let top = y - font::ACCENT_ROWS * scale;
+        // Rows a fine band doesn't take (see `refine`) only need its end.
+        #[cfg(feature = "theme-living_tokyo")]
+        if !self.in_band(top, y + 5 * scale) {
+            let width = font::small_text_width(text);
+            return if text.is_empty() {
+                x
+            } else {
+                x + (width + 1) * scale
+            };
+        }
         for c in text.chars() {
             let glyph = font::glyph(c);
             self.sprite(cursor, top, glyph.width, &glyph.rows, scale, color);
@@ -270,6 +320,12 @@ impl Canvas {
     pub fn text_medium(&mut self, x: i32, y: i32, text: &str, color: Color) -> i32 {
         let mut cursor = x;
         let top = y - font::ACCENT_ROWS;
+        // As in `glyphs`.
+        #[cfg(feature = "theme-living_tokyo")]
+        if !self.in_band(top, y + font::MEDIUM_HEIGHT) {
+            let width = font::Face::Medium.width(text);
+            return if text.is_empty() { x } else { x + width + 1 };
+        }
         for c in text.chars() {
             let glyph = font::medium_glyph(c);
             self.sprite(cursor, top, glyph.width, &glyph.rows, 1, color);
@@ -353,12 +409,28 @@ impl Canvas {
         // whether everything was.
         let mut sent = false;
         let whole = !self.front_valid;
+        #[cfg(feature = "theme-living_tokyo")]
+        let stale = self.fine.flushing(whole);
         // Consecutive changed rows are merged into one band whose horizontal
         // extent is the union of the rows' changed spans, so a band costs one
         // address-window setup plus its pixels.
         let mut band: Option<(usize, Range<usize>)> = None; // (first row, columns)
         for row in 0..HEIGHT {
-            match (self.changed_span(row), band.take()) {
+            #[cfg(not(feature = "theme-living_tokyo"))]
+            let span = self.changed_span(row);
+            // Fine rows are `refine`'s to send; and a row the panel shows
+            // finely that's no longer fine, the canvas's, whole.
+            #[cfg(feature = "theme-living_tokyo")]
+            let span = if self.fine.rows >> row & 1 != 0 {
+                let bytes = row * WIDTH / 2..(row + 1) * WIDTH / 2;
+                self.front[bytes.clone()].copy_from_slice(&self.back[bytes]);
+                None
+            } else if stale >> row & 1 != 0 {
+                Some(0..WIDTH)
+            } else {
+                self.changed_span(row)
+            };
+            match (span, band.take()) {
                 (Some(span), Some((start, cols))) => {
                     band = Some((start, cols.start.min(span.start)..cols.end.max(span.end)));
                 }
@@ -467,6 +539,10 @@ impl Canvas {
 
         let started = Instant::now();
         let mut ticker = Ticker::every(STEP);
+        // Every block is sent from the canvas, fine rows' too (as their
+        // samples: see `fine_rect`), which `refine` then sharpens.
+        #[cfg(feature = "theme-living_tokyo")]
+        self.fine.flushing(true);
         // The canvas rows and columns of the `n`th block along `lane`,
         // counted from the side the sweep starts on.
         let block = |lane: usize, n: usize| {
@@ -664,6 +740,387 @@ fn set_nibble(buffer: &mut [u8; BYTES], i: usize, value: u8) {
     } else {
         (*byte & 0x0F) | (value << 4)
     };
+}
+
+// ==============================================================================
+// Drawing at the panel's resolution
+// ==============================================================================
+//
+// Living Tokyo isn't pixel art: it draws its scenes' detail (a noodle bar's
+// noren, its stools and its steam) at the panel's own resolution, three
+// times the canvas's each way. A frame of that would be 28.8 KB, which the
+// nRF52832's RAM hasn't room for, beside the canvas or in place of it. So
+// the rows a frame draws finely are drawn twice:
+//
+// - With the rest of the frame, onto the canvas, where each panel pixel at
+//   the centre of a canvas pixel stands for it: the canvas then holds what
+//   the panel shows at those centres, which is what `scripts/screenshot.py`
+//   and the dev kit compare read, and what a transition sweeps in. The
+//   rows touched are noted (`Fine::rows`).
+// - After the flush has sent the rest, those rows again (`refine`): the
+//   whole frame is drawn again with only eight canvas rows' panel rows
+//   taking any of it (`Fine::band`), into `back`, which the flush has
+//   just made a copy of `front` and so is free until it's put back from
+//   it. Each fine row of the eight is sent if it differs from what the
+//   panel shows, which is known by a hash of each row rather than a copy
+//   of it: this costs RAM for 80 hashes and little else.
+//
+// Drawing the frame again for each eight fine rows is the price: the
+// canvas's own drawing is cut to the rows being drawn (see `rect` and
+// `glyphs`), so a band costs little more than walking the screen's code
+// and drawing its detail. Each fine row that changed goes whole, as
+// there's no copy to find where it changed: a full-width row, a transfer
+// of its own. Only Living Tokyo draws finely, so only its builds have any
+// of this: Retro's are as they were.
+//
+// TODO: hash a fine row in parts, so that one that changed in a part
+// (steam rising) is sent in part, as the canvas's rows are.
+
+/// The panel's side, in its own pixels: where [`Canvas::fine_rect`] draws.
+#[cfg(feature = "theme-living_tokyo")]
+pub const FINE: i32 = FINE_W as i32;
+#[cfg(feature = "theme-living_tokyo")]
+const FINE_W: usize = WIDTH * SCALE;
+
+/// One canvas row of the panel's pixels, as colour roles: 4 bits each, as
+/// on the canvas. Drawn in `back`, a band of them at a time (see
+/// [`BAND_ROWS`]), and sent a row at a time from the tail of `batch`,
+/// where it's turned into the panel's bytes in place (see [`expand`]).
+#[cfg(feature = "theme-living_tokyo")]
+const BAND: usize = FINE_W * SCALE / 2;
+#[cfg(feature = "theme-living_tokyo")]
+const _: () = assert!(BATCH == 4 * BAND, "a band's pixels fill the batch");
+/// How many canvas rows [`Canvas::refine`] draws finely at once: as many
+/// bands as `back` holds.
+#[cfg(feature = "theme-living_tokyo")]
+const BAND_ROWS: usize = BYTES / BAND;
+
+/// What the canvas knows of the rows drawn at the panel's resolution.
+#[cfg(feature = "theme-living_tokyo")]
+struct Fine {
+    /// While rows are drawn again finely (see [`Canvas::refine`]), which:
+    /// the first, and the one past the last.
+    band: Option<(i32, i32)>,
+    /// The rows this frame draws finely, a bit each.
+    rows: u128,
+    /// The rows the panel shows as drawn finely, and the hash of each
+    /// (meaningful only for those).
+    shown: u128,
+    hashes: [u32; HEIGHT],
+    /// Fine rows a flush left for [`Canvas::refine`] to send: a frame
+    /// that draws them must be refined before the next.
+    pending: bool,
+    /// In the simulator, each row as last sent, so that a screenshot in
+    /// another scheme's colours needn't draw it again (see
+    /// [`Canvas::refine_kept`]).
+    #[cfg(not(target_os = "none"))]
+    kept: Vec<u8>,
+}
+
+#[cfg(feature = "theme-living_tokyo")]
+impl Fine {
+    const NONE: Self = Self {
+        band: None,
+        rows: 0,
+        shown: 0,
+        hashes: [0; HEIGHT],
+        pending: false,
+        #[cfg(not(target_os = "none"))]
+        kept: Vec::new(),
+    };
+
+    /// A flush (`whole`: of every row) is sending the canvas: it leaves
+    /// the fine rows to `refine`. Returns the rows the panel shows finely
+    /// that this frame doesn't draw so, which the canvas must send whole,
+    /// as what it holds of them is only their samples.
+    fn flushing(&mut self, whole: bool) -> u128 {
+        if whole {
+            self.shown = 0;
+        }
+        let stale = self.shown & !self.rows;
+        self.shown &= self.rows;
+        self.pending = self.rows != 0;
+        stale
+    }
+}
+
+#[cfg(feature = "theme-living_tokyo")]
+impl Canvas {
+    /// The panel rows being drawn: all of them, as the frame's drawn, or
+    /// the three of the row [`Canvas::refine`] is drawing again. A shape
+    /// drawn a pixel at a time can skip the rest.
+    pub fn fine_rows(&self) -> Range<i32> {
+        match self.fine.band {
+            Some((first, end)) => first * SCALE as i32..end * SCALE as i32,
+            None => 0..FINE,
+        }
+    }
+
+    /// Whether canvas rows `top..bottom` are being drawn: always, but
+    /// while [`Canvas::refine`] draws a band of them.
+    fn in_band(&self, top: i32, bottom: i32) -> bool {
+        self.fine
+            .band
+            .is_none_or(|(first, end)| top < end && bottom > first)
+    }
+
+    /// Fills a rectangle of the panel's own pixels ([`FINE`] a side),
+    /// over whatever the canvas has drawn there, and under what it draws
+    /// after. What's off the panel is cut, so shapes may hang off it.
+    pub fn fine_rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
+        self.fine_tone(x, y, w, h, 4, color);
+    }
+
+    /// Like [`Canvas::fine_rect`], lighting `level` of every four pixels
+    /// (in each 2×2): 1, one; 2, a checkerboard; 3, all but one; 4, all.
+    /// A pixel is a tenth of a millimetre: these read as shades of
+    /// `color` over what's under them, not as dots, so a scene has more
+    /// than the palette's sixteen (amber over the dark is wood).
+    pub fn fine_tone(&mut self, x: i32, y: i32, w: i32, h: i32, level: u8, color: Color) {
+        debug_assert!(w >= 0 && h >= 0, "a rectangle of a negative size");
+        debug_assert!((1..=4).contains(&level), "a tone of 1 to 4 in 4");
+        let rows = self.fine_rows();
+        let (top, bottom) = (y.max(rows.start), (y + h).min(rows.end));
+        let (mut left, mut right) = (x.max(0), (x + w).min(FINE));
+        if let Some(clip) = &self.clip {
+            let scale = SCALE as i32;
+            left = left.max(clip.start * scale);
+            right = right.min(clip.end * scale);
+        }
+        if top >= bottom || left >= right {
+            return;
+        }
+        // Which pixels of a row are lit: all, or every other one from the
+        // first column of `parity`; or none.
+        let lit = |y: i32| -> Option<Option<i32>> {
+            let odd = y & 1 == 1;
+            match level {
+                4 => Some(None),
+                3 if !odd => Some(None),
+                1 if odd => None,
+                2 => Some(Some(y & 1)),
+                _ => Some(Some(0)),
+            }
+        };
+        match self.fine.band {
+            Some((first, _)) => {
+                for y in top..bottom {
+                    let row = (y - first * SCALE as i32) as usize * FINE_W;
+                    match lit(y) {
+                        Some(None) => {
+                            self.band_run(row + left as usize, row + right as usize, color)
+                        }
+                        Some(Some(parity)) => {
+                            let start = left + ((left ^ parity) & 1);
+                            for x in (start..right).step_by(2) {
+                                self.set_band(row + x as usize, color);
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            None => {
+                let scale = SCALE as i32;
+                for row in top / scale..=(bottom - 1) / scale {
+                    self.fine.rows |= 1 << row;
+                }
+                // The canvas pixels whose centres (3c + 1) it lights.
+                let centres = |from: i32, to: i32| (from + 1) / scale..(to + 1) / scale;
+                for cy in centres(top, bottom) {
+                    let Some(every) = lit(cy * scale + 1) else {
+                        continue;
+                    };
+                    for cx in centres(left, right) {
+                        if every.is_none_or(|parity| (cx * scale + 1) & 1 == parity) {
+                            set_nibble(&mut self.back, cy as usize * WIDTH + cx as usize, color.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// One of the panel's pixels (see [`Canvas::fine_rect`]).
+    pub fn fine_pixel(&mut self, x: i32, y: i32, color: Color) {
+        self.fine_rect(x, y, 1, 1, color);
+    }
+
+    /// Text in `face` at `scale` of the panel's pixels a font pixel (the
+    /// canvas's [`Canvas::text_scaled`] is 3 of them): lettering on a
+    /// scene's detail, a noren's, say. `y` is the top of the capitals, as
+    /// on the canvas. Returns the x past its end.
+    pub fn fine_text(
+        &mut self,
+        x: i32,
+        y: i32,
+        text: &str,
+        face: font::Face,
+        color: Color,
+        scale: i32,
+    ) -> i32 {
+        let mut cursor = x;
+        let top = y - font::ACCENT_ROWS * scale;
+        for c in text.chars() {
+            let (width, rows) = match face {
+                font::Face::Small => {
+                    let glyph = font::glyph(c);
+                    let mut rows = [0; 9];
+                    rows[..7].copy_from_slice(&glyph.rows);
+                    (glyph.width, rows)
+                }
+                font::Face::Medium => {
+                    let glyph = font::medium_glyph(c);
+                    (glyph.width, glyph.rows)
+                }
+            };
+            for (dy, &row) in rows.iter().enumerate() {
+                for dx in 0..width {
+                    if row & (1 << (width - 1 - dx)) != 0 {
+                        let (px, py) = (cursor + dx as i32 * scale, top + dy as i32 * scale);
+                        self.fine_rect(px, py, scale, scale, color);
+                    }
+                }
+            }
+            cursor += (width as i32 + 1) * scale;
+        }
+        cursor
+    }
+
+    /// Sends the rows this frame drew finely (see [`Canvas::fine_rect`]),
+    /// after the flush or transition that sent the rest: each drawn again
+    /// with `render`, which draws the frame as it was drawn, and sent if
+    /// the panel doesn't already show it.
+    ///
+    /// They're drawn into `back`, which the flush has just made the same
+    /// as `front`, and which is put back from it after: [`BAND_ROWS`] at
+    /// once, so the frame is drawn again once for every eight fine rows
+    /// rather than for each.
+    pub async fn refine(&mut self, display: &mut Display, render: &mut dyn FnMut(&mut Canvas)) {
+        self.fine.pending = false;
+        let rows = self.fine.rows;
+        if rows == 0 {
+            return;
+        }
+        let mut row = 0;
+        while row < HEIGHT {
+            if rows >> row & 1 == 0 {
+                row += 1;
+                continue;
+            }
+            let end = (row + BAND_ROWS).min(HEIGHT);
+            self.fine.band = Some((row as i32, end as i32));
+            render(self);
+            self.fine.band = None;
+            // Drawing a band notes no rows: it would note the same.
+            debug_assert!(self.fine.rows == rows, "a frame drawn differently");
+            for (i, row) in (row..end).enumerate() {
+                let bit = 1 << row;
+                if rows & bit == 0 {
+                    continue;
+                }
+                let band = &self.back[i * BAND..(i + 1) * BAND];
+                // FNV-1a.
+                let hash = band.iter().fold(0x811c_9dc5_u32, |hash, &byte| {
+                    (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+                });
+                if self.fine.shown & bit != 0 && self.fine.hashes[row] == hash {
+                    continue;
+                }
+                self.fine.hashes[row] = hash;
+                self.fine.shown |= bit;
+                self.batch[BATCH - BAND..].copy_from_slice(band);
+                #[cfg(not(target_os = "none"))]
+                {
+                    let kept = &mut self.fine.kept;
+                    kept.resize(HEIGHT * BAND, 0);
+                    kept[row * BAND..(row + 1) * BAND].copy_from_slice(&self.batch[BATCH - BAND..]);
+                }
+                self.send_band(display, row).await;
+            }
+            row = end;
+        }
+        self.back = self.front;
+    }
+
+    /// In the simulator, sends the fine rows again as they were last
+    /// drawn: after a flush in another scheme's colours, for a screenshot
+    /// in them, which (as on the dev kit) doesn't draw the frame again.
+    #[cfg(not(target_os = "none"))]
+    pub async fn refine_kept(&mut self, display: &mut Display) {
+        self.fine.pending = false;
+        for row in 0..HEIGHT {
+            if self.fine.rows >> row & 1 == 0 || self.fine.kept.is_empty() {
+                continue;
+            }
+            let kept = &self.fine.kept[row * BAND..(row + 1) * BAND];
+            self.batch[BATCH - BAND..].copy_from_slice(kept);
+            self.fine.shown |= 1 << row;
+            self.send_band(display, row).await;
+        }
+    }
+
+    /// Sends the band, a row of the panel's pixels from the left edge to
+    /// the right.
+    async fn send_band(&mut self, display: &mut Display, row: usize) {
+        expand(&mut self.batch, self.palette);
+        start_pixels(display, row..row + 1, 0..WIDTH).await;
+        display.pixels(&self.batch).await;
+        display.end_pixels();
+    }
+
+    /// Sets the band's pixels `from..to` (counted row by row): the
+    /// whole bytes between its ends at once.
+    fn band_run(&mut self, mut from: usize, to: usize, color: Color) {
+        if from < to && from % 2 == 1 {
+            self.set_band(from, color);
+            from += 1;
+        }
+        let pairs = (to - from.min(to)) / 2;
+        self.back[from / 2..from / 2 + pairs].fill(color.0 | (color.0 << 4));
+        if from + 2 * pairs < to {
+            self.set_band(to - 1, color);
+        }
+    }
+
+    /// Sets pixel `at` of the band (row by row of the panel's, in `back`:
+    /// see [`Canvas::refine`]).
+    fn set_band(&mut self, at: usize, color: Color) {
+        debug_assert!(color.0 < 16, "a colour role over 4 bits");
+        let byte = &mut self.back[at / 2];
+        *byte = if at.is_multiple_of(2) {
+            (*byte & 0xF0) | color.0
+        } else {
+            (*byte & 0x0F) | (color.0 << 4)
+        };
+    }
+}
+
+/// Turns the band in `batch`'s tail into the panel's bytes, filling
+/// `batch`, in place: pixel `i`'s two bytes go at `2i`, from its role at
+/// `TAIL + i / 2`, so going left to right, each pixel's bytes only ever
+/// overwrite roles already read (`2i + 1 < TAIL + (i + 1) / 2` for every
+/// pixel but the last; a byte, two pixels, at a time, as checked below).
+/// That's what lets the band sent cost no RAM of its own.
+#[cfg(feature = "theme-living_tokyo")]
+fn expand(batch: &mut [u8; BATCH], palette: &Palette) {
+    const TAIL: usize = BATCH - BAND;
+    // Byte `i`'s four go at `4i`, beyond none still to be read.
+    const _: () = assert!(4 * (BAND - 2) + 3 < TAIL + (BAND - 1));
+    // Each role's bytes on even and odd columns, looked up once rather
+    // than for each of the 720 pixels: half-toned by the panel's column,
+    // as `stream` has them. A byte holds a pixel on an even column (low
+    // nibble) and the odd one after it, as a row is an even 240 wide.
+    let colors: [[[u8; 2]; 2]; Color::COUNT] =
+        core::array::from_fn(|role| palette.columns(Color(role as u8)));
+    for i in 0..BAND {
+        let byte = batch[TAIL + i];
+        let (even, odd) = (
+            colors[usize::from(byte & 0x0F)][0],
+            colors[usize::from(byte >> 4)][1],
+        );
+        batch[4 * i..4 * i + 4].copy_from_slice(&[even[0], even[1], odd[0], odd[1]]);
+    }
 }
 
 // ==============================================================================
