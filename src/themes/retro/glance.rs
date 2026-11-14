@@ -74,8 +74,9 @@ fn render_time_glance(canvas: &mut Canvas, status: &Status) {
 
 /// The glance while a timer runs: the time as the clock face has it, in
 /// one row at 3×, and under it a row for each running timer, an hourglass
-/// and the time left at 2×, as the clock face and the Alarms screen write
-/// it ("42 MIN", then "7:45" under 10 minutes, "2H05" beyond the hour).
+/// and the time left in the medium face, as the clock face and the Alarms
+/// screen write it ("42 MIN", then "7:45" under 10 minutes, "2H05" beyond
+/// the hour).
 ///
 /// The time gives up a size (4× to 3×) rather than share the screen at
 /// 4×: the stacked hours and minutes take 65 of the 80 rows, which leaves
@@ -90,6 +91,14 @@ fn render_time_glance(canvas: &mut Canvas, status: &Status) {
 ///
 /// The colon is steady, in the accent, unlike the clock face's blinking
 /// one: nothing on a glance moves but what has to (see below).
+///
+/// The rows are the medium face (a notification's name's: 7 px capitals,
+/// bold, with 2 px stems) beside the 5×7 hourglass at 1×, the same
+/// height: a size between the small font at 1× (5 px, hairline) and at
+/// 2× (10 px), which crowded the room under the time. Smaller, they leave
+/// that room as space around them, in even bands: as much above the rows
+/// as under them, and less between them, so they read as one list under
+/// the time.
 ///
 /// The timers go soonest first, which is what the wearer looks for, and
 /// their order only changes when one is started again. They aren't
@@ -113,10 +122,8 @@ fn render_timers_glance(
     const _: () = assert!(alarm::TIMERS == 2, "a row a timer, two at most");
     const TIME_Y: i32 = 15;
     const TIME_SCALE: i32 = 3;
-    const ICON_SCALE: i32 = 2;
-    const TEXT_SCALE: i32 = 2;
-    const ICON_W: i32 = font::HOURGLASS_W as i32 * ICON_SCALE;
-    const GAP: i32 = 4;
+    const ICON_W: i32 = font::HOURGLASS_W as i32;
+    const GAP: i32 = 3;
     canvas.clear(BACKGROUND);
     if let Some(t) = &status.local_time {
         // As the clock face draws it: 15 px digits 2 px apart, and a 3 px
@@ -137,17 +144,17 @@ fn render_timers_glance(
     let mut running = *timers;
     running.sort_unstable_by_key(|left| (left.is_none(), *left));
     let texts = running.map(|left| left.map(countdown));
-    // One row centred in the room under the time and its shadow (y
-    // 37..79); two a little closer to each other than to the time, with
-    // the glance's 7–8 px margin under the last.
+    // The room under the time and its shadow is y 37..79 (43 px), and a
+    // row is 7 px. One row centred in it, 18 px above and below; two with
+    // 11 px above and below, and 7 px (a row's height) between them.
     let rows: &[i32] = match texts.iter().flatten().count() {
-        1 => &[51],
-        _ => &[42, 59],
+        1 => &[55],
+        _ => &[48, 62],
     };
     let widest = texts
         .iter()
         .flatten()
-        .map(|text| font::small_text_width(text) * TEXT_SCALE)
+        .map(|text| font::Face::Medium.width(text))
         .max()
         .unwrap_or(0);
     let x = 40 - (ICON_W + GAP + widest) / 2;
@@ -155,16 +162,8 @@ fn render_timers_glance(
     // either side.
     debug_assert!(x >= 4, "a timer's row runs off the glance");
     for (text, &y) in texts.iter().flatten().zip(rows) {
-        canvas.sprite(
-            x,
-            y,
-            font::HOURGLASS_W,
-            &font::HOURGLASS,
-            ICON_SCALE,
-            Color::ACCENT,
-        );
-        // The text's capitals (10 px) centred on the hourglass (14 px).
-        canvas.text_scaled(x + ICON_W + GAP, y + 2, text, Color::TEXT, TEXT_SCALE);
+        canvas.sprite(x, y, font::HOURGLASS_W, &font::HOURGLASS, 1, Color::ACCENT);
+        canvas.text_medium(x + ICON_W + GAP, y, text, Color::TEXT);
     }
 }
 
