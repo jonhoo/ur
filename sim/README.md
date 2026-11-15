@@ -132,7 +132,10 @@ tap                               # snooze
   glances show the time to full, and `charged` after charging shows the
   full charge's screen, as on the watch), `steps`,
   `heart`, `temperature`, `asleep`, `movement`, `light-sleep`, `last-night`,
-  `demo-day` (a day of steps and heart rates so far), `alarm`, `smart`,
+  `demo-day` (a day of steps and heart rates so far), `crash` (a hard
+  fault or the watchdog resets the watch: the clock and today's steps
+  carry on, and the activity history comes back from its last
+  checkpoint, as the firmware's own records), `alarm`, `smart`,
   `timer`, `theme`, and `version` (what the Info screen says the
   version is: the tour and each theme's screenshots pin one, so a
   release's doesn't change them).
@@ -524,7 +527,8 @@ log lines go to it, and files download.
 - **Flash, in part.** Settings are saved and loaded (see
   [The flash](#the-flash)), but a location from the phone isn't saved,
   and Bluetooth bonds and the SPI flash (the activity record, field logs)
-  aren't simulated.
+  aren't simulated, bar the activity's checkpoints for `crash`, which
+  are kept in memory.
 - **Timing.** Pushes take the panel's time (see above), within ~16% of
   a dev kit's; nothing else does. Rendering a frame takes no time (on
   the watch, a few milliseconds), nor do the panel's waits on waking
@@ -536,8 +540,9 @@ log lines go to it, and files download.
 - **Logs.** The firmware's defmt logs go nowhere (decoding them isn't
   wired up). The simulator prints what happens instead.
 - The touch controller's quirks (missed lifts, garbage reports), the
-  watchdog (the UI loop feeds nothing), resets that keep RAM, panics'
-  breadcrumbs, the bootloader, and anything else below the UI.
+  watchdog (the UI loop feeds nothing; `crash` stands in for its
+  reset), panics' breadcrumbs, the bootloader, and anything else below
+  the UI.
 - **The panel's colours** (in the window) are a model (see
   `src/panel.rs`), from a similar panel's datasheet rather than this
   one's measurements.

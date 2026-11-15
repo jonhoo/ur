@@ -83,6 +83,10 @@ The wearer and the watch:
                              the touch controller)
   desk on|off                whether the watch lies on a desk, off the
                              wrist (the touch controller sleeps there)
+  crash                      a hard fault (or the watchdog) resets the
+                             watch: the clock and today's steps carry on,
+                             the history since the last checkpoint (every
+                             2 minutes) is lost, and the rest comes back
   last-night HH:MM HH:MM [deep=MIN] [rem=MIN] [awake=MIN]
   demo-day                   fill today's history so far with a typical day
   alarm 1|2 HH:MM [on|off] | smart on|off [HH:MM [HH:MM]] | timer 1|2 MIN
@@ -473,6 +477,7 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
             activity::set_light(on_off(need(0, "on|off")?, "on", "off")?);
             watch.refresh();
         }
+        "crash" => watch.crash(),
         "last-night" => {
             let sleep = last_night(&args)?;
             activity::set_last_sleep(Some(sleep));
@@ -759,6 +764,18 @@ fn gadgetbridge(watch: &mut Watch, line: &str) -> Result<(), String> {
 
 /// Where the last fetch stopped (`system_off::synced_through`).
 static SYNCED: std::sync::Mutex<Option<i64>> = std::sync::Mutex::new(None);
+
+/// Where the last fetch stopped, as far as the watch knows (see
+/// [`SYNCED`]).
+pub fn synced_through() -> Option<i64> {
+    *SYNCED.lock().expect("nothing panics while holding it")
+}
+
+/// Sets where the last fetch stopped: as a crash loses it from RAM, and a
+/// checkpoint restores it (see `activity::crash`).
+pub fn set_synced_through(synced: Option<i64>) {
+    *SYNCED.lock().expect("nothing panics while holding it") = synced;
+}
 
 /// As `system_off::on_clock_set`, when the phone sets the clock to
 /// `utc_seconds`: the last fetch's stop goes back to before it, if it was

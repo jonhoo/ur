@@ -120,6 +120,9 @@ mod sleep;
 #[path = "../../src/sleep_hold.rs"]
 #[allow(dead_code)]
 mod sleep_hold;
+#[path = "../../src/snapshot.rs"]
+#[allow(dead_code)]
+mod snapshot;
 #[path = "../../src/stages.rs"]
 #[allow(dead_code)]
 mod stages;
