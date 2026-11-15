@@ -5,7 +5,7 @@ use super::{BACKGROUND, clock, street};
 use crate::bthome::Identity;
 use crate::canvas::{Canvas, Color, FINE};
 use crate::font;
-use crate::themes::helpers::{self, address, hex, hms, percent, volts};
+use crate::themes::helpers::{self, address, hex, percent, uptime, volts};
 use crate::themes::{RowKind, SettingsPage};
 use crate::ui::{Fits, Status};
 
@@ -52,7 +52,7 @@ pub(super) fn render_info(canvas: &mut Canvas, status: &Status) {
     let mut charge = percent(battery.percent());
     charge.push(' ').fits();
     charge.push_str(&volts(battery.millivolts())).fits();
-    let uptime = hms(status.uptime_secs);
+    let uptime = uptime(status.uptime_secs);
     // "PAIRED" rather than "CONNECTED": the phone only counts as here once
     // it has written over an authenticated link (see `ble`), which takes
     // its bond, so this says both that it's connected and that it's paired
