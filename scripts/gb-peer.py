@@ -33,6 +33,7 @@ service but GAP needs an encrypted, authenticated link.
 import argparse
 import asyncio
 import sys
+import threading
 
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
@@ -59,8 +60,11 @@ async def serve(address: str) -> None:
     loop = asyncio.get_running_loop()
     commands: asyncio.Queue[str | None] = asyncio.Queue()
     # stdin in a thread: asyncio's own pipe reading isn't portable, and
-    # this is one line at a time.
-    loop.run_in_executor(None, read_stdin, loop, commands)
+    # this is one line at a time. A daemon thread, not the loop's executor:
+    # `asyncio.run` joins the executor's threads on the way out, so after
+    # `quit` it would wait for the caller to close stdin (a FIFO held open,
+    # say) before exiting.
+    threading.Thread(target=read_stdin, args=(loop, commands), daemon=True).start()
 
     client: BleakClient | None = None
 
@@ -117,9 +121,13 @@ async def serve(address: str) -> None:
 def read_stdin(
     loop: asyncio.AbstractEventLoop, commands: "asyncio.Queue[str | None]"
 ) -> None:
-    for line in sys.stdin:
-        loop.call_soon_threadsafe(commands.put_nowait, line.strip())
-    loop.call_soon_threadsafe(commands.put_nowait, None)
+    # A line after `quit` finds the loop closed; nothing is listening then.
+    try:
+        for line in sys.stdin:
+            loop.call_soon_threadsafe(commands.put_nowait, line.strip())
+        loop.call_soon_threadsafe(commands.put_nowait, None)
+    except RuntimeError:
+        pass
 
 
 def main() -> None:
