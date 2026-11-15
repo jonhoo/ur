@@ -178,6 +178,272 @@ mod tests {
         assert_eq!(MAX_BYTES, 32 + 1440 * 6);
         let bytes = record(&samples(MAX_MINUTES));
         assert!(read(&bytes).is_some());
+        assert!(MAX_BYTES as u32 <= SLOT_BYTES);
+    }
+
+    // ==========================================================================
+    // Checkpoints, and which record a boot restores
+    // ==========================================================================
+
+    /// A record as `system_off::save` writes it, saved as of `as_of` (the
+    /// minute after the history's newest), with `minutes` of samples, or
+    /// none (then starting at `as_of`, as `empty_from` has it).
+    fn saved(as_of: u32, minutes: usize) -> Vec<u8> {
+        let samples = samples(minutes);
+        let mut header = header();
+        header.first_minute = as_of - minutes as u32;
+        header.minutes = minutes as u16;
+        header.checksum = header.expected_checksum(checksum(CHECKSUM_SEED, &samples));
+        let mut bytes = header.to_bytes().to_vec();
+        bytes.extend_from_slice(&samples);
+        bytes
+    }
+
+    /// What `system_off::restore` picks, from the planned record and the
+    /// checkpoints' slots (each as the flash holds it), with the clock at
+    /// `now` if known: the slot of the newest checkpoint that's usable and
+    /// checks out, else the planned record if it's fresh and checks out.
+    #[derive(Debug, PartialEq)]
+    enum Restored {
+        Checkpoint(usize),
+        Planned,
+        Nothing,
+    }
+
+    fn boot(planned: &[u8], slots: &[Vec<u8>], now: Option<i64>) -> Restored {
+        let first_32 = |bytes: &[u8]| -> [u8; HEADER_BYTES] {
+            let mut header = [0xFF; HEADER_BYTES];
+            let n = bytes.len().min(HEADER_BYTES);
+            header[..n].copy_from_slice(&bytes[..n]);
+            header
+        };
+        let floor = as_of_any(&first_32(planned));
+        let mut best: Option<(usize, u32)> = None;
+        for (slot, bytes) in slots.iter().enumerate() {
+            if let Some(header) = Header::from_bytes(&first_32(bytes))
+                && newer_checkpoint(header.as_of(), best.map(|b| b.1), floor, now)
+                && read(bytes).is_some()
+            {
+                best = Some((slot, header.as_of()));
+            }
+        }
+        match best {
+            Some((slot, _)) => Restored::Checkpoint(slot),
+            None if planned.len() >= HEADER_BYTES && read(planned).is_some() => Restored::Planned,
+            None => Restored::Nothing,
+        }
+    }
+
+    /// Flash as erased, a slot's worth.
+    fn erased() -> Vec<u8> {
+        vec![0xFF; SLOT_BYTES as usize]
+    }
+
+    /// The planned record, as `system_off::retire` leaves it once the
+    /// phone has fetched it.
+    fn consumed(mut bytes: Vec<u8>) -> Vec<u8> {
+        let at = CONSUMED_OFFSET as usize;
+        bytes[at..at + 4].copy_from_slice(&CONSUMED.to_le_bytes());
+        bytes
+    }
+
+    const NOW: i64 = 29_500_000;
+
+    #[test]
+    fn a_record_is_as_of_the_minute_after_its_newest() {
+        let bytes = saved(NOW as u32 + 1, 300);
+        let (header, _) = read(&bytes).expect("a valid record");
+        assert_eq!(header.as_of(), NOW as u32 + 1);
+        // With nothing to save, it starts there, and says so all the same.
+        assert_eq!(empty_from(Some(NOW)), NOW as u32 + 1);
+        let bytes = saved(empty_from(Some(NOW)), 0);
+        assert_eq!(
+            read(&bytes).expect("a valid record").0.as_of(),
+            NOW as u32 + 1
+        );
+        // Before the clock was ever known: nothing to say.
+        assert_eq!(empty_from(None), 0);
+    }
+
+    #[test]
+    fn the_planned_records_time_is_read_once_it_is_retired() {
+        let bytes = saved(NOW as u32, 60);
+        let header: [u8; HEADER_BYTES] = bytes[..HEADER_BYTES].try_into().unwrap();
+        assert_eq!(as_of_any(&header), Some(NOW as u32));
+        let retired: [u8; HEADER_BYTES] = consumed(bytes)[..HEADER_BYTES].try_into().unwrap();
+        assert_eq!(Header::from_bytes(&retired), None, "no longer restored");
+        assert_eq!(as_of_any(&retired), Some(NOW as u32), "but still dated");
+        assert_eq!(as_of_any(&[0xFF; HEADER_BYTES]), None);
+        assert_eq!(as_of_any(&[0; HEADER_BYTES]), None);
+    }
+
+    #[test]
+    fn checkpoints_take_the_slots_in_turn() {
+        let due: Vec<i64> = (NOW..NOW + 200).filter(|&m| checkpoint_due(m)).collect();
+        assert_eq!(due.len(), 200 / CHECKPOINT_MINUTES as usize);
+        for pair in due.windows(2) {
+            assert_eq!(pair[1] - pair[0], CHECKPOINT_MINUTES);
+            let (a, b) = (checkpoint_slot(pair[0]), checkpoint_slot(pair[1]));
+            assert_eq!(
+                (a + 1) % CHECKPOINT_SLOTS,
+                b,
+                "the next slot, never the same"
+            );
+        }
+        // Each slot once in a round.
+        let mut round: Vec<u32> = due[..CHECKPOINT_SLOTS as usize]
+            .iter()
+            .map(|&m| checkpoint_slot(m))
+            .collect();
+        round.sort();
+        assert_eq!(round, (0..CHECKPOINT_SLOTS).collect::<Vec<_>>());
+        // A minute later in the same pair goes to the same slot, as the
+        // record it saves is the same one, newer.
+        assert_eq!(checkpoint_slot(due[0]), checkpoint_slot(due[0] + 1));
+        // And before 1970, for a clock that's never been right.
+        assert!(checkpoint_slot(-7) < CHECKPOINT_SLOTS);
+    }
+
+    #[test]
+    fn a_save_erases_only_the_sectors_it_needs() {
+        assert_eq!(erase_bytes(0), 4096);
+        // A sector holds 677 minutes after the header: 11 hours.
+        assert_eq!(erase_bytes(677), 4096);
+        assert_eq!(erase_bytes(678), 8192);
+        assert_eq!(erase_bytes(MAX_MINUTES as u16), SLOT_BYTES);
+        assert_eq!(SLOT_BYTES, 3 * 4096);
+    }
+
+    #[test]
+    fn a_crash_restores_the_newest_checkpoint() {
+        // Three checkpoints, two minutes apart, in slots 4..7; the
+        // planned record from an update hours before, already retired.
+        let mut slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        slots[4] = saved(NOW as u32 - 3, 200);
+        slots[5] = saved(NOW as u32 - 1, 202);
+        slots[6] = saved(NOW as u32 + 1, 204);
+        let planned = consumed(saved(NOW as u32 - 600, 30));
+        assert_eq!(boot(&planned, &slots, Some(NOW)), Restored::Checkpoint(6));
+        // Wherever it is in the round.
+        slots.swap(6, 0);
+        assert_eq!(boot(&planned, &slots, Some(NOW)), Restored::Checkpoint(0));
+        // Or after a power-on, with the clock unknown.
+        assert_eq!(boot(&planned, &slots, None), Restored::Checkpoint(0));
+    }
+
+    #[test]
+    fn a_save_cut_short_falls_back_to_the_one_before() {
+        let mut slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        slots[4] = saved(NOW as u32 - 3, 200);
+        slots[5] = saved(NOW as u32 - 1, 202);
+        // The crash came mid-save: erased, samples written, no header yet.
+        let mut partial = saved(NOW as u32 + 1, 204);
+        partial[..HEADER_BYTES].fill(0xFF);
+        slots[6] = partial;
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Checkpoint(5));
+        // Or mid-erase: the header's sector erased, the rest still the
+        // slot's old record.
+        let mut half_erased = saved(NOW as u32 - 63, 1000);
+        half_erased[..4096].fill(0xFF);
+        slots[6] = half_erased;
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Checkpoint(5));
+    }
+
+    #[test]
+    fn a_corrupt_checkpoint_falls_back_to_an_older_one() {
+        let mut slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        slots[4] = saved(NOW as u32 - 3, 200);
+        slots[5] = saved(NOW as u32 - 1, 202);
+        slots[5][HEADER_BYTES + 100] ^= 0x04;
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Checkpoint(4));
+        // Its header's fields are covered too: a first minute that changed
+        // would put every sample under the wrong minute.
+        slots[4][5] ^= 0x01;
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Nothing);
+    }
+
+    #[test]
+    fn another_version_is_no_checkpoint() {
+        let mut slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        slots[5] = saved(NOW as u32 - 1, 202);
+        // A later layout, under a magic of its own, even with a checksum
+        // that would match ours: not read.
+        let mut newer = saved(NOW as u32 + 1, 204);
+        newer[..4].copy_from_slice(b"urH2");
+        slots[6] = newer;
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Checkpoint(5));
+        // Nor a header that claims more minutes than a record holds,
+        // whatever its checksum says.
+        let mut long = saved(NOW as u32 + 1, 204);
+        long[8..10].copy_from_slice(&(MAX_MINUTES as u16 + 1).to_le_bytes());
+        slots[6] = long;
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Checkpoint(5));
+    }
+
+    #[test]
+    fn a_power_on_with_nothing_saved_starts_clean() {
+        // Erased flash, and what the free space held before (InfiniTime's
+        // file system, say): nothing restored.
+        let slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        assert_eq!(boot(&erased(), &slots, None), Restored::Nothing);
+        let noise: Vec<Vec<u8>> = (0..CHECKPOINT_SLOTS as usize)
+            .map(|slot| {
+                (0..SLOT_BYTES as usize)
+                    .map(|i| (i * 31 + slot * 7) as u8)
+                    .collect()
+            })
+            .collect();
+        assert_eq!(boot(&noise[0], &noise, None), Restored::Nothing);
+        let zeros = vec![vec![0; SLOT_BYTES as usize]; CHECKPOINT_SLOTS as usize];
+        assert_eq!(boot(&zeros[0], &zeros, None), Restored::Nothing);
+    }
+
+    #[test]
+    fn checkpoints_older_than_the_planned_record_are_of_the_run_before() {
+        let mut slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        slots[9] = saved(NOW as u32 - 300, 500);
+        // An update since (its record restored and fetched, so retired):
+        // the checkpoint's minutes are the phone's.
+        let planned = consumed(saved(NOW as u32 - 100, 600));
+        assert_eq!(boot(&planned, &slots, Some(NOW)), Restored::Nothing);
+        // System OFF since, its record not fetched yet: that's restored.
+        let planned = saved(NOW as u32 - 100, 600);
+        assert_eq!(boot(&planned, &slots, Some(NOW)), Restored::Planned);
+        // A checkpoint since the update wins over its record, which it
+        // holds the rest of.
+        slots[10] = saved(NOW as u32 - 50, 650);
+        assert_eq!(boot(&planned, &slots, Some(NOW)), Restored::Checkpoint(10));
+        // One of the same minute as the planned record is no newer.
+        slots[10] = saved(NOW as u32 - 100, 600);
+        assert_eq!(boot(&planned, &slots, Some(NOW)), Restored::Planned);
+    }
+
+    #[test]
+    fn a_checkpoint_out_of_the_clocks_reach_is_ignored() {
+        let mut slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        slots[3] = saved(NOW as u32 - 1, 100);
+        // Ahead of the resumed clock: not from before this reset.
+        slots[4] = saved(NOW as u32 + 10, 100);
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Checkpoint(3));
+        // The minute after the newest, the clock a moment behind it.
+        slots[4] = saved(NOW as u32 + 2, 100);
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Checkpoint(4));
+        // Over a day old: none of it fits in the history.
+        let old = NOW as u32 - MAX_MINUTES as u32;
+        let slots = vec![saved(old, 100), saved(old + 1, 100)];
+        assert_eq!(boot(&[], &slots, Some(NOW)), Restored::Checkpoint(1));
+        assert_eq!(boot(&[], &slots[..1], Some(NOW)), Restored::Nothing);
+        // Unless the clock isn't known.
+        assert_eq!(boot(&[], &slots[..1], None), Restored::Checkpoint(0));
+    }
+
+    #[test]
+    fn a_tie_keeps_the_first() {
+        assert!(newer_checkpoint(100, None, None, None));
+        assert!(!newer_checkpoint(100, Some(100), None, None));
+        assert!(newer_checkpoint(101, Some(100), None, None));
+        assert!(!newer_checkpoint(100, None, Some(100), None));
+        assert!(newer_checkpoint(101, None, Some(100), None));
     }
 }
 
@@ -274,6 +540,47 @@ mod proofs {
                 assert!(!known);
                 assert_eq!(from, oldest);
             }
+        }
+    }
+
+    /// For any minute the clock can show (to the year 6000, and before
+    /// 1970): its checkpoint has a slot, and the next one due goes in the
+    /// next slot, never in the one just written, which is what the crash
+    /// falls back to if it comes mid-save.
+    #[kani::proof]
+    fn each_checkpoint_spares_the_one_before() {
+        let minute: i64 = kani::any();
+        kani::assume((-(1 << 31)..1 << 31).contains(&minute));
+        let slot = checkpoint_slot(minute);
+        assert!(slot < CHECKPOINT_SLOTS);
+        let next = checkpoint_slot(minute + CHECKPOINT_MINUTES);
+        assert_eq!(next, (slot + 1) % CHECKPOINT_SLOTS);
+        assert_ne!(next, slot);
+    }
+
+    /// For any length a record can have: a save erases all of it, in
+    /// whole sectors, and nothing past its slot.
+    #[kani::proof]
+    fn a_save_erases_its_record_within_its_slot() {
+        let minutes: u16 = kani::any();
+        kani::assume(usize::from(minutes) <= MAX_MINUTES);
+        let erased = erase_bytes(minutes);
+        assert!(erased as usize >= HEADER_BYTES + usize::from(minutes) * SAMPLE_BYTES);
+        assert!(erased <= SLOT_BYTES);
+        assert!(erased.is_multiple_of(SECTOR_BYTES));
+    }
+
+    /// For any 32 bytes: the planned record's date (`as_of_any`) is a
+    /// fresh record's as-of, whether or not it's been retired since, and
+    /// nothing for what wouldn't read as a record either way.
+    #[kani::proof]
+    fn the_planned_record_is_dated_retired_or_not() {
+        let bytes: [u8; HEADER_BYTES] = kani::any();
+        let mut retired = bytes;
+        retired[CONSUMED_OFFSET as usize..][..4].copy_from_slice(&CONSUMED.to_le_bytes());
+        assert_eq!(as_of_any(&bytes), as_of_any(&retired));
+        if let Some(header) = Header::from_bytes(&bytes) {
+            assert_eq!(as_of_any(&bytes), Some(header.as_of()));
         }
     }
 }

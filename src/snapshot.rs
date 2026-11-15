@@ -1,11 +1,50 @@
 //! The record that carries unsynced activity across System OFF (see
-//! [`crate::system_off`]): its format, and which minutes go in it.
+//! [`crate::system_off`]) and a crash: its format, which minutes go in it,
+//! and which of the saved records a boot restores.
 //!
 //! Hardware-free, so it's tested on the host (`host-tests/snapshot`).
 //!
+//! There are two kinds of record, in the same format:
+//!
+//! - **The planned record**, one, written right before the watch resets
+//!   on purpose (an update, System OFF), in place of the last.
+//! - **Checkpoints** (see below), written every
+//!   [`CHECKPOINT_MINUTES`] while the clock runs, in slots taken in turn,
+//!   for a reset nobody planned: a crash, or the watchdog. RAM can't carry
+//!   the history across one, as the bootloader, which runs at every
+//!   reset, overwrites all but the top few KB of our statics (see
+//!   `memory.x`), and the history alone is 8.6 KB.
+//!
+//! ## Checkpoints
+//!
+//! A checkpoint is the planned record's save, every [`CHECKPOINT_MINUTES`],
+//! into the next of [`CHECKPOINT_SLOTS`] slots. A boot restores the newest
+//! usable record of them all ([`newer_checkpoint`]), or the planned record
+//! if no checkpoint is newer.
+//!
+//! - A save cut short (by the crash itself, say) leaves its slot without a
+//!   record, as the header goes last; the slot before still holds the
+//!   previous checkpoint, a few minutes older.
+//! - Each save erases only the sectors its record needs ([`erase_bytes`]):
+//!   one, unless the phone hasn't fetched for more than ~11 hours. With 32
+//!   slots, each sector is erased at most every 64 minutes, 23 times a
+//!   day: a flash rated for 100,000 erases lasts 12 years.
+//! - What's in a checkpoint is what the history held (minus what the phone
+//!   has): a crash that scribbled over the history before the checkpoint
+//!   puts back the same scribbles, no worse than the history the firmware
+//!   was already using. Every 6-byte sample is a valid one (plain integers,
+//!   and flags whose unknown values read as unknown), and the history files
+//!   any minute, so nothing restored can index out of bounds; what's
+//!   checked is that the record is whole (its checksum), sensibly long, and
+//!   from this side of the last planned reset and within a day of the
+//!   clock ([`newer_checkpoint`]).
+//! - A checkpoint is never retired: the next one supersedes it, holding
+//!   whatever it held that the phone hasn't fetched since.
+//!
 //! The record is a 32-byte header followed by one 6-byte sample per minute
 //! (the in-RAM [`crate::activity::Sample`], verbatim) from the first minute
-//! the phone may not have to the newest:
+//! the phone may not have to the newest (one with none starts just after
+//! the newest: see [`empty_from`]):
 //!
 //! | Offset | Size | Field |
 //! |---:|---:|---|
@@ -147,4 +186,102 @@ pub fn unsynced_from(newest: i64, synced_through: Option<i64>) -> (i64, bool) {
         Some(synced) => ((synced + 1).max(oldest), true),
         None => (oldest, false),
     }
+}
+
+impl Header {
+    /// The minute the record was saved as of: the one after the newest
+    /// minute the history had then. Every record runs to that minute (an
+    /// empty one starts there; see [`empty_from`]), so this orders them by
+    /// when they were saved, as far as the clock knew.
+    pub fn as_of(&self) -> u32 {
+        self.first_minute.saturating_add(u32::from(self.minutes))
+    }
+}
+
+/// Where a record with no minutes starts, given the history's newest
+/// minute: just after it, so that its [`Header::as_of`] still says when it
+/// was saved, and it outranks every older record. (Before the clock was
+/// ever known there's no newest minute, and it starts at 0.)
+pub fn empty_from(newest: Option<i64>) -> u32 {
+    newest.map_or(0, |newest| {
+        (newest + 1).clamp(0, i64::from(u32::MAX)) as u32
+    })
+}
+
+/// The as-of minute (see [`Header::as_of`]) of any record with the magic
+/// and a sensible length, fresh or consumed: for the planned record, which
+/// says, even after it's done its job, when the last planned reset was.
+pub fn as_of_any(bytes: &[u8; HEADER_BYTES]) -> Option<u32> {
+    let mut fresh = *bytes;
+    let consumed = CONSUMED_OFFSET as usize;
+    fresh[consumed..consumed + 4].copy_from_slice(&ERASED.to_le_bytes());
+    Header::from_bytes(&fresh).map(|header| header.as_of())
+}
+
+// ==============================================================================
+// Checkpoints (see the module docs)
+// ==============================================================================
+
+/// How often, in minutes of the clock, the activity is checkpointed (at
+/// each minute that's a multiple of it). A crash loses the minutes since
+/// the last one: at most this, and the reset's few seconds. Each costs an
+/// erase and a write of a sector or so of the SPI flash, ~0.3 µAh: ~10 µA
+/// averaged over a day, 1.5% of the watch's ~0.7 mA. The wearer would
+/// rather spend the battery than lose readings.
+pub const CHECKPOINT_MINUTES: i64 = 2;
+/// How many slots the checkpoints take turns in (see the module docs).
+pub const CHECKPOINT_SLOTS: u32 = 32;
+/// The SPI flash's erase sector (`spi_flash::SECTOR`).
+pub const SECTOR_BYTES: u32 = 4096;
+/// A slot: room for the largest record, in whole sectors.
+pub const SLOT_BYTES: u32 = (MAX_BYTES as u32).next_multiple_of(SECTOR_BYTES);
+
+/// Whether a checkpoint is due as the clock reaches `minute` (UTC minutes
+/// since 1970).
+pub fn checkpoint_due(minute: i64) -> bool {
+    minute.rem_euclid(CHECKPOINT_MINUTES) == 0
+}
+
+/// The slot (of [`CHECKPOINT_SLOTS`]) for a checkpoint whose newest minute
+/// is `newest`: the next one in turn every [`CHECKPOINT_MINUTES`], so a
+/// save never overwrites the checkpoint before it (unless the clock moved
+/// back by a multiple of the slots' span, when it's a few minutes older).
+/// From the minute rather than a counter, which would take RAM.
+pub fn checkpoint_slot(newest: i64) -> u32 {
+    newest
+        .div_euclid(CHECKPOINT_MINUTES)
+        .rem_euclid(i64::from(CHECKPOINT_SLOTS)) as u32
+}
+
+/// How much a save of `minutes` erases: the record, to whole sectors.
+pub fn erase_bytes(minutes: u16) -> u32 {
+    ((HEADER_BYTES + usize::from(minutes) * SAMPLE_BYTES) as u32).next_multiple_of(SECTOR_BYTES)
+}
+
+/// Whether a checkpoint saved as of `as_of` (see [`Header::as_of`]), whose
+/// samples check out, is a better one to restore than `best` (the as-of
+/// of the best found so far, if any):
+///
+/// - newer than `best`, so the newest wins (a tie keeps the first);
+/// - newer than the planned record (`floor`, its as-of, fresh or not; see
+///   [`as_of_any`]): the planned record was saved after every checkpoint
+///   of the run before it, so an older checkpoint is from before that
+///   update or System OFF, which the planned record has carried on (and
+///   the phone has fetched, if it's been retired);
+/// - if the clock is known (`now`, UTC minutes since 1970: after a crash,
+///   it's resumed), not ahead of it (it was saved before the reset, as of
+///   the minute after its newest, and the clock resumes to within about a
+///   second of where it was), nor so old that none of its minutes fit in
+///   the history's day. Before the clock is known (after a power-on), any
+///   is, as with the planned record.
+pub fn newer_checkpoint(
+    as_of: u32,
+    best: Option<u32>,
+    floor: Option<u32>,
+    now: Option<i64>,
+) -> bool {
+    let as_of_minute = i64::from(as_of);
+    best.is_none_or(|best| as_of > best)
+        && floor.is_none_or(|floor| as_of > floor)
+        && now.is_none_or(|now| as_of_minute <= now + 2 && as_of_minute > now - MAX_MINUTES as i64)
 }

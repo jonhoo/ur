@@ -339,6 +339,7 @@ def layout() -> list[tuple[str, bool, str]]:
         [
             ("dfu_slot.rs secondary slot", dfu_slot, dfu_slot + const("dfu_slot.rs", "SLOT_SIZE")),
             ("system_off.rs RECORD", *const_range("system_off.rs", "RECORD")),
+            ("system_off.rs CHECKPOINTS", *const_range("system_off.rs", "CHECKPOINTS")),
             ("field_log.rs REGION", *const_range("field_log.rs", "REGION")),
         ],
         key=lambda region: region[1],

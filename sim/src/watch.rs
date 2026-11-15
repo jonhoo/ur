@@ -187,6 +187,25 @@ impl Watch {
     /// TODO: save `location`s and `gb` GPS fixes to flash as `ble` does,
     /// and forget the location here, for a reboot that loads it.
     fn reboot(&mut self) {
+        self.restart(false);
+    }
+
+    /// Crashes, and resets, as a hard fault or the watchdog does: a boot,
+    /// as after switching off ([`Watch::reboot`]), but RAM is lost all of
+    /// a sudden, with no save before. The clock resumes (from RAM that
+    /// resets keep: see `clock::restore`), as do today's steps; the
+    /// activity history (and with it, the last night) is the newest
+    /// checkpoint's (see `activity::crash`).
+    pub fn crash(&mut self) {
+        self.power_on();
+        if self.off.is_some() {
+            return self.log("ignored: the watch is off");
+        }
+        self.log("crash: resetting");
+        self.restart(true);
+    }
+
+    fn restart(&mut self, crashed: bool) {
         let off_for = self.phone_time.map(|(_, _, at)| Instant::now() - at);
         self.restarted_at = Some(Instant::now());
         clock::lose();
@@ -198,6 +217,11 @@ impl Watch {
         self.update_progress = None;
         // As `main`, at boot.
         clock::restore();
+        // And the activity task.
+        if crashed {
+            let restored = crate::activity::crash();
+            self.log(format!("activity: {restored}"));
+        }
         (self.app, self.ui) = start();
         self.off = None;
         self.motor = None;
@@ -287,6 +311,8 @@ impl Watch {
         if self.off.is_some() {
             return self.off_tick();
         }
+        // The activity task's checkpoints, every couple of minutes.
+        crate::activity::poll();
         let night = self.app.quiet_night();
         self.handle(Wake::Tick);
         if self.app.quiet_night() != night {
@@ -540,6 +566,7 @@ impl Watch {
             self.phone_time = clock::now_utc_seconds()
                 .zip(clock::utc_offset_minutes())
                 .map(|(utc, offset)| (utc, offset, Instant::now()));
+            crate::activity::save_planned();
             clock::forget();
             self.log("off");
             return;

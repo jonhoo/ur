@@ -88,6 +88,7 @@ mod desk;
 mod dfu;
 mod dfu_slot;
 mod display;
+mod fault;
 mod field_log;
 mod firmware;
 #[cfg(feature = "flash-stress")]
@@ -406,6 +407,8 @@ async fn main(spawner: Spawner) {
     clock::restore();
     field_log::report_last_reset();
     field_log::guard_stack();
+    #[cfg(feature = "field-log")]
+    field_log::precise_bus_faults();
 
     // ==========================================================================
     // Watchdog

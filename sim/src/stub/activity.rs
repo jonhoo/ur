@@ -40,6 +40,17 @@ struct State {
     light: bool,
     /// A dev kit's day, which `today` shows instead (see `devkit`).
     today_from_devkit: Option<Option<crate::day::Day>>,
+    /// The minute the last [`poll`] saw, as the activity task's.
+    polled: Option<i64>,
+    /// The SPI flash's checkpoint slots, by slot (see `system_off`), as
+    /// the firmware's own records (`snapshot`). Outlive a [`crash`], as
+    /// flash does.
+    checkpoints: BTreeMap<u32, Vec<u8>>,
+    /// The planned record's as-of minute (see `snapshot::as_of_any`), once
+    /// the watch has switched off: the simulator keeps the history across
+    /// that wholesale, but the record's date still rules out the
+    /// checkpoints from before it.
+    planned: Option<u32>,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -52,6 +63,9 @@ static STATE: Mutex<State> = Mutex::new(State {
     desk: false,
     light: false,
     today_from_devkit: None,
+    polled: None,
+    checkpoints: BTreeMap::new(),
+    planned: None,
 });
 
 fn state() -> std::sync::MutexGuard<'static, State> {
@@ -248,4 +262,191 @@ pub fn set_desk(desk: bool) {
 
 pub fn set_light(light: bool) {
     state().light = light;
+}
+
+// ==============================================================================
+// Surviving a crash
+// ==============================================================================
+//
+// On the watch, `system_off` checkpoints the history the phone hasn't
+// fetched into the SPI flash every couple of minutes, and a boot after a
+// crash (or the watchdog) restores the newest, in the firmware's own
+// format (`snapshot`). The same here, with the same code choosing what
+// to save, where, and what to restore; the samples are the simulator's
+// history (steps and heart rates), and the minutes of the last night as
+// its stages, as the watch's history holds them (light, deep and REM
+// minutes, and restless ones at its end).
+
+/// A `snapshot` sample's flags (as `activity::Sample`'s): recorded, and
+/// worn.
+const SEEN_AND_WORN: u8 = 0x40 | 0x10;
+
+/// As the activity task does each minute: a checkpoint when one is due.
+/// Call at every tick of the UI loop.
+pub fn poll() {
+    let Some(minute) = clock::now_utc_seconds().map(|second| second.div_euclid(60)) else {
+        return;
+    };
+    let mut state = state();
+    if state.polled.replace(minute) == Some(minute) || !crate::snapshot::checkpoint_due(minute) {
+        return;
+    }
+    let slot = crate::snapshot::checkpoint_slot(minute);
+    let record = record(&state, minute);
+    state.checkpoints.insert(slot, record);
+}
+
+/// What `system_off::save` writes, with `newest` the history's newest
+/// minute: the minutes from where the phone's next fetch starts.
+fn record(state: &State, newest: i64) -> Vec<u8> {
+    use crate::snapshot::{self, Header};
+    let (from, synced) = snapshot::unsynced_from(newest, crate::script::synced_through());
+    let from = crate::gb_buckets::start_of(from).max(newest - snapshot::MAX_MINUTES as i64 + 1);
+    let kinds = night_kinds(state);
+    let has_data = |minute: i64| state.history.contains_key(&minute) || kinds.contains_key(&minute);
+    let (first, minutes) = match (from..=newest).find(|&minute| has_data(minute)) {
+        Some(first) => (first, newest - first + 1),
+        None => (i64::from(snapshot::empty_from(Some(newest))), 0),
+    };
+    let mut samples = Vec::new();
+    for minute in first..first + minutes {
+        let (steps, heart_rate) = state.history.get(&minute).copied().unwrap_or_default();
+        let flags = match kinds.get(&minute) {
+            Some(&kind) => SEEN_AND_WORN | kind as u8,
+            None if has_data(minute) => SEEN_AND_WORN | crate::sleep::Kind::Awake as u8,
+            None => 0,
+        };
+        let [s0, s1] = steps.to_le_bytes();
+        samples.extend_from_slice(&[s0, s1, 0, 0, heart_rate, flags]);
+    }
+    let (day, steps) = state.today.unwrap_or((i64::from(snapshot::UNKNOWN_DAY), 0));
+    let mut header = Header {
+        first_minute: first as u32,
+        minutes: minutes as u16,
+        day: day as i32,
+        steps,
+        checksum: 0,
+        synced,
+    };
+    header.checksum =
+        header.expected_checksum(snapshot::checksum(snapshot::CHECKSUM_SEED, &samples));
+    [&header.to_bytes()[..], &samples].concat()
+}
+
+/// The last night's minutes, as the watch's history holds them: deep,
+/// then REM, then light, then the restless minutes (it's those
+/// [`last_sleep`]'s counts are of).
+fn night_kinds(state: &State) -> BTreeMap<i64, crate::sleep::Kind> {
+    use crate::sleep::Kind;
+    let Some(sleep) = state.last_sleep else {
+        return BTreeMap::new();
+    };
+    let (deep, rem) = (i64::from(sleep.deep_minutes), i64::from(sleep.rem_minutes));
+    let asleep = i64::from(sleep.asleep_minutes);
+    (sleep.start_utc_minute..sleep.end_utc_minute)
+        .map(|minute| {
+            let into = minute - sleep.start_utc_minute;
+            let kind = if into < deep {
+                Kind::Deep
+            } else if into < deep + rem {
+                Kind::Rem
+            } else if into < asleep {
+                Kind::Light
+            } else {
+                Kind::Restless
+            };
+            (minute, kind)
+        })
+        .collect()
+}
+
+/// As `system_off::save_before_reset`, as the watch switches off: the
+/// planned record, as of the minute after now.
+pub fn save_planned() {
+    let newest = clock::now_utc_seconds().map(|second| second.div_euclid(60));
+    state().planned = Some(crate::snapshot::empty_from(newest));
+}
+
+/// The watch crashed and reset: what's in RAM is lost (the history, the
+/// last night, where the phone's copy of the history ends, whether the
+/// wearer's asleep), bar today's steps (in RAM that resets keep, as the
+/// clock is: see `clock`); then, as the activity task does at boot
+/// (`system_off::restore`), the newest checkpoint is put back. Call with
+/// the clock resumed. Says what it restored.
+pub fn crash() -> String {
+    use crate::snapshot::{self, HEADER_BYTES, Header, SAMPLE_BYTES};
+    let mut state = state();
+    state.history.clear();
+    state.last_sleep = None;
+    state.asleep = false;
+    state.light = false;
+    state.counted = 0;
+    state.polled = None;
+    crate::script::set_synced_through(None);
+
+    let now = clock::now_utc_seconds().map(|second| second.div_euclid(60));
+    let header = |bytes: &[u8]| {
+        Header::from_bytes(bytes[..HEADER_BYTES].try_into().expect("a header's worth"))
+    };
+    let checks_out = |bytes: &[u8], header: &Header| {
+        let samples = &bytes[HEADER_BYTES..];
+        samples.len() == usize::from(header.minutes) * SAMPLE_BYTES
+            && header.expected_checksum(snapshot::checksum(snapshot::CHECKSUM_SEED, samples))
+                == header.checksum
+    };
+    let mut best: Option<(&Vec<u8>, Header)> = None;
+    for bytes in state.checkpoints.values() {
+        if let Some(header) = header(bytes)
+            && snapshot::newer_checkpoint(
+                header.as_of(),
+                best.map(|(_, best)| best.as_of()),
+                state.planned,
+                now,
+            )
+            && checks_out(bytes, &header)
+        {
+            best = Some((bytes, header));
+        }
+    }
+    let Some((bytes, header)) = best.map(|(bytes, header)| (bytes.clone(), header)) else {
+        return "nothing to restore".into();
+    };
+
+    let first = i64::from(header.first_minute);
+    let mut kinds = Vec::new();
+    const _: () = assert!(SAMPLE_BYTES == 6);
+    for (i, &[s0, s1, _, _, heart_rate, flags]) in
+        bytes[HEADER_BYTES..].as_chunks::<6>().0.iter().enumerate()
+    {
+        let steps = u16::from_le_bytes([s0, s1]);
+        if steps > 0 || heart_rate > 0 {
+            state.history.insert(first + i as i64, (steps, heart_rate));
+        }
+        kinds.push(crate::sleep::Kind::from_bits(flags & 0x0F));
+    }
+    // As the watch works it out again from the history: its last sleep.
+    state.last_sleep =
+        crate::sleep::last_sleep(kinds.len(), |i| kinds[i]).map(|(start, end, _)| {
+            let stages = crate::stages::Minutes::count(kinds[start..end].iter().copied());
+            Sleep {
+                start_utc_minute: first + start as i64,
+                end_utc_minute: first + end as i64,
+                asleep_minutes: stages.asleep(),
+                deep_minutes: stages.deep,
+                rem_minutes: stages.rem,
+            }
+        });
+    if header.synced {
+        crate::script::set_synced_through(Some(first - 1));
+    }
+    let night = state.last_sleep.map_or("no sleep".into(), |sleep| {
+        format!(
+            "sleep from UTC minute {} to {}",
+            sleep.start_utc_minute, sleep.end_utc_minute
+        )
+    });
+    format!(
+        "restored {} minutes from UTC minute {} from a checkpoint, with {night}",
+        header.minutes, header.first_minute
+    )
 }

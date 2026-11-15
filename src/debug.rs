@@ -63,11 +63,16 @@ static UR_CANVAS: AtomicPtr<Canvas> = AtomicPtr::new(core::ptr::null_mut());
 /// [`crate::gesture::REJOIN_WINDOW`]), 25 the charger's lines from now on
 /// instead of the measured: charging if `x` is 1, charged (power, not
 /// charging) if 2, unplugged if 3, measured again if 0 (see
-/// [`charger_forced`])) and the next two the canvas x and y. Cleared once
-/// taken.
+/// [`charger_forced`]), 26 a HardFault, precise if `x` is 0 or imprecise
+/// if 1 (to test what the fault handler records)) and the next two the
+/// canvas x and y. Cleared once taken.
 #[cfg(feature = "debug-input")]
 #[unsafe(no_mangle)]
 static UR_INPUT: AtomicU32 = AtomicU32::new(0);
+
+/// Input 26's address: past the nRF52832's 64 KB of RAM, so no memory's.
+#[cfg(feature = "debug-input")]
+const PAST_RAM: usize = 0x2002_0000;
 
 /// Input 18: a notification from "Mamma 妈妈" as Gadgetbridge sends it
 /// with its "Text as Bitmaps" setting on: the second word as an image
@@ -354,6 +359,26 @@ pub async fn input_task() {
                 defmt::warn!("debug: hanging on purpose");
                 #[allow(clippy::empty_loop)]
                 loop {}
+            }
+            // A HardFault, to test what the fault handler records: a load
+            // from past the end of RAM (a precise bus fault: the PC is the
+            // load, and the address is kept) if `x` is 0, or a store there
+            // (imprecise: the PC is wherever the bus error caught up) if 1.
+            // From this task, in thread mode, so with the floating-point
+            // context that makes the exception frame the long kind.
+            26 => {
+                defmt::warn!("debug: faulting on purpose");
+                let beyond = PAST_RAM as *mut u32;
+                // SAFETY: Not safe at all, on purpose: the address is no
+                // memory's, so the access faults, and the handler resets.
+                unsafe {
+                    if x == 1 {
+                        beyond.write_volatile(0x0BAD_F00D);
+                    } else {
+                        beyond.read_volatile();
+                    }
+                }
+                continue;
             }
             9 => {
                 // `x` picks the title, to check how each length lays out.

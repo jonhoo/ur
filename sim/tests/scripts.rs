@@ -1679,3 +1679,106 @@ fn a_client_that_wont_pair_is_shown_every_five_minutes() {
     );
     assert_eq!(log.matches("buzz: notify").count(), 3, "{log}");
 }
+
+/// A crash mid-night (a hard fault at 06:19, as on a sealed watch, which
+/// then lost the night and five hours of steps and heart rate): the
+/// watch resets, its clock and today's steps carry on (RAM that resets
+/// keep), and its activity comes back from the last checkpoint (see
+/// `snapshot`), so the morning's fetch still has the night, and the
+/// steps and heart rate the phone hadn't fetched. Only what came after
+/// the last checkpoint, a minute or two, is lost.
+#[test]
+fn a_crash_mid_night_keeps_the_night_and_the_unsynced_minutes() {
+    let dir = out("crash");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    // Midnight starting 2026-11-15, in UTC+1, and a local time that day
+    // as Gadgetbridge's `ts` (UTC ms).
+    let midnight: i64 = 1_794_697_200;
+    let ms = |hours: i64, minutes: i64| (midnight + hours * 3600 + minutes * 60) * 1000;
+    let text = format!(
+        "gb setTime({});E.setTimeZone(1.0)\n\
+         wait 1m\nsteps 40\nheart 62\n\
+         until 00:40\necho first fetch\n\
+         gb GB({{\"t\":\"actfetch\",\"ts\":{}}})\n\
+         until 03:10\nsteps 25\n\
+         until 04:00\nheart 55\n\
+         until 06:16\nlast-night 01:25 06:15 deep=60 rem=70 awake=10\n\
+         until 06:18\nwait 30s\nheart 58\n\
+         wait 1m\ncrash\n\
+         expect steps 25\n\
+         until 06:25\nsteps 30\nwait 1m\nsteps 30\n\
+         until 07:10\necho second fetch\n\
+         gb GB({{\"t\":\"actfetch\",\"ts\":{}}})\n",
+        ms(0, -20) / 1000,
+        ms(-1, -20),
+        ms(0, 40),
+    );
+    std::fs::write(&script, text).expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+    assert!(
+        log.contains("from a checkpoint, with sleep from UTC minute"),
+        "{log}"
+    );
+    let (first, second) = log.split_once("second fetch").expect("it fetches again");
+    // Yesterday evening's minute went to the phone before the night.
+    assert!(
+        activity_samples(first)
+            .iter()
+            .any(|json| json.contains(r#""stp":40"#)),
+        "{log}"
+    );
+    // Each sample of the morning's fetch: its time, steps, heart rate, and
+    // kind (none: awake).
+    type Sample = (i64, u32, u32, Option<String>);
+    let samples: Vec<Sample> = activity_samples(second)
+        .iter()
+        .map(|json| {
+            let field = |name: &str| {
+                let (_, rest) = json.split_once(&format!("\"{name}\":"))?;
+                Some(rest.split([',', '}']).next()?.trim_matches('"').to_owned())
+            };
+            let number = |name: &str| -> i64 { field(name).expect(name).parse().expect(name) };
+            let count = |name: &str| u32::try_from(number(name)).expect(name);
+            (number("ts"), count("stp"), count("hrm"), field("act"))
+        })
+        .collect();
+    let between = |from: i64, to: i64| {
+        samples
+            .iter()
+            .filter(move |(ts, _, _, _)| (from..to).contains(ts))
+    };
+    // Not the minute the phone has.
+    assert!(samples.iter().all(|s| s.1 != 40), "{samples:?}");
+    // The night's trip, and its heart rate, which the phone hadn't fetched.
+    assert_eq!(
+        between(ms(3, 10), ms(3, 15)).map(|s| s.1).sum::<u32>(),
+        25,
+        "{samples:?}"
+    );
+    assert!(
+        between(ms(4, 0), ms(4, 5)).any(|s| s.2 == 55),
+        "{samples:?}"
+    );
+    // The night, asleep from 01:25 to 06:15, as the checkpoint kept it.
+    let night: Vec<_> = between(ms(1, 30), ms(6, 15)).collect();
+    assert!(night.len() > 40, "{samples:?}");
+    assert!(
+        night.iter().all(|s| s.3.as_deref() == Some("LIGHT_SLEEP")),
+        "{samples:?}"
+    );
+    assert!(between(ms(0, 45), ms(1, 25)).all(|s| s.3.is_none()));
+    // The heart rate measured after the last checkpoint (06:18) is gone:
+    // a crash loses that minute or two.
+    assert!(
+        between(ms(6, 15), ms(6, 25)).all(|s| s.2 == 0),
+        "{samples:?}"
+    );
+    // And the morning's walk, after the crash, is there.
+    assert_eq!(
+        between(ms(6, 25), ms(6, 35)).map(|s| s.1).sum::<u32>(),
+        60,
+        "{samples:?}"
+    );
+}
