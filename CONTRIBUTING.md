@@ -26,7 +26,8 @@ needs nothing special; LFS stores it.
   Gadgetbridge fetches it), `live`, `link`, `buttons`, `qr`, `font`,
   `mcuboot`, `backoff` (retrying sensor setup), `step_counter` (which
   of the accelerometer's step counts to believe),
-  `on_time` (`power`'s hourly split),
+  `on_time` (`power`'s hourly split), `fault` (what a HardFault's
+  registers say),
   `minute_ring` (`activity`'s history as the clock moves), `dfu_slot`
   (where `dfu` erases and writes an update), `rtt_ring` (which bytes
   `field_log` reads of the log's buffer), and `bthome`'s
@@ -361,7 +362,7 @@ Some host test crates (`host-tests/alarm`, `buttons`, `gesture`, `day`,
 `decimal`, `battery`, `heart_schedule`, `temperature`, `brightness`,
 `wake`, `on_time`, `minute_ring`, `link`, `theme`, `live`, `nav`, `route`,
 `glance`, `dfu`, `rtt_ring`, `mcuboot`, `snapshot`, `bthome`, `aranet`,
-`gb_buckets`, `step_counter`, `backoff`, `calendar`) have [Kani] proofs at the end of their `src/main.rs`: what the tests check for some
+`gb_buckets`, `step_counter`, `backoff`, `calendar`, `fault`) have [Kani] proofs at the end of their `src/main.rs`: what the tests check for some
 inputs, for every input, within bounds. `cargo kani` in the crate runs
 them; `--harness NAME` one (and one at a time). They need tight
 `kani::unwind` and `kani::assume` bounds: CBMC's memory grows fast with
@@ -648,6 +649,17 @@ unfolds what was inlined into each):
 ```sh
 llvm-addr2line -fipe ur-logging-0.9.0.elf 0x2b8b2 0x25c0a
 ```
+
+A HardFault's report (`the previous run hard-faulted`) also names the
+kind of fault, from the Cortex-M4's fault status registers (CFSR and
+HFSR, logged raw too), the address it was at when the hardware kept it,
+and r0-r12 as the faulting code had them, which with the disassembly at
+the PC (`llvm-objdump -d --start-address=…`) say what it was doing. Mind
+the kind: for an `ImpreciseBus` fault (a store to no memory's address,
+reported only once the bus said so), the PC is a few instructions on
+from the store, possibly in other code, and the address isn't kept.
+Debug input `hardfault` (`hardfault:1,0` imprecise) tests the report on a
+dev kit.
 
 A panic's report has the start of its message too, if it's a plain
 string (`explicit panic`, a `panic!("…")` without arguments): a

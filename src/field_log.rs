@@ -35,6 +35,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 #[cfg(feature = "field-log")]
 use embassy_time::Timer;
 
+use crate::fault;
 #[cfg(feature = "field-log")]
 use crate::rtt_ring;
 #[cfg(feature = "field-log")]
@@ -438,6 +439,9 @@ pub fn report_last_reset() {
             crumb.file_len,
             stack_left
         );
+        if crumb.magic == FAULT_MAGIC {
+            report_fault(&crumb.message);
+        }
         report_trace(&crumb.trace);
         return;
     }
@@ -482,6 +486,34 @@ pub fn report_last_reset() {
         file, crumb.line, message, stack_left
     );
     report_trace(&crumb.trace);
+}
+
+/// Logs a HardFault's registers (see [`FAULT_WORDS`]): what kind of fault
+/// it was, at which address if the hardware kept it, and r0-r12, which
+/// with the disassembly at the PC say what the faulting code was doing.
+fn report_fault(message: &[u8; MESSAGE]) {
+    let mut words = [0u32; FAULT_WORDS];
+    for (word, bytes) in words.iter_mut().zip(message.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*bytes);
+    }
+    let [cfsr, hfsr, address, exc_return, xpsr, r @ ..] = words;
+    warn!(
+        "  fault: {}, address {=u32:#010x} (CFSR {=u32:#010x}, HFSR {=u32:#010x}, EXC_RETURN {=u32:#010x}, xPSR {=u32:#010x})",
+        fault::Kind::of(cfsr, hfsr),
+        address,
+        cfsr,
+        hfsr,
+        exc_return,
+        xpsr
+    );
+    warn!(
+        "  r0-r3 {=u32:#010x} {=u32:#010x} {=u32:#010x} {=u32:#010x}, r4-r7 {=u32:#010x} {=u32:#010x} {=u32:#010x} {=u32:#010x}",
+        r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]
+    );
+    warn!(
+        "  r8-r12 {=u32:#010x} {=u32:#010x} {=u32:#010x} {=u32:#010x} {=u32:#010x}",
+        r[8], r[9], r[10], r[11], r[12]
+    );
 }
 
 /// Logs a breadcrumb's backtrace: the calls whose return addresses check
@@ -544,15 +576,20 @@ impl Breadcrumb {
 }
 
 /// Bytes of a panic's message kept in a breadcrumb: enough for most plain
-/// ones (`explicit panic`, `SoftDevice Controller ASSERT`, …).
-const MESSAGE: usize = 60;
+/// ones (`explicit panic`, `SoftDevice Controller ASSERT`, …). A HardFault
+/// keeps its registers there instead (see [`FaultRegisters`]), which is
+/// what sets the size.
+const MESSAGE: usize = 4 * FAULT_WORDS;
 
 /// Return addresses kept in a breadcrumb: what's left of its 192 bytes
 /// after the message. Plenty are stale (a `defmt::panic!` logs its message
 /// first, leaving the logger's return addresses on the stack), so the real
 /// call chain needs room alongside them; in the backtraces from real
-/// crashes so far, it's been within the first 25.
-const TRACE: usize = 26;
+/// crashes so far, it's been within the first 25, and since a fault's
+/// scan no longer starts inside its frame (see [`fault::frame_words`]),
+/// two of those stale words are gone. 23 is what fits beside a fault's
+/// registers.
+const TRACE: usize = 23;
 
 // ==============================================================================
 // Backtraces
@@ -639,15 +676,15 @@ fn scan_stack(from: *const u32, words: usize, check: bool) -> [u32; TRACE] {
 /// The number changes with [`Breadcrumb`]'s layout, so that a breadcrumb
 /// left by a build with another layout (but the same version number, as
 /// two dev builds have) isn't misread. 2: with the panic's message; 3:
-/// with the stack pointer.
-const BREADCRUMB_MAGIC: u32 = u32::from_le_bytes(*b"urP3");
+/// with the stack pointer; 4: with a fault's registers.
+const BREADCRUMB_MAGIC: u32 = u32::from_le_bytes(*b"urP4");
 /// A panic whose handler hasn't finished (see [`panic`]): what's recorded so
 /// far is still worth reporting.
-const PANICKING_MAGIC: u32 = u32::from_le_bytes(*b"urQ3");
+const PANICKING_MAGIC: u32 = u32::from_le_bytes(*b"urQ4");
 /// A watchdog bite, rather than a panic (see [`catch_watchdog`]).
-const WATCHDOG_MAGIC: u32 = u32::from_le_bytes(*b"urW3");
+const WATCHDOG_MAGIC: u32 = u32::from_le_bytes(*b"urW4");
 /// A HardFault (see [`HardFault`]).
-const FAULT_MAGIC: u32 = u32::from_le_bytes(*b"urF3");
+const FAULT_MAGIC: u32 = u32::from_le_bytes(*b"urF4");
 /// The lowest address the stack may use: just above the retained block (see
 /// `memory.x`), which an overflow would otherwise run into first, then our
 /// statics. [`guard_stack`] puts a tripwire at the bottom. Must match
@@ -684,11 +721,17 @@ pub fn catch_watchdog() {
 }
 
 /// The watchdog's interrupt: hands the stack pointer at entry (where the
-/// hardware saved the interrupted code's registers) to `watchdog_bite`.
+/// hardware saved the interrupted code's registers) and EXC_RETURN (which
+/// says how many it saved) to `watchdog_bite`.
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn WDT() {
-    core::arch::naked_asm!("mrs r0, msp", "b {bite}", bite = sym watchdog_bite);
+    core::arch::naked_asm!(
+        "mrs r0, msp",
+        "mov r1, lr",
+        "b {bite}",
+        bite = sym watchdog_bite
+    );
 }
 
 /// Records the interrupted code's PC and LR (frame words 6 and 5) for the
@@ -698,12 +741,19 @@ unsafe extern "C" fn WDT() {
 /// That's ~60 µs away (two 32 kHz cycles), about 3800 cycles: enough to
 /// scan 48 words without checking each candidate, which the next boot does
 /// instead (see [`report_trace`]).
-extern "C" fn watchdog_bite(frame: *const u32) -> ! {
+extern "C" fn watchdog_bite(frame: *const u32, exc_return: u32) -> ! {
     // SAFETY: `frame` is the exception frame the hardware just pushed.
-    let (pc, lr) = unsafe { (frame.add(6).read(), frame.add(5).read()) };
-    // The frame is 8 words; the interrupted code's own stack starts after.
+    let (pc, lr, xpsr) = unsafe {
+        (
+            frame.add(6).read(),
+            frame.add(5).read(),
+            frame.add(7).read(),
+        )
+    };
+    // The interrupted code's own stack starts after the frame, whose size
+    // depends on whether it had a floating-point context.
     // SAFETY: Still on the stack (the scan stops at its top).
-    let above = unsafe { frame.add(8) };
+    let above = unsafe { frame.add(fault::frame_words(exc_return, xpsr)) };
     let crumb = Breadcrumb {
         magic: WATCHDOG_MAGIC,
         version: crate::firmware::version_word(),
@@ -838,31 +888,99 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 /// A HardFault (a bus or memory fault, an invalid instruction, … and any
-/// fault while interrupts are masked, as in the panic handler): records the
-/// faulting PC and LR, like a watchdog bite, and resets. Without this,
-/// cortex-m-rt's default spins until the watchdog resets, and the
-/// watchdog's interrupt can't preempt a HardFault, so nothing would say
-/// what happened.
-#[cortex_m_rt::exception]
-unsafe fn HardFault(frame: &cortex_m_rt::ExceptionFrame) -> ! {
-    let at = core::ptr::from_ref(frame) as *const u32;
-    // SAFETY: The frame is 8 words; the faulting code's stack starts after.
-    let above = unsafe { at.add(8) };
+/// fault while interrupts are masked, as in the panic handler): hands the
+/// faulting code's exception frame, its r4-r11 and EXC_RETURN to
+/// [`hard_fault_record`]. Without this, cortex-m-rt's default spins until
+/// the watchdog resets, and the watchdog's interrupt can't preempt a
+/// HardFault, so nothing would say what happened.
+///
+/// Our own trampoline, not cortex-m-rt's (`#[exception]`), which passes
+/// only the frame: by the time a Rust handler runs, its prologue may have
+/// reused r4-r11, which the hardware doesn't save, and which hold what the
+/// faulting code was working with (in 0.11.3-rc.1's first field fault, the
+/// base register of the load at the PC). Pushed on the main stack, below
+/// the frame; a fault on that stack's guard locks up before getting here
+/// anyway (see [`guard_stack`]).
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn HardFault() {
+    core::arch::naked_asm!(
+        // EXC_RETURN bit 2: which stack the frame is on (nothing here runs
+        // on the process stack, but it costs nothing to know).
+        "mov r2, lr",
+        "tst r2, #4",
+        "ite eq",
+        "mrseq r0, msp",
+        "mrsne r0, psp",
+        "push {{r4-r11}}",
+        "mov r1, sp",
+        "b {record}",
+        record = sym hard_fault_record
+    );
+}
+
+/// Records a HardFault for the next boot, like a watchdog bite, and
+/// resets: the faulting PC and LR, the stack's depth, a backtrace, and the
+/// registers that say what kind of fault it was and what the code was
+/// working with (see [`FAULT_WORDS`]). `frame` is the exception frame,
+/// `callee` the r4-r11 that [`HardFault`] pushed, and `exc_return` the
+/// handler's entry LR.
+///
+/// The fault status registers come from the SCB; each fault escalated to
+/// a HardFault (see [`fault`]), so they say which one it was.
+extern "C" fn hard_fault_record(frame: *const u32, callee: *const u32, exc_return: u32) -> ! {
+    // SAFETY: `frame` is the exception frame the hardware pushed, and
+    // `callee` the eight words `HardFault` pushed: both on the stack.
+    let [r0, r1, r2, r3, r12, lr, pc, xpsr] = unsafe { frame.cast::<[u32; 8]>().read() };
+    let [r4, r5, r6, r7, r8, r9, r10, r11] = unsafe { callee.cast::<[u32; 8]>().read() };
+    // SAFETY: Reading the SCB's fault status and address registers has no
+    // side effects.
+    let (cfsr, hfsr, mmfar, bfar) = unsafe {
+        let scb = &*cortex_m::peripheral::SCB::PTR;
+        (
+            scb.cfsr.read(),
+            scb.hfsr.read(),
+            scb.mmfar.read(),
+            scb.bfar.read(),
+        )
+    };
+    let address = fault::address(cfsr, mmfar, bfar).unwrap_or(0);
+    let registers: [u32; FAULT_WORDS] = [
+        cfsr, hfsr, address, exc_return, xpsr, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11,
+        r12,
+    ];
+    let mut message = [0; MESSAGE];
+    for (bytes, word) in message.as_chunks_mut::<4>().0.iter_mut().zip(registers) {
+        *bytes = word.to_le_bytes();
+    }
+    // The faulting code's own stack starts after the frame, whose size
+    // depends on whether it had a floating-point context (see
+    // `fault::frame_words`).
+    // SAFETY: Still on the stack (the scan stops at its top).
+    let above = unsafe { frame.add(fault::frame_words(exc_return, xpsr)) };
     let crumb = Breadcrumb {
         magic: FAULT_MAGIC,
         version: crate::firmware::version_word(),
-        file: frame.pc() as *const u8,
-        file_len: frame.lr(),
+        file: pc as *const u8,
+        file_len: lr,
         line: 0,
         message_len: 0,
         sp: above as u32,
-        message: [0; MESSAGE],
+        message,
         trace: scan_stack(above, 256, true),
     };
     // SAFETY: See `report_last_reset`.
     unsafe { breadcrumb().write_volatile(crumb) };
     cortex_m::peripheral::SCB::sys_reset()
 }
+
+/// What a HardFault keeps in its breadcrumb's `message`, as little-endian
+/// words: CFSR, HFSR, the address the fault was at (or 0, if the hardware
+/// didn't keep it; see [`fault::address`]), the handler's EXC_RETURN, the
+/// stacked xPSR (whose low 9 bits are the exception number, if the
+/// faulting code was itself a handler), then r0-r12 as the faulting code had them.
+/// Its LR and PC are the breadcrumb's `file_len` and `file`.
+const FAULT_WORDS: usize = 18;
 
 /// Makes the stack's last 32 bytes (above [`STACK_END`]) inaccessible
 /// through the MPU, so that an overflow faults instead of silently

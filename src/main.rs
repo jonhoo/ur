@@ -88,6 +88,7 @@ mod desk;
 mod dfu;
 mod dfu_slot;
 mod display;
+mod fault;
 mod field_log;
 mod firmware;
 #[cfg(feature = "flash-stress")]
