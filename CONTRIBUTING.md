@@ -563,6 +563,18 @@ should still register:
 RTT_SECS=30 cargo run --release --features wedge-i2c
 ```
 
+`scripts/crash-keeps-activity.py` checks that a crash keeps the
+activity the phone hasn't fetched (see `src/snapshot.rs`'s checkpoints):
+standing in for Gadgetbridge (with `scripts/gb-peer.py`, so the computer
+must be paired with the dev kit), it sets the clock, walks some steps,
+waits for a checkpoint, hard-faults the dev kit (input 26), checks the
+boot's log, and fetches the activity again, which must have the steps:
+
+```sh
+RTT_SECS=3 cargo run --release --features debug-input
+python3 scripts/crash-keeps-activity.py target/thumbv7em-none-eabihf/release/ur <ADDRESS>
+```
+
 **Probe sessions halt the core.** Most `esprobe` commands (`core read`
 and `core write`, `rtt`, `flash`) are a probe-rs session, which halts
 the core for ~20 ms as it attaches and again as it detaches (to clear
