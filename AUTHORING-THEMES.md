@@ -263,7 +263,7 @@ place, size or font, each taking those from the theme.
 
 | Helper | Does |
 |---|---|
-| `countdown`, `hhmm`, `duration`, `hms` | Time left ("4:05", "42 MIN", "2H05"), a time ("06:30"), a timer's length ("3 MIN", "1H30"), an uptime ("49:02:13") |
+| `countdown`, `hhmm`, `duration`, `uptime` | Time left ("4:05", "42 MIN", "2H05"), a time ("06:30"), a timer's length ("3 MIN", "1H30"), an uptime ("07:42:05", "3D 4H", "5MO 1W") |
 | `iso_date`, `tenths`, `percent`, `volts` | "2026-11-09", "-4.2", "80%", "3.98V" |
 | `hex`, `address` | A byte as two hex digits; a Bluetooth address as people write it |
 | `fitted` | A line of text in a face, cut to the room with an ellipsis |
