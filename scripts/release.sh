@@ -64,6 +64,15 @@ out=${1:-dist}
 
 cd "$(dirname "$0")/.."
 
+# Build in the checkout's own target/, whatever cargo is configured with
+# (a `[build] target-dir` shared across projects, say). The path remapping
+# below only covers the checkout, so build-script output under a target
+# directory elsewhere could leave a local path in the binary and break the
+# byte-for-byte match with CI's build. A shared directory also means
+# another worktree's build could replace the ELF between our build and
+# our copy of it.
+export CARGO_TARGET_DIR=$PWD/target
+
 # ==============================================================================
 # The version
 # ==============================================================================

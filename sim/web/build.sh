@@ -23,7 +23,12 @@ cd "$sim"
 cargo rustc --locked --release --lib --no-default-features --features themes-all \
     --target wasm32-unknown-unknown --crate-type cdylib
 
+# Wherever cargo is configured to build (`[build] target-dir`,
+# `CARGO_TARGET_DIR`), not necessarily sim/target.
+target=$(cargo metadata --no-deps --format-version 1 |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+
 mkdir -p "$out"
 cp web/index.html web/ur.js "$out/"
-cp target/wasm32-unknown-unknown/release/ur_sim.wasm "$out/"
+cp "$target/wasm32-unknown-unknown/release/ur_sim.wasm" "$out/"
 echo "built $out"
