@@ -657,7 +657,9 @@ and r0-r12 as the faulting code had them, which with the disassembly at
 the PC (`llvm-objdump -d --start-address=…`) say what it was doing. Mind
 the kind: for an `ImpreciseBus` fault (a store to no memory's address,
 reported only once the bus said so), the PC is a few instructions on
-from the store, possibly in other code, and the address isn't kept.
+from the store, possibly in other code, and the address isn't kept. A
+field build makes every bus fault precise (`field_log::precise_bus_faults`),
+at a little speed, so its faults name the store.
 Debug input `hardfault` (`hardfault:1,0` imprecise) tests the report on a
 dev kit.
 

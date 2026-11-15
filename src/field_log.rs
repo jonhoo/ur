@@ -982,6 +982,37 @@ extern "C" fn hard_fault_record(frame: *const u32, callee: *const u32, exc_retur
 /// Its LR and PC are the breadcrumb's `file_len` and `file`.
 const FAULT_WORDS: usize = 18;
 
+/// Makes every bus fault precise, in a field build: one from a store then
+/// reports the store itself, and the address it went to, where the write
+/// buffer would let the store retire first and report the fault only once
+/// the bus rejected it (an `ImpreciseBus` fault; see [`fault::Kind`]), at
+/// whatever the CPU had gone on to by then. On a dev kit, a store past
+/// RAM's end was reported two instructions on, in another source line,
+/// with no address; with this, at the store, with the address.
+///
+/// 0.11.3-rc.1's one field HardFault had a PC that couldn't have faulted
+/// (see `fault::frame_words`), which is just what an imprecise fault
+/// looks like; a field build is the one that would catch it again.
+///
+/// It costs a little speed: each store waits for the bus to take it,
+/// about a cycle more to RAM, a few to a peripheral. The CPU is awake
+/// well under 1% of the time, so the battery shouldn't notice. Not in the
+/// plain build, whose faults are a probe away from a debugger anyway.
+#[cfg(feature = "field-log")]
+pub fn precise_bus_faults() {
+    // ACTLR's DISDEFWBUF: no write buffering for the default memory map,
+    // which is all of ours.
+    const DISDEFWBUF: u32 = 1 << 1;
+    // SAFETY: ACTLR's other bits keep their values; this one only changes
+    // when a bus fault is reported, not what any access does.
+    unsafe {
+        let icb = &*cortex_m::peripheral::ICB::PTR;
+        icb.actlr.modify(|value| value | DISDEFWBUF);
+    }
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+}
+
 /// Makes the stack's last 32 bytes (above [`STACK_END`]) inaccessible
 /// through the MPU, so that an overflow faults instead of silently
 /// overwriting the retained block and our statics. The fault can't be

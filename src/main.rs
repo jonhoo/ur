@@ -407,6 +407,8 @@ async fn main(spawner: Spawner) {
     clock::restore();
     field_log::report_last_reset();
     field_log::guard_stack();
+    #[cfg(feature = "field-log")]
+    field_log::precise_bus_faults();
 
     // ==========================================================================
     // Watchdog
