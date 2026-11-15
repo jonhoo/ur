@@ -663,11 +663,11 @@ impl History {
             .filter(|(_, s)| s.seen() || s.heart_rate > 0)
     }
 
-    /// Puts back a sample saved before System OFF (see
-    /// [`crate::system_off`]), without overwriting anything recorded since
-    /// boot: normally nothing has been, as the clock is unknown until the
-    /// phone syncs, but after a reset that kept the clock, the activity task
-    /// may already have recorded the minutes since.
+    /// Puts back a sample saved before System OFF, an update or a crash
+    /// (see [`crate::system_off`]), without overwriting anything recorded
+    /// since boot: normally nothing has been, as the clock is unknown until
+    /// the phone syncs, but after a reset that kept the clock, the activity
+    /// task may already have recorded the minutes since.
     fn restore(&mut self, minute: i64, sample: Sample) {
         match self.newest {
             Some(newest) if minute <= newest => {
@@ -1569,6 +1569,12 @@ pub async fn activity_task(i2c: Device) {
                 );
             }
             LAST_SLEEP.lock(|s| s.set(summary));
+            // Every couple of minutes, what the phone hasn't fetched goes
+            // to the SPI flash too, for a crash to lose no more than those
+            // minutes (see `snapshot`): at the next poll, from `serve`.
+            if crate::snapshot::checkpoint_due(utc_minute) {
+                crate::system_off::checkpoint();
+            }
         }
     }
 }
@@ -1617,12 +1623,14 @@ fn add_steps_today(steps: u32) {
 }
 
 // ==============================================================================
-// Surviving System OFF
+// Surviving System OFF, updates and crashes
 // ==============================================================================
 //
-// What `system_off` saves to the SPI flash before switching the watch off,
-// and puts back at the next boot: the history the phone hasn't fetched,
-// and today's steps.
+// What `system_off` saves to the SPI flash before switching the watch off
+// or installing an update, and every couple of minutes (checkpoints, for a
+// crash), and puts back at the next boot: the history the phone hasn't
+// fetched (the sleep tracker's night with it, as each minute's kind is in
+// its sample), and today's steps.
 
 /// The minutes worth saving: (first, how many), from the first minute with
 /// data at or after `from` to the newest. `None` if there's nothing.
