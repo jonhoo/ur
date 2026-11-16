@@ -31,7 +31,7 @@ day hour is awake, with the phone connected, the sun up, and AUTO.
 
 | Item | Night hour µA | Day hour µA | Basis |
 |---|---:|---:|---|
-| Heart-rate LED | ~110 | ~50 | L: 77–116 s/h, all at 12.5 mA, on the old 10-minute schedule. Asleep it is now every 5 min, ~144 s/h (`heart_schedule.rs:72`). By day it's ~40–180 s/h (180 at a desk that won't read: six 30 s tries an hour), capped at 300 s/h (`LED_BUDGET`), or 600 s/h half an hour after the last reading (`OVERDUE`; see [below](#the-led-budget-overdue-and-brighter)). × 2.8 mA (E, never measured) |
+| Heart-rate LED | ~110 | ~50 | L: 77–116 s/h, all at 12.5 mA, on the old 10-minute schedule. Asleep it is now every 5 min, ~144 s/h (`heart_schedule.rs:72`). By day it's ~40–330 s/h (180–330 on a wrist that won't read: 8–12 tries an hour of 20–30 s, see [below](#overdue-tries-every-five-minutes)), capped at 300 s/h (`LED_BUDGET`), or 600 s/h half an hour after the last reading (`OVERDUE`; see [below](#the-led-budget-overdue-and-brighter)). × 2.8 mA (E, never measured) |
 | Screen | ~20 | ~310 | L: panel 5–51 s/h at night, and 58–107 s/h by day at the old 15 s timeout. By day, now: ~40 s/h of full wakes at AUTO's 19.6 mA backlight plus ~4.5 mA panel, and ~25 s/h of glances at low (1.83 mA) in idle mode. At night: dim, at low |
 | BMA421, 100 Hz, 4× averaging | 50 | 50 | M (aykevl) |
 | Rest of the floor | ~32 | ~40 | nRF 3, ST7789 asleep 10, touch 8 by day and ~0 in the quiet night, flash 1, divider 2, regulator and leakage 15, button polls ~1 (D/E) |
@@ -250,6 +250,9 @@ on-time counters let a single dev-kit measurement settle it.
 
 ### The LED budget, overdue and brighter
 
+(The brighter *phases* at a session's end are gone since 0.11.3-rc.3;
+brighter here is now only the bright arm's start.)
+
 `heart_schedule::LED_BUDGET` caps the LED at 300 s an hour, counted at
 12.5 mA's rate: a second at 30 mA counts 2.4, at 40 mA 3.2
 (`budget_seconds`). On the assumption above, a budget second costs
@@ -261,7 +264,8 @@ below.)
 
 Half an hour without a reading (`OVERDUE`; an hour until 0.10.0-rc.3),
 the cap and its refill double until the next reading, and failures retry
-every 10 minutes. At worst (every hour of the day overdue, every session
+every 5 minutes (10 up to 0.11.3-rc.2; see
+[below](#overdue-tries-every-five-minutes)). At worst (every hour of the day overdue, every session
 failing and spending all it may), that's 600 s an hour: ~0.46 mA, **~5.6
 mAh a day more** than the usual cap, about 3% of the battery. A host
 test (`the_doubled_budget_caps_an_overdue_day`) pins the cap. Off the
@@ -306,8 +310,10 @@ adds ~0.08 mAh an hour either way.
 
 Up to 0.10.0-rc.4, a due background session also waited for three calm
 polls in a row, however long that took; since, it waits two minutes at
-most, and not at all once a reading is overdue (`heart_schedule::CALM_WAIT`,
-`Schedule::start`). The tries are the schedule's as before; what changes
+most (`heart_schedule::CALM_WAIT`, `Schedule::start`), and from rc.5 to
+0.11.3-rc.2 not at all once a reading was overdue, which the figures
+here are for (for what came after, see
+[below](#overdue-tries-every-five-minutes)). The tries are the schedule's as before; what changes
 is that a wrist that's never calm for long gets them too. At worst, a
 whole waking day of it (walking, or busy hands at a desk) that never
 reads, which used to start nothing, makes the overdue tries above, six
@@ -319,27 +325,57 @@ walking, so the change adds ~0.9 and ~2.3 tries an hour: ~0.35–0.8 mAh
 over 16 desk hours, ~0.9–2.1 walking (dim to bright). The hourly caps
 (`LED_BUDGET`, `OVERDUE_BUDGET`) are unchanged and still bound it all.
 
-### Longer busy sessions (the logging build)
+### Overdue tries every five minutes
 
-After 0.10.0, the logging build runs a field experiment
-(`heart_schedule::Length`): an awake background session that reaches
-30 s on a busy wrist without a reading goes on to 90 s on half the
-rounds, if the budget covers the extra minute and still keeps a
-session's reserve. The rc.5 and rc.6 field logs had ~2.3–2.8 such
-sessions an hour awake (rc.4's, ~0.9), so ~20 extensions over 16 hours,
-half on each LED arm. At the ~2.9 mA a second of LED at 12.5 mA is taken
-as here (chip and polling included), and ~6.7 at 30 mA, a minute costs
-~0.05 mAh dim and ~0.11 bright: ~1.6 mAh a day. On the same rounds, a
-busy session that reads early records on to 90 s; those logs had ~5
-busy background readings a waking day (at ~24 s), so ~3 record on for
-~66 s, ~0.25 mAh, and a 20-minute walk perhaps as much again. In all
-**~2 mAh a day** (~1%). Were the LED to draw its nominal current
-whenever it's lit, ~8 mAh (~5%). Either way it
-only spends what the budget has spare, so the caps above still bound it,
-and the hourly `power:` line's LED seconds by drive measure it. The
-accelerometer's samples, logged through every awake session, cost
-nothing measurable: with the longer sessions' own lines, ~0.4 MB more
-of the field log a day, ~0.05 mAh of writing to the SPI flash.
+The sealed watch's logs of 2026-11-07 to 16 (1,766 sessions against a
+Garmin) put 46% of the background LED time into awake sessions on a
+busy wrist, for 90 readings at 145 s of LED each, and still left 20
+gaps of over 40 minutes. 0.11.3-rc.3 moves that LED time to tries that
+can read:
+
+- A session with no accepted or faint window by 19 s, on a wrist busy
+  at half its checks, ends there (`heart_schedule::hopeless`).
+- No session runs past 30 s (the logging build's 90 s experiment ended:
+  278 s of LED a reading), and none goes on with a brighter LED after
+  running out (1 of 12 such phases read).
+- Two strongly periodic windows in a row make a reading on a wrist
+  that isn't stepping (`ppg::Consensus::push_strong`).
+
+Replayed over those logs (`host-tests/ppg`), that reads 1,003 times
+rather than 1,028 (29 rather than 39 more than 8 BPM off the Garmin)
+for 28,330 s of LED rather than 34,563: 18% less. In return, a reading
+that's overdue is retried every 5 minutes rather than 10
+(`OVERDUE_RETRY`), and each of those tries waits up to two minutes for
+a calm wrist, like any other, where it used to start at once. Neither
+can be replayed. Per overdue hour awake on a wrist that never reads, at
+12.5 mA, from the schedule itself (the host test
+`an_overdue_hour_is_bounded_whatever_the_wrist`):
+
+| | Tries | LED | mAh |
+|---|---:|---:|---:|
+| Up to 0.11.3-rc.2: any wrist, 30 s each | 6 | 180 s | ~0.14 |
+| Never calm, no window with a rate (20 s) | 9 | 180 s | ~0.14 |
+| Never calm, a window with a rate but no reading (30 s) | 8 | 240 s | ~0.19 |
+| Calm when due, then busy without a window with a rate (20 s) | 12 | 240 s | ~0.19 |
+| Calm when due, 30 s without a reading | 11 | 330 s | ~0.26 |
+
+So a walk (mostly the second row) gets half as many tries again for
+the LED it had, and the worst hour costs ~0.12 mAh more: **~1.9 mAh
+over 16 waking hours** that are all overdue and all failing, about 1%
+of the battery. On the bright arm, 11 tries of 30 s at 30 mA would be
+790 budget seconds, past the doubled cap's 600, so there the cap binds
+and some tries start at 20 or 12.5 mA instead (`bright_start`); none
+is held back. The caps (`LED_BUDGET`, `OVERDUE_BUDGET`) are unchanged,
+and so is the worst case above, ~0.46 mA.
+
+Asleep, sessions are timed to the phone's 5-minute buckets
+(`heart_schedule::in_phase`): 12 an hour where a session every 5
+minutes after the last made ~11.6, ~3% more of the night's LED
+(~0.03 mAh a night).
+
+The logging build's longer sessions (0.11.0 to 0.11.3-rc.2, ~2 mAh a
+day) are gone; it still logs the accelerometer's samples through every
+awake session, ~0.05 mAh a day of writing to the SPI flash.
 
 ### What a connection event and an advertising event cost
 

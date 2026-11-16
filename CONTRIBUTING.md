@@ -709,45 +709,71 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   background session no longer stops early for movement), the data for
   making the estimator tolerate motion; up to rc.3, they end within 3-19
   s. After rc.4, sessions also start on a busy wrist, two minutes after
-  they were due (or at once when a reading is overdue), each marked by a
-  `heart: busy start (N s)` line. A session's samples, movement and verdicts take ~100 bytes of log a
-  second of LED: a desk hour that won't read (six 30 s tries) takes ~18
-  KB, where it took ~8 KB. Next to the ~75 KB an hour the log takes
-  anyway (0.10.0-rc.3's, mostly the accelerometer's lines), the 2 MB
-  still holds a day.
+  they were due (and, up to 0.11.3-rc.2, at once when a reading was
+  overdue), each marked by a `heart: busy start (N s)` line. A session's
+  samples, movement and verdicts take ~100 bytes of log a second of LED
+  (before packing, see above).
 
-  For 0.10's LED experiment (`heart_schedule::Arm`), its last lines
-  compare the awake background sessions that started dim with those that
-  started bright: sessions, readings (replayed, and as recorded),
-  readings per minute of LED (and per minute at 12.5 mA's cost), error
-  against the reference, and the median pulse/DC and window quality;
-  and, for logs after 0.10.0-rc.3, the rounds of tries (a scheduled
-  session and its retries, which share an arm), how many read, and
-  sessions a round. The rounds are the fair comparison: an arm is chosen
-  per round, before its first try. Bright helps if it reads more often
-  at no worse error, ideally even per minute at 12.5 mA's cost; a
-  pulse/DC that doesn't change says the extra light only lit the same
-  tissue. A desk day has a few dozen sessions on each arm, so look at a
-  couple of days before deciding.
+  From 0.11.3-rc.3 the log says of every background session what it
+  takes to judge the schedule without another watch alongside:
 
-  Logging builds after 0.10.0 run a field experiment for a busy wrist
-  (`heart_schedule::Length`), which the plain build doesn't: an awake
-  background session that reaches 30 s on a busy wrist without a reading
-  goes on to 90 s on half the rounds (crossed with the LED's arms; its
-  `heart: due` line ends `Longer` or `Usual`, and `heart: longer after 30
-  s` marks one going on). On the same rounds, one that reads early on a
-  busy wrist records on to 90 s: `heart: recording on after a reading`,
-  its later readings only logged (`heart: record-only N BPM`, at `debug`,
-  never published, nor counted by the schedule), then `heart: recorded
-  to N s`. And every awake session logs the accelerometer's samples
-  (`accel: [x, y, z, …]`, every 2 s, ~12 Hz, in 1/64 g), to find a walk's
-  cadence and the readings that lock onto it. That's ~46 bytes a second
-  of session, plus the longer sessions' own lines. On 0.11.0-rc.2's
-  first night on a worn watch, the log took ~110 KB an hour awake and
-  ~70 asleep, so the 2 MB held about 20 hours. Packed (see above),
-  0.11.1's worn day takes ~40 KB an hour awake and ~16 asleep, so the 2
-  MB holds about 2½ days of 16 waking hours (or 52 waking hours, or 130
-  asleep). Fetch the log at least every other day.
+  - **Why and how it started:** `heart: due (WHY); budget B s, resting
+    A/S; round R ARM drive D; calm start after N s, M min since a
+    reading`. `WHY` is the schedule's reason (`Rest`, `Moved`, `Asleep`,
+    `Elevated`, `Retry`, `Overdue`, `Budget`, `First`); `calm` or `busy`
+    is whether it found the calm wrist it waited `N` s for (a busy one
+    also has the `busy start` line); and `M` of 30 or more means a
+    reading was overdue. (`Why::Overdue` alone doesn't: it only marks a
+    retry that being overdue brought forward.)
+  - **How it ended, and its LED time:** one of `heart: N BPM after S s`
+    (and, at `debug`, `heart: strong pair` just before it if two
+    strongly periodic windows made it rather than three, or a calm
+    pair), `heart: no reading after S s` (it ran out its 30 s on a busy
+    wrist), `… ; wrist calm` (on a calm one), `… ; stopped early (busy
+    B/19)` (no sign of a pulse by 19 s on a busy wrist: see
+    `heart_schedule::hopeless`), `heart: not on a wrist (after S s)`,
+    `heart: too much light (after S s)`, or `heart: on the charger;
+    stopped after S s`. `S` is the LED's time.
+  - **When, against the phone's buckets:** asleep, sessions should start
+    4 minutes into each UTC-aligned 5 minutes (`heart_schedule::in_phase`);
+    the log's `clock:` lines date them.
+
+  So, from a log alone: readings an hour by `WHY` and by calm or busy
+  start; LED seconds a reading; how many overdue tries read; how many
+  sessions stopped early; how many readings were strong pairs; and the
+  longest gaps. `scripts/ppg_sessions.py` and `host-tests/ppg` replay
+  the sessions themselves as before.
+
+  For 0.10's LED experiment (`heart_schedule::Arm`), the replay's last
+  lines compare the awake background sessions that started dim with
+  those that started bright: sessions, readings (replayed, and as
+  recorded), readings per minute of LED (and per minute at 12.5 mA's
+  cost), error against the reference, and the median pulse/DC and
+  window quality; and, for logs after 0.10.0-rc.3, the rounds of tries
+  (a scheduled session and its retries, which share an arm), how many
+  read, and sessions a round. The rounds are the fair comparison: an
+  arm is chosen per round, before its first try. Bright helps if it
+  reads more often at no worse error, ideally even per minute at
+  12.5 mA's cost; a pulse/DC that doesn't change says the extra light
+  only lit the same tissue. (Up to 0.11.3-rc.2 a session that ran out
+  on a calm wrist could also go on with a brighter LED, `heart:
+  brighter after`: 1 of 12 such phases read, and they're gone; the
+  replay leaves them out of older logs.)
+
+  Logging builds from 0.11.0 to 0.11.3-rc.2 ran a field experiment for
+  a busy wrist: an awake background session that reached 30 s without a
+  reading went on to 90 s on half the rounds (`heart: due` lines ending
+  `Longer` or `Usual`, `heart: longer after 30 s`), and one that read
+  early recorded on (`heart: recording on after a reading`, `heart:
+  record-only N BPM`, `heart: recorded to N s`). It cost 278 s of LED a
+  reading and has ended (see `heart::SESSION_LIMIT`); the replay counts
+  only such a session's first 30 s. What stays is that every awake
+  session logs the accelerometer's samples (`accel: [x, y, z, …]`,
+  every 2 s, ~12 Hz, in 1/64 g), to find a walk's cadence and the
+  readings that lock onto it: ~46 bytes a second of session. Packed
+  (see above), 0.11.1's worn day took ~40 KB an hour awake and ~16
+  asleep, so the 2 MB holds about 2½ days of 16 waking hours (or 52
+  waking hours, or 130 asleep). Fetch the log at least every other day.
 
 Steps come from the accelerometer's own counter, which a log can't
 replay, but its polls show how the counter behaves: `scripts/step_runs.py
