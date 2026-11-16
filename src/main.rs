@@ -108,6 +108,7 @@ mod link;
 mod live;
 #[cfg(feature = "field-log")]
 mod log_pack;
+mod log_ring;
 mod mcuboot;
 mod minute_ring;
 mod motor;

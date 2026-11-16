@@ -29,7 +29,8 @@ needs nothing special; LFS stores it.
   `on_time` (`power`'s hourly split), `fault` (what a HardFault's
   registers say),
   `minute_ring` (`activity`'s history as the clock moves), `dfu_slot`
-  (where `dfu` erases and writes an update), `rtt_ring` (which bytes
+  (where `dfu` erases and writes an update), `log_ring` (where
+  `field_log`'s sectors are in the flash), `rtt_ring` (which bytes
   `field_log` reads of the log's buffer), and `bthome`'s
   encoding) are pure logic, tested on the computer, as are retro's
   colours (`palette`, and `themes/retro/schemes.rs`: that those with
@@ -361,7 +362,7 @@ stack, or a grid hold without its release, is shrunk to a repro. See
 Some host test crates (`host-tests/alarm`, `buttons`, `gesture`, `day`,
 `decimal`, `battery`, `heart_schedule`, `temperature`, `brightness`,
 `wake`, `on_time`, `minute_ring`, `link`, `theme`, `live`, `nav`, `route`,
-`glance`, `dfu`, `rtt_ring`, `mcuboot`, `snapshot`, `bthome`, `aranet`,
+`glance`, `dfu`, `log_ring`, `rtt_ring`, `mcuboot`, `snapshot`, `bthome`, `aranet`,
 `gb_buckets`, `step_counter`, `backoff`, `calendar`, `fault`) have [Kani] proofs at the end of their `src/main.rs`: what the tests check for some
 inputs, for every input, within bounds. `cargo kani` in the crate runs
 them; `--harness NAME` one (and one at a time). They need tight
@@ -623,7 +624,7 @@ contribution (as `scripts/run-<probe>.sh`).
 ## Field logs
 
 A sealed watch has no debug probe. The `ur-logging` build instead keeps
-everything it logs in the watch's 4 MB SPI flash (2 MB of it, about 2½
+everything it logs in the watch's 4 MB SPI flash (3 MB of it, about 4½
 days), and serves it over Bluetooth. Install it like any update (see
 the README), wear the watch, then, from a computer paired with it (the
 phone can stay connected), fetch the log with `scripts/fetch-log.py`
@@ -636,7 +637,7 @@ defmt-print -e ur-logging-0.9.0.elf < logs/field-log-0.9.0.defmt \
   | python3 -I scripts/expand_log.py > decoded.log
 ```
 
-The first fetch from a watch reads all of it (a couple of minutes); later
+The first fetch from a watch reads all of it (a few minutes); later
 ones read only the sectors written since, from a cache of what was fetched
 before (`--cache`, by default under `~/.cache/ur/field-log/`), so they take
 seconds. `--full` reads everything again.
@@ -771,9 +772,10 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   session logs the accelerometer's samples (`accel: [x, y, z, …]`,
   every 2 s, ~12 Hz, in 1/64 g), to find a walk's cadence and the
   readings that lock onto it: ~46 bytes a second of session. Packed
-  (see above), 0.11.1's worn day took ~40 KB an hour awake and ~16
-  asleep, so the 2 MB holds about 2½ days of 16 waking hours (or 52
-  waking hours, or 130 asleep). Fetch the log at least every other day.
+  (see above), 0.11.3-rc.2's worn days took 28 KB an hour (32 to 40
+  awake, ~14 asleep), so the log's 3 MB (745 sectors of 4 KiB; it was
+  512, 2 MB, up to 0.11.2) holds about 4½ days. Fetch the log at least
+  every fourth day.
 
 Steps come from the accelerometer's own counter, which a log can't
 replay, but its polls show how the counter behaves: `scripts/step_runs.py

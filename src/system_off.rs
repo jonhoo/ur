@@ -87,14 +87,16 @@ pub enum Reason {
 }
 
 /// Where the record lives in the SPI flash: three sectors just below the
-/// field log, in space the bootloader doesn't use (see [`crate::spi_flash`]).
-const RECORD: Range<u32> = 0x1F_D000..0x20_0000;
+/// field log's first stretch, in space the bootloader doesn't use (see
+/// [`crate::spi_flash`]).
+pub(crate) const RECORD: Range<u32> = 0x1F_D000..0x20_0000;
 const _: () = assert!(snapshot::MAX_BYTES as u32 <= RECORD.end - RECORD.start);
 
 /// Where the checkpoints are (see [`crate::snapshot`]'s Checkpoints): their
 /// slots, one after the other, just below the planned record, in space
-/// the bootloader doesn't use (see [`crate::spi_flash`]).
-const CHECKPOINTS: Range<u32> = 0x19_D000..0x1F_D000;
+/// the bootloader doesn't use (see [`crate::spi_flash`]), and just above the
+/// field log's second stretch.
+pub(crate) const CHECKPOINTS: Range<u32> = 0x19_D000..0x1F_D000;
 const _: () = assert!(
     CHECKPOINTS.end - CHECKPOINTS.start == snapshot::CHECKPOINT_SLOTS * snapshot::SLOT_BYTES
 );
@@ -107,7 +109,11 @@ const _: () = assert!(
     CHUNK >= HEADER_BYTES,
     "headers are staged in a chunk's buffer"
 );
-const _: () = assert!(RECORD.end <= field_log::REGION.start);
+// The field log is on both sides of the two (see [`crate::log_ring`]): its
+// second stretch ends where the checkpoints start, and its first starts
+// where the record ends.
+const _: () = assert!(crate::log_ring::SECOND.end <= CHECKPOINTS.start);
+const _: () = assert!(RECORD.end <= crate::log_ring::FIRST.start);
 const _: () = assert!(RECORD.start.is_multiple_of(spi_flash::SECTOR));
 
 /// Samples go between the history and the flash this many bytes at a time

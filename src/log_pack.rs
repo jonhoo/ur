@@ -1,4 +1,4 @@
-//! Packing for the field log's busiest lines, so that its 2 MB ring holds
+//! Packing for the field log's busiest lines, so that its ring holds
 //! days rather than a day (see [`crate::field_log`]).
 //!
 //! Two kinds of line were 86% of a worn day's log (0.11.1's): the

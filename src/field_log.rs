@@ -15,13 +15,21 @@
 //! Not for builds read through a probe: the probe and this module would
 //! each take whatever the other didn't.
 //!
-//! Layout: [`REGION`] is a ring of 4 KiB sectors, each a 16-byte header
-//! (magic, sequence number, image version, data length) followed by whole
-//! defmt frames. Every boot starts a new sector; the oldest is erased to
-//! make room. The length is written when a sector is closed (NOR flash can
+//! Layout: a ring of 4 KiB sectors ([`log_ring`] says where each is: 745
+//! of them, in two stretches of the flash), each a 16-byte header (magic,
+//! sequence number, image version, data length) followed by whole defmt
+//! frames. Every boot starts a new sector; the oldest is erased to make
+//! room. The length is written when a sector is closed (NOR flash can
 //! still clear bits of the erased header), so a sector without one is either
 //! the current one or was cut off by a reset; the reader then trims at the
 //! last frame boundary.
+//!
+//! A sector is the log's only once we've erased it and written its header:
+//! one that doesn't start with our magic is absent, to the writer (which
+//! looks for the newest sector at boot) and to a fetcher alike. That's what
+//! the ring's second stretch holds on a watch that ran InfiniTime (its file
+//! system), or that updated from a build whose ring was the first stretch
+//! only, until the writer first comes round to it.
 //!
 //! Also here, because they're about knowing what happened in the field: the
 //! reset reason, and where the previous run panicked (see [`panic`]).
@@ -36,29 +44,34 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Timer;
 
 use crate::fault;
+use crate::log_ring::{self, SECTORS, sector_address};
 #[cfg(feature = "field-log")]
 use crate::rtt_ring;
 #[cfg(feature = "field-log")]
 use crate::spi_flash::{self, SpiFlash};
 use crate::spi_flash::{FLASH, SECTOR};
 
-/// The top half of the 4 MiB SPI flash: about 2.7 days of a worn watch's
-/// debug-level logs, at ~40 KB an hour awake and ~16 asleep (0.11.1's
-/// log, packed as 0.12 logs it: see [`crate::log_pack`]). It was ~108 and
-/// ~75, under a day, before the packing.
-pub const REGION: core::ops::Range<u32> = 0x20_0000..0x40_0000;
-pub const SECTORS: u32 = (REGION.end - REGION.start) / SECTOR;
-
 const MAGIC: u32 = u32::from_le_bytes(*b"urL1");
 const HEADER: u32 = 16;
 
-// The ring is whole sectors, to the chip's end and no further: the chip
+// Where the ring's sectors are is `log_ring`'s to say (and to check that
+// each lies whole within one of its two stretches); what's checked here is
+// how those stretches lie among the flash's other tenants, which that
+// module, hardware-free, doesn't know. See `spi_flash` for the map.
+const _: () = assert!(log_ring::SECTOR == SECTOR);
+// The first stretch reaches to the chip's end and no further: the chip
 // takes an address past its end as one from its start, where the
-// bootloader's recovery firmware is. And a sector's header (with the
-// length written into it later) lies within its first page, as one
-// program must.
-const _: () = assert!(REGION.start.is_multiple_of(SECTOR) && REGION.end.is_multiple_of(SECTOR));
-const _: () = assert!(REGION.end <= crate::spi_flash::SIZE && SECTORS > 1);
+// bootloader's recovery firmware is. It starts after the System OFF record.
+const _: () = assert!(log_ring::FIRST.end <= crate::spi_flash::SIZE);
+const _: () = assert!(crate::system_off::RECORD.end <= log_ring::FIRST.start);
+// The second lies between MCUBoot's secondary slot (an erase there would
+// break an update half-way in, or the image a failed one reverts to) and
+// the crash checkpoints.
+const _: () =
+    assert!(crate::dfu_slot::SLOT_START + crate::dfu_slot::SLOT_SIZE <= log_ring::SECOND.start);
+const _: () = assert!(log_ring::SECOND.end <= crate::system_off::CHECKPOINTS.start);
+// And a sector's header (with the length written into it later) lies
+// within its first page, as one program must.
 const _: () = assert!(HEADER <= crate::spi_flash::PAGE);
 
 /// Where the log is being written: (sector index, bytes used including the
@@ -175,13 +188,16 @@ fn consume(n: usize) {
 // Writing to flash
 // ==============================================================================
 
-fn sector_address(index: u32) -> u32 {
-    REGION.start + index * SECTOR
-}
-
 #[cfg(feature = "field-log")]
 /// Finds the newest sector's sequence number, so this boot continues after
 /// it.
+///
+/// Only sectors that start with our magic count, so whatever else the
+/// flash holds where the ring now is (see the module's documentation) can't
+/// pass for the newest, however large the number in its place. The magic is
+/// all that's asked of a header, though: one whose length a reset cut off
+/// mid-program (any value) is still the log's, and skipping it here would
+/// hand its sequence number out twice.
 async fn newest(flash: &mut SpiFlash) -> Option<(u32, u32)> {
     let mut newest: Option<(u32, u32)> = None;
     for index in 0..SECTORS {
@@ -200,7 +216,10 @@ async fn newest(flash: &mut SpiFlash) -> Option<(u32, u32)> {
 }
 
 #[cfg(feature = "field-log")]
-/// Erases sector `index` and starts it with a header.
+/// Erases sector `index` and starts it with a header. Every sector the
+/// writer uses goes through here first, so nothing is ever programmed over
+/// what a sector held before (another firmware's data, in the ring's second
+/// stretch).
 async fn open(flash: &mut SpiFlash, index: u32, sequence: u32) -> Result<(), spi_flash::Error> {
     let address = sector_address(index);
     flash.erase(address..address + SECTOR).await?;
@@ -211,6 +230,20 @@ async fn open(flash: &mut SpiFlash, index: u32, sequence: u32) -> Result<(), spi
     header[8..12].copy_from_slice(&version.to_le_bytes());
     // Bytes 12..16, the length, stay erased until the sector is closed.
     flash.program(address, &header).await
+}
+
+#[cfg(feature = "field-log")]
+/// Closes sector `*sector` (which holds `used` bytes, header included) by
+/// writing its length, and opens the next one round the ring.
+async fn advance(flash: &mut SpiFlash, sector: &mut u32, sequence: &mut u32, used: u32) {
+    let address = sector_address(*sector);
+    let _ = flash
+        .program(address + 12, &(used - HEADER).to_le_bytes())
+        .await;
+    *sector = log_ring::next(*sector);
+    *sequence = sequence.wrapping_add(1);
+    // If this fails, leave it; the reader trims at frame boundaries.
+    let _ = open(flash, *sector, *sequence).await;
 }
 
 #[cfg(feature = "field-log")]
@@ -231,7 +264,7 @@ pub async fn task() {
             return;
         }
         let (sector, sequence) = match newest(flash).await {
-            Some((index, sequence)) => ((index + 1) % SECTORS, sequence.wrapping_add(1)),
+            Some((index, sequence)) => (log_ring::next(index), sequence.wrapping_add(1)),
             None => (0, 0),
         };
         if let Err(e) = open(flash, sector, sequence).await {
@@ -283,15 +316,7 @@ pub async fn task() {
         // so every sector decodes on its own.
         while let Some((first, second)) = frames((SECTOR - used) as usize) {
             if first.is_empty() {
-                let address = sector_address(sector);
-                let _ = flash
-                    .program(address + 12, &(used - HEADER).to_le_bytes())
-                    .await;
-                sector = (sector + 1) % SECTORS;
-                sequence = sequence.wrapping_add(1);
-                // If this fails, leave it; the reader trims at frame
-                // boundaries.
-                let _ = open(flash, sector, sequence).await;
+                advance(flash, &mut sector, &mut sequence, used).await;
                 used = HEADER;
                 continue;
             }

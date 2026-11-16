@@ -9,15 +9,17 @@
 //!   0x000000  the boot logo and a recovery firmware (InfiniTime's), 256 KiB
 //!   0x040000  MCUBoot's secondary slot: where updates land, and where the
 //!             previous image goes after a swap (464 KiB)
-//!   0x0B4000  free (InfiniTime keeps its file system here)
+//!   0x0B4000  our field log's second stretch (932 KiB; InfiniTime keeps
+//!             its file system here, which the log erases as it goes)
 //!   0x19D000  checkpoints of the unsynced activity, for a crash (384 KiB)
 //!   0x1FD000  what's saved before System OFF or an update (12 KiB)
-//!   0x200000  our field log (2 MiB)
+//!   0x200000  our field log's first stretch (2 MiB)
 //!
 //! [`crate::dfu`] writes updates into the secondary slot,
 //! [`crate::system_off`] saves unsynced activity before switching the watch
 //! off, and every couple of minutes (see [`crate::snapshot`]), and
-//! [`crate::field_log`] keeps logs in the top 2 MiB.
+//! [`crate::field_log`] keeps logs in the top 2 MiB and, since 0.11.3, in
+//! the space below the checkpoints too (see [`crate::log_ring`]).
 //!
 //! The flash shares SPIM2 with the LCD (see [`crate::spi`]). Every operation
 //! here locks the bus only for the length of one command, so the screen keeps

@@ -56,6 +56,7 @@ use crate::aranet::{self, Nearby, Reading};
 use crate::gb::{self, Incoming, LineBuffer, Outgoing};
 use crate::geo::{self, GpsPolicy, Location};
 use crate::link::{self, Link, Verdict};
+use crate::log_ring;
 use crate::packet_pool::Pool;
 use crate::phone::{PhoneEvent, Unpaired};
 use crate::unpaired::{Heard, Judge, Stay};
@@ -275,6 +276,11 @@ struct DfuService {
 ///   `present` is 0),
 /// - `01 <offset: u16> <bytes>`: its frames, in pieces,
 /// - `02 <index: u16>`: the end.
+///
+/// Index `FFFF` ([`log_ring::SIZE_QUERY`]) isn't a sector but asks how many
+/// the ring has: its header has `present` 0 and the count in `sequence`,
+/// and its end follows at once. Builds up to 0.11.2 answer it like any
+/// index past their ring, with a `sequence` of 0: theirs has 512.
 ///
 /// For paired clients only: logs show who messaged you.
 #[gatt_service(uuid = "75726c00-6f67-4c6f-8000-000000000001")]
@@ -654,7 +660,13 @@ async fn send_log_sector(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool
     let _ = header.push(0x00);
     let _ = header.extend_from_slice(&index.to_le_bytes());
     let _ = header.push(u8::from(info.is_some()));
-    let (sequence, version, length) = info.map_or((0, 0, 0), |i| (i.sequence, i.version, i.length));
+    let (sequence, version, length) = match info {
+        Some(info) => (info.sequence, info.version, info.length),
+        // No such sector: the ring's size, in the header of an absent
+        // one, with nothing after it.
+        None if index == log_ring::SIZE_QUERY => (log_ring::SECTORS, 0, 0),
+        None => (0, 0, 0),
+    };
     for word in [sequence, version, length] {
         let _ = header.extend_from_slice(&word.to_le_bytes());
     }
