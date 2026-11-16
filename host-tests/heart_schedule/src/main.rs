@@ -799,6 +799,24 @@ mod tests {
         assert!(!calm_throughout(u8::MAX, u8::MAX));
     }
 
+    /// A session without a sign of a pulse ends early if the wrist was
+    /// busy at half its checks or more.
+    #[test]
+    fn hopeless_is_busy_at_half_the_checks() {
+        assert!(hopeless(HOPELESS_CHECKS, HOPELESS_CHECKS));
+        assert!(hopeless(10, 19));
+        assert!(!hopeless(9, 19));
+        assert!(!hopeless(0, 19));
+        assert!(hopeless(u8::MAX, u8::MAX));
+        // Busy too often for a calm failure, not often enough to give up:
+        // it runs its full length.
+        assert!(!calm_throughout(8, 19) && !hopeless(8, 19));
+        // Never both: giving up is never a calm failure cut short.
+        for busy in 0..=HOPELESS_CHECKS {
+            assert!(!(hopeless(busy, HOPELESS_CHECKS) && calm_throughout(busy, HOPELESS_CHECKS)));
+        }
+    }
+
     #[test]
     fn brighter_seconds_cost_more_budget() {
         assert_eq!(budget_seconds(0, 30_000), 30);
@@ -1845,6 +1863,17 @@ mod proofs {
     fn calm_is_busy_at_a_quarter_of_the_checks_at_most() {
         let (busy, checks): (u8, u8) = kani::any();
         assert_eq!(calm_throughout(busy, checks), busy <= checks / 4);
+    }
+
+    /// For every count of busy checks among a session's: hopeless means
+    /// busy at half of them or more, without overflowing; and with any
+    /// checks at all, a wrist is never both that and calm throughout.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn hopeless_is_busy_at_half_of_the_checks_at_least() {
+        let (busy, checks): (u8, u8) = kani::any();
+        assert_eq!(hopeless(busy, checks), busy >= checks.div_ceil(2));
+        assert!(checks == 0 || !(hopeless(busy, checks) && calm_throughout(busy, checks)));
     }
 
     // ==========================================================================

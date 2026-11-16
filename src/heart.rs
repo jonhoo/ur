@@ -305,6 +305,14 @@ const _: () = assert!(heart_schedule::BRIGHTER_PEAK_LIMIT < SATURATED);
 // brighter phase is shorter than one.
 const _: () = assert!(SESSION_LIMIT.as_secs() == heart_schedule::SESSION_RESERVE as u64);
 const _: () = assert!(heart_schedule::BRIGHTER_FOR as u64 <= SESSION_LIMIT.as_secs());
+// A session gives up for want of a window only once several could have
+// come (the first takes a window's worth of samples, the rest 2 s each),
+// and before its time is up.
+const _: () = assert!(
+    heart_schedule::HOPELESS_CHECKS as u64 * LEVEL_CHECK_SAMPLES as u64
+        >= crate::ppg::WINDOW as u64 + 5 * 2 * LEVEL_CHECK_SAMPLES as u64
+);
+const _: () = assert!((heart_schedule::HOPELESS_CHECKS as u64) < SESSION_LIMIT.as_secs());
 // A level check is a second of samples at the sensor's nominal rate, with
 // room in `measure`'s `second` for the few more a late poll completes; and
 // a second's sum of 18-bit samples fits its `u32`.
@@ -669,6 +677,9 @@ pub async fn heart_task(i2c: Device) {
             drive,
             &mut conversions,
             background.then_some(budget),
+            // Awake, and the schedule's: such a session ends early if it's
+            // getting nowhere (see `heart_schedule::hopeless`).
+            background && !asleep,
             &mut spent,
             &mut peak,
             field,
@@ -735,6 +746,14 @@ pub async fn heart_task(i2c: Device) {
             Ok(Ended::TimedOut { calm: true }) => {
                 info!("heart: no reading after {} s; wrist calm", led_seconds)
             }
+            // "No reading after", like the two above, so that whatever
+            // counts those counts this; and how busy, of its 19 checks.
+            Ok(Ended::Hopeless { busy }) => info!(
+                "heart: no reading after {} s; stopped early (busy {}/{})",
+                led_seconds,
+                busy,
+                heart_schedule::HOPELESS_CHECKS
+            ),
             Ok(Ended::NoContact) => info!("heart: not on a wrist (after {} s)", led_seconds),
             Ok(Ended::TooBright) => info!("heart: too much light (after {} s)", led_seconds),
             Err(()) => warn!("heart: lost the sensor mid-session"),
@@ -761,7 +780,9 @@ pub async fn heart_task(i2c: Device) {
             }
             Ok(Ended::NoContact | Ended::TooBright) => (Some(false), Outcome::OffWrist),
             Ok(Ended::TimedOut { calm: true }) => (None, Outcome::CalmNoReading),
-            Ok(Ended::TimedOut { calm: false }) | Err(()) => (None, Outcome::NoReading),
+            Ok(Ended::TimedOut { calm: false } | Ended::Hopeless { .. }) | Err(()) => {
+                (None, Outcome::NoReading)
+            }
             // Without a reading, it's nothing to the schedule but its LED
             // time (see `Schedule::cut_short`), which also hears of the
             // charger, so the wait below won't take this for an arrival.
@@ -927,6 +948,10 @@ enum Ended {
     /// if the wrist was calm through most of it (see
     /// [`heart_schedule::calm_throughout`]).
     TimedOut { calm: bool },
+    /// No reading, and no sign of one, on a wrist `busy` at this many of
+    /// its first [`heart_schedule::HOPELESS_CHECKS`] level checks: stopped
+    /// there rather than run out the time (see [`heart_schedule::hopeless`]).
+    Hopeless { busy: u8 },
     /// Almost no light comes back even at the highest level.
     NoContact,
     /// The charger's power arrived (see [`heart_reading::on_charger`]);
@@ -943,10 +968,12 @@ enum Ended {
 /// as needed. It starts at `drive`, the level's or a bright arm's (see
 /// [`Arm`]). `budget`: the schedule's LED budget at the start, if the
 /// schedule started it (rather than someone looking at the clock face).
-/// `spent` is set to what the session cost the budget, and `skin_peak` to
+/// `stop_early`: whether it may end before its time if it's getting nowhere
+/// (see [`heart_schedule::hopeless`]), which an awake background session
+/// may. `spent` is set to what the session cost the budget, and `skin_peak` to
 /// its last second's peak, scaled to 12.5 mA ×1. `field`: the logging
 /// build's experiments it's in (see [`FieldArms`]).
-// The eighth argument is that, empty in the plain build.
+// The last argument is that, empty in the plain build.
 #[allow(clippy::too_many_arguments)]
 async fn measure(
     hrs: &mut Hrs3300,
@@ -954,6 +981,7 @@ async fn measure(
     drive: u8,
     conversions: &mut Conversions,
     budget: Option<u32>,
+    stop_early: bool,
     spent: &mut u32,
     skin_peak: &mut u32,
     #[cfg_attr(not(feature = "field-log"), allow(unused_variables))] field: FieldArms,
@@ -986,6 +1014,10 @@ async fn measure(
     // For judging whether the wrist was calm through the session: the level
     // checks so far, and how many found it busy.
     let (mut checks, mut busy) = (0u8, 0u8);
+    // Whether any window so far was accepted or faint: a sign of a pulse,
+    // without which a busy wrist's session ends early (see
+    // `heart_schedule::hopeless`).
+    let mut hopeful = false;
     // This window's movement, a reading a second (the accelerometer
     // reports every 2 s, so about four distinct values).
     let mut movement = heapless::HistoryBuf::<u16, MOTION_HISTORY>::new();
@@ -1210,6 +1242,20 @@ async fn measure(
             *skin_peak = (peak >> LEVELS[before.0].gain) * heart_schedule::DRIVE_CURRENT[0]
                 / heart_schedule::DRIVE_CURRENT[usize::from(before.1)];
             (peak, sum, count) = (0, 0, 0);
+            // Getting nowhere on a busy wrist: stop here, and leave the
+            // LED time to a try at a better moment. Looked at once, at
+            // this check, and after the checks above, so that a session
+            // off the wrist still ends as that. (This second's samples are
+            // logged already; there's no part-second to add.)
+            if stop_early
+                && checks == heart_schedule::HOPELESS_CHECKS
+                && !hopeful
+                && measured.is_none()
+                && !watching()
+                && heart_schedule::hopeless(busy, checks)
+            {
+                return Ok(Ended::Hopeless { busy });
+            }
             if (*level, drive) != before {
                 debug!("heart: switching to level {}", at(*level, drive));
                 hrs.on(at(*level, drive)).await?;
@@ -1246,6 +1292,7 @@ async fn measure(
         };
         let bpm = estimate.bpm_at(conversions.period_us());
         if faint {
+            hopeful = true;
             debug!(
                 "heart: window faint: {} BPM (quality {}, calm {})",
                 bpm, estimate.quality, calm
@@ -1275,6 +1322,7 @@ async fn measure(
             consensus.reject();
             continue;
         }
+        hopeful = true;
         debug!(
             "heart: window {} BPM (quality {}, drift {})",
             bpm, estimate.quality, estimate.drift

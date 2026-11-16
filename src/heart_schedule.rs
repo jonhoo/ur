@@ -1,7 +1,7 @@
 //! When to measure the heart rate in the background: an interval that
 //! adapts to what the wearer is doing, within an hourly LED budget.
 //!
-//! [`crate::heart`] measures in sessions of ~13–30 s of LED, each costing
+//! [`crate::heart`] measures in sessions of ~11–30 s of LED, each costing
 //! ~2.7 mA while it runs. At rest, the reading barely changes from one
 //! session to the next (a night's field log matched a Garmin to a median
 //! 1 BPM at a reading every 10 minutes), so measuring often buys nothing.
@@ -62,7 +62,8 @@
 //! ([`Schedule::start`]), and, if it runs out of time on a calm wrist with
 //! a faint pulse, may go on brighter ([`brighter`]). Once started, it runs
 //! its full length however the wrist moves (see below), unless it reads
-//! first or finds no skin.
+//! first, finds no skin, or is plainly getting nowhere on a busy wrist
+//! ([`hopeless`]).
 //!
 //! # Trying through movement
 //!
@@ -138,6 +139,36 @@
 //! long calm took in the field logs, a day at a desk or walking once overdue
 //! makes ~1 or ~2.3 more tries an hour than it did, ~0.35-0.8 and
 //! ~0.9-2.1 mAh more over 16 hours (dim to bright). (See docs/power-plan.md.)
+//!
+//! # Giving up on a hopeless session
+//!
+//! Trying through movement has a price the sealed watch's logs put a
+//! number on (2026-11-07 to 16, 1,766 sessions against a Garmin): awake
+//! sessions on a busy wrist took 46% of all the background LED time for 90
+//! readings, 145 s of LED each, where a calm wrist's cost 17 s. Most of
+//! that light fell on sessions that never had a chance: no window of
+//! theirs got as far as a rate. So an awake background session now ends
+//! at [`HOPELESS_CHECKS`] seconds if, by then, it has had no window that
+//! was accepted or faint and the wrist was busy at half its checks or more
+//! (see [`hopeless`]), as a failure like any other (it backs off the
+//! same). One with either sign of a pulse, or a wrist that was mostly
+//! calm, runs its full length as before.
+//!
+//! This isn't the stop 0.10.0-rc.3 took out. That one went by movement
+//! alone, from the first seconds, and ended every busy session; this one
+//! waits for six windows (the first comes at ~8.5 s, then one every 2 s),
+//! and goes by what they said. Replayed over those logs, stopping at 19 s
+//! cut the LED time by 14% (34,563 s to 29,567) and lost 29 readings of
+//! 1,028, 8 of them among the 39 that were more than 8 BPM off the Garmin:
+//! what such a session reads late, it reads less well. At 13 s it lost 46
+//! readings for 21% of the LED, at 17 s 38 for 16%, at 21 s 22 for 13%.
+//!
+//! A reading lost is still a reading lost, so the LED time this frees is
+//! spent on more tries rather than saved: it's what lets a reading that's
+//! overdue be retried twice as often (see [`OVERDUE_RETRY`]) inside the
+//! same budget, at moments more likely to read (see [`Schedule::start`]).
+//! Asleep, a session never gives up early: a night's sessions read 97% of
+//! the time, and the wrist that's busy there is turning over, and settles.
 //!
 //! Time is whole seconds since boot, as `u32` (136 years). Like
 //! [`crate::sleep`], this knows nothing of hardware or the clock, so it
@@ -1075,6 +1106,23 @@ fn moved(active_polls: u8, asleep: bool) -> bool {
 /// too, so a wrist that settles only at the end doesn't qualify either.)
 pub fn calm_throughout(busy: u8, checks: u8) -> bool {
     u16::from(busy) * 4 <= u16::from(checks)
+}
+
+/// Level checks (one a second) after which an awake background session
+/// with no sign of a pulse on a busy wrist ends (see [`hopeless`], and
+/// "Giving up on a hopeless session" in the module docs): 19 s, by when
+/// six windows have been judged.
+pub const HOPELESS_CHECKS: u8 = 19;
+
+/// Whether a session that has had no accepted or faint window by
+/// [`HOPELESS_CHECKS`] should end there: if the wrist was busy (above
+/// `heart::CALM`) at half its level checks or more. Such a session rarely
+/// reads in the seconds it has left, and what it reads then is more often
+/// wrong (see the module docs); a mostly calm wrist without a window yet
+/// is a faint pulse instead, which more time (and the retry sooner that a
+/// calm failure gets, see [`calm_throughout`]) may still find.
+pub fn hopeless(busy: u8, checks: u8) -> bool {
+    u16::from(busy) * 2 >= u16::from(checks)
 }
 
 // ==============================================================================

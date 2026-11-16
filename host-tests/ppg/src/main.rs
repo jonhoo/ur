@@ -9,7 +9,8 @@
 #[allow(dead_code)]
 mod ppg;
 
-/// For [`heart_schedule::brighter`], which the replay applies.
+/// For [`heart_schedule::brighter`] and [`heart_schedule::hopeless`], which
+/// the replay applies.
 #[path = "../../../src/heart_schedule.rs"]
 #[allow(dead_code)]
 mod heart_schedule;
@@ -724,6 +725,38 @@ fn goes_brighter(
         .flatten()
 }
 
+/// Where the firmware would end this session early, in samples, if it
+/// would: an awake background session that, by its
+/// `heart_schedule::HOPELESS_CHECKS`th level check, has had no accepted or
+/// faint window on a wrist busy at half of them (see
+/// `heart_schedule::hopeless`, and `heart::measure`, which looks at that
+/// check, before the window a sample then may complete).
+///
+/// Not a segment that carries on another (after a level change, or
+/// brighter): the firmware counts its checks from the session's start,
+/// which a segment doesn't know, so those run on, as they did.
+fn gives_up(session: &Recorded, windows: &[(usize, Verdict, bool)]) -> Option<usize> {
+    let checks = usize::from(heart_schedule::HOPELESS_CHECKS);
+    let end = checks * LEVEL_CHECK_SAMPLES;
+    if !session.background
+        || session.asleep
+        || session.brighter
+        || session.cont
+        || session.samples.len() < end
+        || session.movement.len() < checks
+    {
+        return None;
+    }
+    let hopeful = windows.iter().any(|(i, verdict, _)| {
+        *i < end && matches!(verdict, Verdict::Window(Ok(_) | Err(Rejection::Faint(_))))
+    });
+    let busy = session.movement[..checks]
+        .iter()
+        .filter(|&&m| m > CALM)
+        .count();
+    (!hopeful && heart_schedule::hopeless(busy as u8, checks as u8)).then_some(end)
+}
+
 /// A segment's light, for comparing one drive with another on the same
 /// wrist: its mean level (DC), the median of its seconds' peak over their
 /// mean (about the pulse's height, at rest), and the median quality of its
@@ -885,8 +918,9 @@ impl Arm {
 /// strong pairs (see `ppg::Consensus`): only three accepted windows make a
 /// reading.
 ///
-/// A session ends at its reading, or where its recording does: the totals
-/// count the LED time to then. (Recordings end where the firmware that
+/// A session ends at its reading, where the firmware would now give up on
+/// it (see `gives_up`), or where its recording does: the totals count the
+/// LED time to then. (Recordings end where the firmware that
 /// made them stopped, up to 0.10.0-rc.3 often within seconds on a busy
 /// wrist, so sessions are a lower bound on what a longer one would have
 /// read.)
@@ -915,6 +949,12 @@ fn replay(path: &str, strict: bool) {
         }
         let mut verdicts = Vec::new();
         let windows = windows(&session);
+        // A hopeless session ends early, as in the firmware; without a
+        // reading, as no window of its had a rate by then.
+        if let Some(end) = gives_up(&session, &windows) {
+            length = length.min(seconds(end));
+            verdicts.push("[stopped early]".into());
+        }
         let reading = reading(&session, &windows, length, strict);
         let lit = light(&session, &windows);
         let (lit_pulse, lit_dc, lit_quality) = (lit.pulse, lit.dc, lit.quality);
@@ -1469,6 +1509,61 @@ mod tests {
                 session.start
             );
         }
+    }
+
+    /// An awake background session on a busy wrist without a window that
+    /// has a rate ends at 19 s; one asleep, watched, on a mostly calm
+    /// wrist, or with a sign of a pulse runs on.
+    #[test]
+    fn a_hopeless_session_ends_early() {
+        // A level that never changes: every window flat.
+        let flat = Recorded {
+            samples: vec![3000; 30 * LEVEL_CHECK_SAMPLES],
+            movement: vec![400; 30],
+            ..parse_sessions("1 70 37500.0 none 0 | 0 | background").remove(0)
+        };
+        let end = 19 * LEVEL_CHECK_SAMPLES;
+        assert_eq!(gives_up(&flat, &windows(&flat)), Some(end));
+        assert_eq!(replayed(&flat, false), None);
+        let but = |change: fn(&mut Recorded)| {
+            let mut session = parse_sessions("1 70 37500.0 none 0 | 0 | background").remove(0);
+            (session.samples, session.movement) = (flat.samples.clone(), flat.movement.clone());
+            change(&mut session);
+            gives_up(&session, &windows(&session))
+        };
+        assert_eq!(but(|_| ()), Some(end));
+        assert_eq!(but(|s| s.asleep = true), None);
+        assert_eq!(but(|s| s.background = false), None);
+        assert_eq!(but(|s| s.cont = true), None);
+        // Busy at 9 of the 19 checks isn't half; at 10, it is.
+        assert_eq!(but(|s| s.movement[..10].fill(100)), None);
+        assert_eq!(but(|s| s.movement[..9].fill(100)), Some(end));
+        // Shorter than 19 s (an older firmware's stop): nothing to end.
+        assert_eq!(but(|s| s.samples.truncate(18 * LEVEL_CHECK_SAMPLES)), None);
+        // A pulse under the movement: windows with a rate, so it runs on.
+        let scenario = Scenario {
+            noise: 2.0,
+            breathing: 0.0,
+            drift: 0.0,
+            ..Scenario::pulse(70.0, 3)
+        };
+        let mut conversions = Conversions::new();
+        let mut pulse = Recorded {
+            samples: Vec::new(),
+            ..parse_sessions("1 70 37500.0 none 0 | 0 | background").remove(0)
+        };
+        for poll in generate(&scenario) {
+            conversions.poll(poll.raw, poll.at_us, |v| pulse.samples.push(v));
+        }
+        pulse.movement = vec![400; pulse.samples.len() / LEVEL_CHECK_SAMPLES];
+        let windows = windows(&pulse);
+        assert!(pulse.samples.len() >= end && pulse.movement.len() >= 19);
+        assert!(
+            windows
+                .iter()
+                .any(|(i, v, _)| *i < end && matches!(v, Verdict::Window(Ok(_))))
+        );
+        assert_eq!(gives_up(&pulse, &windows), None);
     }
 
     /// The LED experiment's arms (see `heart_schedule::Arm`) and rounds
