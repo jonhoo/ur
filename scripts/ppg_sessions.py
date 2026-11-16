@@ -21,6 +21,10 @@ flags carried over. A segment after a level change within a session
 `heart_schedule::Arm`) say their arm, `arm=dim` or `arm=bright`, and
 background sessions after 0.10.0-rc.3 their round of tries, `round=N`
 (numbered from boot, wrapping at 65536), whose sessions share an arm.
+A segment the accelerometer counted steps through says how many,
+`steps=N` (from its polls' `activity: … N new steps` lines, at `debug`):
+the replay takes no strong pair (see `ppg::Consensus::push_strong`) from
+one, as the firmware takes none on a stepping wrist.
 Background sessions in a logging build after 0.10.0 say their length arm
 too (see `heart_schedule::Length`), `length=longer` or `length=usual`: a
 longer one on a busy wrist may run 90 s rather than 30, which its
@@ -160,7 +164,7 @@ for n, base, up, line in log:
                        "drive": drive, "brighter": False, "cont": False,
                        "arm": arm if up - due_at < 3 else None,
                        "round": round_ if up - due_at < 3 else None,
-                       "length": length if up - due_at < 3 else None}
+                       "length": length if up - due_at < 3 else None, "steps": 0}
             if carried:
                 current.update(asleep=carried["asleep"], background=carried["background"],
                                arm=carried["arm"], round=carried["round"],
@@ -199,6 +203,8 @@ for n, base, up, line in log:
                 current["outcome"] = "none"
             segments.append(current)
         current, carried = None, None
+    elif current and (m := re.search(r"activity: \d+ samples, movement \d+, (\d+) new steps", line)):
+        current["steps"] += int(m[1])
 if current:
     segments.append(current)
 
@@ -213,6 +219,8 @@ with open(sys.argv[3], "w") as out:
             flags.append(f"round={s['round']}")
         if s["length"]:
             flags.append(f"length={s['length']}")
+        if s["steps"]:
+            flags.append(f"steps={s['steps']}")
         out.write(f"{s['t']:.0f} {garmin(mid)} {s['period']:.1f} {s['outcome']} "
                   + " ".join(map(str, s["samples"])) + " | " + " ".join(s["movement"])
                   + " | " + " ".join(flags) + "\n")

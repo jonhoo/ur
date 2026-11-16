@@ -34,7 +34,8 @@
 //!    windows, spread over more than one window's worth of time, agree;
 //!    on a calm wrist, two in a row that agree closely are enough, even
 //!    if neither is quite periodic enough on its own
-//!    ([`Rejection::Faint`]).
+//!    ([`Rejection::Faint`]), as are two strongly periodic ones on any
+//!    wrist.
 //!
 //! Nothing here touches hardware: it takes raw counts and timestamps, and
 //! makes no assumptions about the counts' scale, so it can be exercised on
@@ -844,9 +845,33 @@ const CALM_AGREEMENT_BPM: f32 = 3.0;
 /// pulses still read the usual way, from three windows.
 const MAX_CALM_BPM: f32 = 120.0;
 
+/// The quality (see [`Estimate::quality`]) both of two accepted windows in
+/// a row need to make a reading on a wrist that isn't calm (see
+/// [`Consensus::push_strong`]).
+///
+/// A busy wrist (a desk's typing and reaching) rarely gives the three
+/// accepted windows [`AGREEING`] wants within a session: in the sealed
+/// watch's field logs (1,798 recorded segments, 2026-11-07 to 16, against
+/// a Garmin), 20% of its sessions read, and the ones that failed often
+/// held two clean windows in a row at the Garmin's rate, between bursts.
+/// Replayed over those logs at 0.75, such pairs made 9 more readings
+/// (1,037 rather than 1,028; 6 of the 9 within 5 BPM of the Garmin, 1 more
+/// than 10 off), brought 73 others forward, nearly all by 2 s (so less
+/// LED), and left 37 readings more than 8 BPM off where there were 39. At 0.7
+/// they made 19 more, 6 of them more than 10 off; at 0.8, 6. So 0.75, and
+/// no lower: every other loosening of the estimator tried on those logs
+/// (faint windows among the three, shorter windows, a looser amplitude
+/// check) bought its busy-wrist readings at 15-20% more than 10 BPM off.
+///
+/// None of the 9 came with steps counted during the session, and the logs
+/// hold too little walking to judge one there (33 sessions with 20 steps
+/// or more, of which one read), so `heart` only takes a strong pair on a
+/// wrist that isn't stepping (see `heart::STRONG_STEPLESS_POLLS`).
+const STRONG_CORRELATION: f32 = 0.75;
+
 /// Collects window estimates and decides when they agree on a heart rate.
 ///
-/// Two ways to agree:
+/// Three ways to agree:
 ///
 /// - [`AGREEING`] accepted windows within [`AGREEMENT_BPM`], wherever
 ///   they fall in the session (see [`Consensus::push`]), or
@@ -855,7 +880,12 @@ const MAX_CALM_BPM: f32 = 120.0;
 ///   (see [`Consensus::push_faint`]). Calm, because stillness is what
 ///   lets a weak pulse be seen at all, and what a moving wrist's
 ///   periodic-looking swings lack. That's also ~2 s sooner, and so 2 s
-///   less LED, than waiting for a third window.
+///   less LED, than waiting for a third window. Or
+/// - on any wrist, two accepted windows in a row within
+///   [`CALM_AGREEMENT_BPM`], both of them strongly periodic
+///   ([`STRONG_CORRELATION`]; see [`Consensus::push_strong`]): a busy
+///   wrist's clean stretch between two bursts is often too short for a
+///   third window.
 pub struct Consensus {
     /// The latest accepted estimates, oldest first.
     recent: [f32; AGREEING],
@@ -863,6 +893,9 @@ pub struct Consensus {
     /// The previous window's rate, if it was accepted or faint, on a calm
     /// wrist; NaN if not (or if it was rejected).
     calm: f32,
+    /// The previous window's rate, if it was accepted with at least
+    /// [`STRONG_CORRELATION`]; NaN if not.
+    strong: f32,
 }
 
 impl Default for Consensus {
@@ -877,6 +910,7 @@ impl Consensus {
             recent: [0.0; AGREEING],
             len: 0,
             calm: f32::NAN,
+            strong: f32::NAN,
         }
     }
 
@@ -916,13 +950,37 @@ impl Consensus {
     /// two kinds of synthetic noise, 6 were at 45-49 BPM. It cost no
     /// reading in field-log replays.
     pub fn push_faint(&mut self, bpm: f32, calm: bool, asleep: bool) -> Option<u8> {
+        // A faint window isn't a strong one: no strong pair across it.
+        self.strong = f32::NAN;
         self.pair(bpm, calm && (asleep || bpm >= SLOW_BPM))
     }
 
-    /// Notes a rejected window (or one vetoed for movement), which a calm
-    /// pair can't span.
+    /// Notes an accepted window's `quality`: to be told of every accepted
+    /// window, alongside [`Consensus::push`] (which decides the other two
+    /// ways to agree, and whose reading, if it has one, comes first).
+    ///
+    /// Two accepted windows in a row of at least [`STRONG_CORRELATION`]
+    /// that agree within [`CALM_AGREEMENT_BPM`] make a reading (their
+    /// mean) whatever the wrist is doing. In a row: a faint, rejected or
+    /// vetoed window between them, and they don't (see
+    /// [`Consensus::push_faint`] and [`Consensus::reject`]). And only
+    /// from [`SLOW_BPM`] (a slower rate on a busy wrist is more likely the
+    /// sensor shifting, see [`slow_while_busy`]) to [`MAX_CALM_BPM`] (two
+    /// windows are too coarse an estimate of a faster one, as for a calm
+    /// pair).
+    pub fn push_strong(&mut self, bpm: f32, quality: f32) -> Option<u8> {
+        let strong = quality >= STRONG_CORRELATION && (SLOW_BPM..=MAX_CALM_BPM).contains(&bpm);
+        let previous = core::mem::replace(&mut self.strong, if strong { bpm } else { f32::NAN });
+        // NaN (no strong window before) never agrees.
+        (strong && (bpm - previous).abs() <= CALM_AGREEMENT_BPM)
+            .then(|| libm::roundf((bpm + previous) / 2.0) as u8)
+    }
+
+    /// Notes a rejected window (or one vetoed for movement), which neither
+    /// a calm pair nor a strong one can span.
     pub fn reject(&mut self) {
         self.calm = f32::NAN;
+        self.strong = f32::NAN;
     }
 
     /// The calm pair: this window and the one before, if both were calm

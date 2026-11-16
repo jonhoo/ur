@@ -120,6 +120,27 @@ pub const MOTION_LIMIT: u16 = 1500;
 /// calm is necessary, not sufficient.
 pub const CALM: u16 = 150;
 
+/// Accelerometer polls in a row (2 s each) without steps, up to now, for
+/// two strongly periodic windows in a row to make a reading by themselves
+/// (see `ppg::Consensus::push_strong`): half a minute, a whole session's
+/// length, so none of what either window saw was walked through.
+///
+/// A walking arm swings at half the step cadence, 50-60 times a minute,
+/// which is a plausible pulse, and as periodic as one: on one walk,
+/// sessions read 58-60 BPM at a high window quality against a Garmin's
+/// 97, the PPG having locked onto the swing. Three accepted windows can
+/// agree on that too, as they always could; but the strong pair is new,
+/// was only ever seen to help on wrists that weren't stepping (all 9
+/// readings it added in the replay of the sealed watch's logs, see
+/// `ppg::STRONG_CORRELATION`), and those logs hold too little walking to
+/// say what it reads there. So where it's untested, and the likeliest
+/// wrong reading is a strongly periodic one, it's left out.
+///
+/// TODO: judge it on walks recorded against a reference at 1 s (the
+/// logging build's `accel:` lines give the cadence to compare with), and
+/// then either drop this or reject windows at the wrist's own rhythm.
+const STRONG_STEPLESS_POLLS: u8 = 15;
+
 /// How often to look again, while waiting for a background session to
 /// fall due, at whether movement has brought it forward. Precision isn't
 /// needed (the session waits for a calm wrist anyway), and waking for it
@@ -1258,7 +1279,18 @@ async fn measure(
             "heart: window {} BPM (quality {}, drift {})",
             bpm, estimate.quality, estimate.drift
         );
-        if let Some(bpm) = consensus.push(bpm, calm) {
+        // Both ways to agree are told of the window. A strong pair only
+        // counts on a wrist that isn't stepping (see
+        // `STRONG_STEPLESS_POLLS`), and the usual agreement comes first.
+        let strong = consensus
+            .push_strong(bpm, estimate.quality)
+            .filter(|_| activity::stepless_polls() >= STRONG_STEPLESS_POLLS);
+        let usual = consensus.push(bpm, calm);
+        if usual.is_none() && strong.is_some() {
+            // So a field log says which readings the rule made.
+            debug!("heart: strong pair");
+        }
+        if let Some(bpm) = usual.or(strong) {
             measured = Some(read(bpm, measured, started, at(*level, drive), conversions));
         }
     }

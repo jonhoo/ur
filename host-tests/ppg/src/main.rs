@@ -255,7 +255,8 @@ struct Outcome {
 /// vetoes those during movement). With `pairs`, a window the gate lets
 /// through counts as calm, for `Consensus`'s calm pairs (the firmware
 /// judges that from the accelerometer, which synthetic signals don't
-/// have); without, none does, as before calm pairs.
+/// have); without, none does, as before calm pairs. Strong pairs count
+/// either way, as on any wrist that isn't stepping.
 fn run(polls: &[Poll], gate: impl Fn(f64) -> bool, pairs: bool) -> Outcome {
     let mut conversions = Conversions::new();
     let mut ppg = Ppg::new();
@@ -277,7 +278,11 @@ fn run(polls: &[Poll], gate: impl Fn(f64) -> bool, pairs: bool) -> Outcome {
                     consensus.reject();
                     None
                 }
-                Ok(e) => consensus.push(e.bpm_at(period), pairs),
+                Ok(e) => {
+                    let bpm = e.bpm_at(period);
+                    let strong = consensus.push_strong(bpm, e.quality);
+                    consensus.push(bpm, pairs).or(strong)
+                }
                 Err(Rejection::Faint(e)) => consensus.push_faint(e.bpm_at(period), pairs, false),
                 Err(_) => {
                     consensus.reject();
@@ -538,7 +543,8 @@ const CALM: u16 = 150;
 /// LED (see `heart_schedule::brighter`), `cont` if it carries on after a
 /// level change, and `arm=dim` or `arm=bright` for an awake background
 /// session in the LED experiment (see `heart_schedule::Arm`), with its
-/// `round=N` of tries (logs after 0.10.0-rc.3).
+/// `round=N` of tries (logs after 0.10.0-rc.3), and `steps=N` if steps
+/// were counted while it ran.
 struct Recorded {
     start: String,
     reference: f32,
@@ -555,6 +561,8 @@ struct Recorded {
     bright: Option<bool>,
     /// The round of tries the session belongs to, which share an arm.
     round: Option<u16>,
+    /// Steps counted while it ran (0 if not said).
+    steps: u32,
 }
 
 fn parse_sessions(text: &str) -> Vec<Recorded> {
@@ -592,6 +600,10 @@ fn parse_sessions(text: &str) -> Vec<Recorded> {
                     .split_whitespace()
                     .find_map(|f| f.strip_prefix("round="))
                     .map(|r| r.parse().expect("a round")),
+                steps: sleep
+                    .split_whitespace()
+                    .find_map(|f| f.strip_prefix("steps="))
+                    .map_or(0, |n| n.parse().expect("a step count")),
             }
         })
         .collect()
@@ -758,7 +770,7 @@ fn light(session: &Recorded, windows: &[(usize, Verdict, bool)]) -> Light {
 
 /// The reading the firmware would make from a recorded session's windows
 /// before `end` (seconds): the BPM, and when. `strict`: as before calm
-/// pairs (see `replay`).
+/// and strong pairs (see `replay`).
 fn reading(
     session: &Recorded,
     windows: &[(usize, Verdict, bool)],
@@ -773,7 +785,15 @@ fn reading(
         }
         let pushed = match verdict {
             Verdict::Window(Ok(estimate)) => {
-                consensus.push(estimate.bpm_at(session.period), *calm && !strict)
+                let bpm = estimate.bpm_at(session.period);
+                // A strong pair, unless the wrist was stepping: the
+                // firmware goes by the half minute up to the window
+                // (`heart::STRONG_STEPLESS_POLLS`), which an extract
+                // doesn't have, so by the session's steps here.
+                let strong = consensus
+                    .push_strong(bpm, estimate.quality)
+                    .filter(|_| !strict && session.steps == 0);
+                consensus.push(bpm, *calm && !strict).or(strong)
             }
             Verdict::Window(Err(Rejection::Faint(estimate))) if !strict => {
                 consensus.push_faint(estimate.bpm_at(session.period), *calm, session.asleep)
@@ -861,8 +881,9 @@ impl Arm {
 /// Replays sessions extracted from a field log through `Ppg` and
 /// `Consensus`, vetoing windows on movement as the firmware does, and
 /// prints each window's verdict next to the reference, and the reading the
-/// firmware would now make. `strict` replays the rule before calm pairs
-/// (see `ppg::Consensus`): only three accepted windows make a reading.
+/// firmware would now make. `strict` replays the rule before calm and
+/// strong pairs (see `ppg::Consensus`): only three accepted windows make a
+/// reading.
 ///
 /// A session ends at its reading, or where its recording does: the totals
 /// count the LED time to then. (Recordings end where the firmware that
@@ -1470,9 +1491,10 @@ mod tests {
             parse_sessions(&line.replace(" arm=bright", ""))[0].bright,
             None
         );
-        assert_eq!(session.round, None);
-        let line = line.replace("arm=bright", "arm=bright round=12");
-        assert_eq!(parse_sessions(&line)[0].round, Some(12));
+        assert_eq!((session.round, session.steps), (None, 0));
+        let line = line.replace("arm=bright", "arm=bright round=12 steps=34");
+        let session = &parse_sessions(&line)[0];
+        assert_eq!((session.round, session.steps), (Some(12), 34));
     }
 
     /// Background sessions at a desk (2026-11-09, the Garmin at 84 and
@@ -1530,6 +1552,51 @@ mod tests {
         assert_eq!(c.push(71.0, false), None);
         c.reject();
         assert_eq!(c.push(72.0, false), Some(71));
+    }
+
+    /// Two accepted windows in a row make a reading on any wrist if both
+    /// are strongly periodic (a quality of 0.75) and agree closely, at
+    /// 50 to 120 BPM; anything else between them, and they don't.
+    #[test]
+    fn strong_windows_in_a_row_agree() {
+        let mut c = Consensus::new();
+        assert_eq!(c.push_strong(71.0, 0.75), None);
+        assert_eq!(c.push_strong(73.6, 0.9), Some(72));
+        // And the next with the one before it.
+        assert_eq!(c.push_strong(75.0, 0.8), Some(74));
+        // Too far apart.
+        assert_eq!(c.push_strong(78.5, 0.8), None);
+        // Either of them short of strong.
+        let mut c = Consensus::new();
+        assert_eq!(c.push_strong(71.0, 0.74), None);
+        assert_eq!(c.push_strong(71.0, 0.9), None);
+        assert_eq!(c.push_strong(71.0, 0.74), None);
+        assert_eq!(c.push_strong(71.0, 0.9), None);
+        // A rejected window between them, or a faint one.
+        let mut c = Consensus::new();
+        assert_eq!(c.push_strong(71.0, 0.9), None);
+        c.reject();
+        assert_eq!(c.push_strong(71.0, 0.9), None);
+        assert_eq!(c.push_faint(71.0, false, false), None);
+        assert_eq!(c.push_strong(71.0, 0.9), None);
+        // Too slow for a busy wrist, or too fast for two windows.
+        let mut c = Consensus::new();
+        assert_eq!(c.push_strong(49.0, 0.9), None);
+        assert_eq!(c.push_strong(49.9, 0.9), None);
+        assert_eq!(c.push_strong(50.0, 0.9), None);
+        assert_eq!(c.push_strong(51.0, 0.9), Some(51));
+        let mut c = Consensus::new();
+        assert_eq!(c.push_strong(120.0, 0.9), None);
+        assert_eq!(c.push_strong(121.0, 0.9), None);
+        assert_eq!(c.push_strong(119.0, 0.9), None);
+        assert_eq!(c.push_strong(120.0, 0.9), Some(120));
+        // It doesn't disturb the other ways to agree, told alongside: the
+        // third of three accepted windows still reads, strong or not.
+        let mut c = Consensus::new();
+        for (bpm, expected) in [(70.0, None), (75.0, None), (72.0, Some(72))] {
+            assert_eq!(c.push_strong(bpm, 0.5), None);
+            assert_eq!(c.push(bpm, false), expected);
+        }
     }
 
     /// What's read should be a rate `ppg` says it reports, 40 to 200 BPM,
