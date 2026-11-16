@@ -36,8 +36,9 @@
 pub const MAX_PER_SECOND: u32 = 5;
 
 /// Steps the chip may add at once on top of that: it holds back the first
-/// steps of a walk until four swings in a row (8 steps) have shown it's
-/// one, then adds them all together; the field logs have runs starting
+/// steps of a walk until a few swings in a row have shown it's one (three,
+/// 6 steps, as `activity` sets it up; four with Bosch's defaults), then
+/// adds them all together; with four, the field logs have runs starting
 /// with 8 to 12 at once. More than twice that, for margin.
 pub const MAX_BURST: u32 = 32;
 

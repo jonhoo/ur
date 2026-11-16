@@ -7,14 +7,16 @@
 //!   publishes) that runs a step counter at very low power, so we never see
 //!   the raw motion behind it. We read its running count and keep today's
 //!   total. It runs Bosch's parameters for a wrist (see
-//!   [`STEP_COUNTER_PARAMS`]), and counts the way their wrist algorithm
-//!   does: by the arm's swing, two steps a swing, and only once four
-//!   swings in a row (8 steps) have shown it's a walk, when it adds them
-//!   all at once. So a walk of fewer than 8 steps, or a walk without an
-//!   arm swinging (hands full, pushing a pram), counts nothing, and stop-
-//!   and-go walking indoors loses much of what it does count: in the field
-//!   logs, every run of counting starts with 8 to 12 steps at once, and a
-//!   third of the runs stop right there.
+//!   [`STEP_COUNTER_PARAMS`]) but for one (see [`STEP_BUFFER_SIZE`]), and
+//!   counts the way their wrist algorithm does: by the arm's swing, two
+//!   steps a swing, and only once a few swings in a row have shown it's a
+//!   walk, when it adds them all at once. Bosch's wrist set waits for
+//!   four swings (8 steps); we ask for three (6 steps). So a walk of
+//!   fewer than 6 steps, or a walk without an arm swinging (hands full,
+//!   pushing a pram), counts nothing, and stop-and-go walking indoors
+//!   loses much of what it does count: with Bosch's four swings, every
+//!   run of counting in the field logs started with 8 to 12 steps at
+//!   once, and a third of the runs stopped right there.
 //! - **Movement**: how much the wrist moved each minute, which is what sleep
 //!   tracking runs on. The chip queues accelerometer samples in its FIFO at
 //!   12.5 Hz; every few seconds we drain it and add up how far the
@@ -111,10 +113,59 @@ const STEP_COUNTER_ENABLE: (usize, u8) = (0x3A + 1, 0x10);
 /// driver wrote from `bma423_select_platform(BMA423_WRIST_CONFIG)`, which
 /// called it the default (the other set being for a phone). They're the
 /// bytes at 0x208 into `bma423_config.bin`, and the window reads them back
-/// on the dev kit. Bosch documents none of them individually, and warns
-/// that they depend on each other, so we leave them alone; setup logs them
-/// (at debug) so a field log shows what a watch ran.
+/// on the dev kit.
+///
+/// Bosch documents none of them for this chip, and warns that they depend
+/// on each other. But that driver's phone set is, value for value, the
+/// defaults of the BMI323's step counter, whose header (`bmi3_defs.h`, in
+/// Bosch's BMI323_SensorAPI) names its fields. Matched by those values,
+/// the first seven here are:
+///
+/// | # | at   | wrist  | phone  | BMI323's field                           |
+/// |---|------|--------|--------|------------------------------------------|
+/// | 1 | 0x08 | 301    | 306    | `env_min_dist_up`: upper peak threshold  |
+/// | 2 | 0x0A | 0x7BD4 | 0x78E6 | `env_coef_up`: its decay                 |
+/// | 3 | 0x0C | 315    | 132    | `env_min_dist_down`: lower peak threshold|
+/// | 4 | 0x0E | 0x7ADB | 0x6C9C | `env_coef_down`: its decay               |
+/// | 5 | 0x10 | 4      | 7      | `step_buffer_size` ([`STEP_BUFFER_SIZE`])|
+/// | 6 | 0x12 | 0x7B3F | 0x7564 | `mean_val_decay`                         |
+/// | 7 | 0x14 | 0x6CCD | 0x7EAA | `mean_step_dur`                          |
+///
+/// (The BMI323's struct has `step_buffer_size` after `mean_step_dur`; the
+/// values say this window has it before.) The rest are unidentified, and
+/// we change only the fifth. Setup logs them all as the chip reads them
+/// back (at debug), so a field log shows what a watch ran.
 const STEP_COUNTER_PARAMS: core::ops::Range<usize> = 0x08..0x3A;
+/// Within those, the fifth: "minimum number of consecutive steps to be
+/// detected for updating step count" (`bmi3_defs.h`), and what we set it
+/// to. With the wrist set, what it counts are arm swings, two steps each:
+/// under Bosch's 4, none of the 1,258 runs of counting in a week of field
+/// logs opened with fewer than 8 steps, and 97% opened with 8, 10 or 12
+/// (the 8 held back, and what the same 2 s poll added).
+///
+/// 3 makes that 6 steps, for the stop-and-go walking that 4 loses.
+/// Against a Garmin on the other wrist, five days mostly about the house
+/// counted 73% of its steps, while continuous walks matched it; and the
+/// runs' lengths are cut off at their peak (284 of 8 steps, 176 of 10, 140
+/// of 12), which puts roughly 300 more at 6. On an afternoon of counted
+/// walks with the samples logged, where the count was right it stays so:
+/// 200 counted steps came to 196–214 with the arm swinging, in a pocket or
+/// carrying, on either wrist, bouts of 16–80 steps came to 97–99%, and a
+/// walk that passes four swings passes three. What 3 adds is the bouts of
+/// 6 or 7 steps: 6 to 11 of those that afternoon, 1% of its steps, but
+/// 6–11% of those in its stop-and-go stretches.
+///
+/// The price is in what isn't walking: three swings' worth of arm
+/// movement now counts 6 steps, so the ~160 steps a day counted where the
+/// Garmin saw none should about double.
+///
+/// To judge it from a field log alone, `scripts/step_runs.py` gives the
+/// runs' opening bursts and lengths: runs opening with 6 say the chip
+/// counts by this, and the runs of 6 steps and no more are what it added.
+///
+/// TODO: 2 (a 4-step filter) would add about as much again, with three to
+/// four times the false steps; try it only once this is measured.
+const STEP_BUFFER_SIZE: (usize, u16) = (0x10, 3);
 /// The any-motion and no-motion settings (offsets 0x00 and 0x04), two
 /// little-endian words each: the threshold (11 bits, in 1/2048 g), then the
 /// duration (13 bits, in 20 ms steps) with the axes to watch in its top
@@ -184,6 +235,10 @@ const _: () = assert!(STEP_COUNTER_PARAMS.end <= STEP_COUNTER_ENABLE.0);
 const _: () = assert!(STEP_COUNTER_ENABLE.0 < SETTINGS_LEN);
 const _: () = assert!(ANY_MOTION_OFFSET + 4 <= NO_MOTION_OFFSET);
 const _: () = assert!(NO_MOTION_OFFSET + 4 <= STEP_COUNTER_PARAMS.start);
+const _: () = assert!(
+    STEP_COUNTER_PARAMS.start <= STEP_BUFFER_SIZE.0
+        && STEP_BUFFER_SIZE.0 + 2 <= STEP_COUNTER_PARAMS.end
+);
 const _: () = assert!(ANY_MOTION.threshold < 1 << 11 && ANY_MOTION.samples < 1 << 13);
 const _: () = assert!(NO_MOTION.threshold < 1 << 11 && NO_MOTION.samples < 1 << 13);
 // No-motion's threshold is under any-motion's, so the two don't take turns.
@@ -332,10 +387,11 @@ impl Bma421 {
         self.read(REG_FEATURES, &mut features[1..]).await?;
         features[0] = REG_FEATURES;
         let window = &mut features[1..];
-        debug!(
-            "activity: step counter parameters {=[u8]:02x}",
-            window[STEP_COUNTER_PARAMS]
-        );
+        // What the config's defaults had for the step buffer, for the log
+        // below: Bosch's 4, unless the blob ever changes.
+        let default_buffer = window[STEP_BUFFER_SIZE.0];
+        window[STEP_BUFFER_SIZE.0..STEP_BUFFER_SIZE.0 + 2]
+            .copy_from_slice(&STEP_BUFFER_SIZE.1.to_le_bytes());
         window[STEP_COUNTER_ENABLE.0] |= STEP_COUNTER_ENABLE.1;
         set_motion(window, ANY_MOTION_OFFSET, &ANY_MOTION);
         set_motion(window, NO_MOTION_OFFSET, &NO_MOTION);
@@ -353,6 +409,13 @@ impl Bma421 {
             );
             return Err(());
         }
+        // The step counter's parameters as the chip now has them, the
+        // step buffer among them (the fifth word), so that a field log
+        // shows a sealed watch took it. Once a setup: a few a day at most.
+        debug!(
+            "activity: step counter parameters read back {=[u8]:02x} (step buffer was {=u8})",
+            written[STEP_COUNTER_PARAMS], default_buffer
+        );
 
         // Any-motion to INT1 (P0.08; see `motion_task`). Latched: the pin
         // stays high until `INT_STATUS_0` is read, so even a short pulse is

@@ -42,8 +42,8 @@ mod tests {
 
     #[test]
     fn a_walk_starts_with_a_burst() {
-        // The chip holds the first 8 steps back, then adds them at once,
-        // with the poll's own.
+        // The chip holds a walk's first steps back (6, or 8 with Bosch's
+        // defaults), then adds them at once, with the poll's own.
         let mut counter = StepCounter::new(0);
         assert_eq!(counter.read(12, POLL), Read::Counted(12));
     }
