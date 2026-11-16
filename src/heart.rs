@@ -10,14 +10,12 @@
 //!   or two minutes on if it isn't, or at once if a reading is overdue
 //!   ([`heart_schedule::Schedule::start`]), for up to [`SESSION_LIMIT`] or
 //!   until it has a reading (typically ~11 s), carrying on through
-//!   movement (see `heart_schedule`'s "Trying through movement"); if it
-//!   runs out on a calm wrist with a pulse too faint to read, it may go on
-//!   for another 15 s with a brighter LED, once or twice
-//!   ([`heart_schedule::brighter`]); awake, every other
-//!   round of tries (a scheduled session and its retries) starts with a
-//!   brighter LED (see [`Arm`]); both are an experiment (and the logging
-//!   build logs the accelerometer's samples through every awake session,
-//!   see `trace_accel`), and
+//!   movement (see `heart_schedule`'s "Trying through movement"), unless
+//!   it's plainly getting nowhere ([`heart_schedule::hopeless`]); awake,
+//!   every other round of tries (a scheduled session and its retries)
+//!   starts with a brighter LED (see [`Arm`]), an experiment (and the
+//!   logging build logs the accelerometer's samples through every awake
+//!   session, see `trace_accel`), and
 //! - while the clock face is showing (see
 //!   [`crate::heart_reading::set_watching`]), continuously,
 //!   since then someone is looking at the number, and
@@ -84,9 +82,11 @@ use crate::ppg::{Consensus, Conversions, Ppg, Rejection};
 /// [`heart_schedule::OVERDUE_RETRY`]).
 ///
 /// A background session runs all of it however the wrist moves, unless
-/// it reads, or finds no skin: a busy wrist may settle within it, and its
-/// samples under movement, in a field log, are the data a motion-tolerant
-/// estimator needs (see `heart_schedule`'s "Trying through movement").
+/// it reads, finds no skin, or has had no sign of a pulse from a busy
+/// wrist by 19 s (see [`heart_schedule::hopeless`]): a busy wrist may
+/// settle within it, and its samples under movement, in a field log, are
+/// the data a motion-tolerant estimator needs (see `heart_schedule`'s
+/// "Trying through movement").
 const SESSION_LIMIT: Duration = Duration::from_secs(30);
 
 /// Wrist movement (see [`activity::movement`]) above which the PPG can't be
@@ -221,9 +221,9 @@ struct Level {
 /// sessions.
 ///
 /// These only follow the light level, which on a wrist sits at the second
-/// (12.5 mA ×2: 1,600-4,000) whatever the pulse. A background session
-/// may raise the drive alone, keeping the gain, once its usual 30 s have
-/// found only a faint pulse (see [`heart_schedule::brighter`]).
+/// (12.5 mA ×2: 1,600-4,000) whatever the pulse. A background session on
+/// the bright arm starts with the drive alone raised, keeping the gain
+/// (see [`heart_schedule::bright_start`]).
 ///
 /// TODO: gain ×64 (HGAIN 0b100) exists too; try it if ×8 at 40 mA is ever
 /// not enough.
@@ -299,13 +299,11 @@ const _: () = {
 // Stepping up from a weak signal can't land in saturation, nor the other
 // way round, or the level would bounce between two for the whole session.
 const _: () = assert!(NO_CONTACT < NO_SKIN && NO_SKIN < WEAK && 2 * WEAK < SATURATED);
-// A brighter phase's predicted peak stays clear of where the level check
+// A bright start's predicted peak stays clear of where the level check
 // steps back down.
-const _: () = assert!(heart_schedule::BRIGHTER_PEAK_LIMIT < SATURATED);
-// The budget's reserve is a whole session (see `SESSION_RESERVE`), and a
-// brighter phase is shorter than one.
+const _: () = assert!(heart_schedule::BRIGHT_PEAK_LIMIT < SATURATED);
+// The budget's reserve is a whole session (see `SESSION_RESERVE`).
 const _: () = assert!(SESSION_LIMIT.as_secs() == heart_schedule::SESSION_RESERVE as u64);
-const _: () = assert!(heart_schedule::BRIGHTER_FOR as u64 <= SESSION_LIMIT.as_secs());
 // A session gives up for want of a window only once several could have
 // come (the first takes a window's worth of samples, the rest 2 s each),
 // and before its time is up.
@@ -652,7 +650,7 @@ pub async fn heart_task(i2c: Device) {
             ACCEL.store(ACCEL_SESSION, Ordering::Relaxed);
         }
         // What the session spends of the budget, at 12.5 mA's rate (see
-        // `heart_schedule::budget_seconds`): a brighter phase costs more.
+        // `heart_schedule::budget_seconds`): a bright start costs more.
         let mut spent = 0;
         let mut peak = 0;
         let outcome = measure(
@@ -660,7 +658,6 @@ pub async fn heart_task(i2c: Device) {
             &mut level,
             drive,
             &mut conversions,
-            background.then_some(budget),
             // Awake, and the schedule's: such a session ends early if it's
             // getting nowhere (see `heart_schedule::hopeless`).
             background && !asleep,
@@ -844,7 +841,7 @@ enum Ended {
     /// We have a reading (and nobody's watching for more): the last, in
     /// BPM.
     Measured(u8),
-    /// No reading within [`SESSION_LIMIT`] (and any brighter phases); `calm`
+    /// No reading within [`SESSION_LIMIT`]; `calm`
     /// if the wrist was calm through most of it (see
     /// [`heart_schedule::calm_throughout`]).
     TimedOut { calm: bool },
@@ -866,27 +863,21 @@ enum Ended {
 /// One measurement session: turn the sensor on, sample until we have a
 /// reading (and keep going while someone's watching), adjusting the level
 /// as needed. It starts at `drive`, the level's or a bright arm's (see
-/// [`Arm`]). `budget`: the schedule's LED budget at the start, if the
-/// schedule started it (rather than someone looking at the clock face).
-/// `stop_early`: whether it may end before its time if it's getting nowhere
+/// [`Arm`]). `stop_early`: whether it may end before its time if it's getting nowhere
 /// (see [`heart_schedule::hopeless`]), which an awake background session
 /// may. `spent` is set to what the session cost the budget, and `skin_peak` to
 /// its last second's peak, scaled to 12.5 mA ×1.
-// One more than clippy likes: what the session is, and what it reports.
-#[allow(clippy::too_many_arguments)]
 async fn measure(
     hrs: &mut Hrs3300,
     level: &mut usize,
     drive: u8,
     conversions: &mut Conversions,
-    budget: Option<u32>,
     stop_early: bool,
     spent: &mut u32,
     skin_peak: &mut u32,
 ) -> Result<Ended, ()> {
     // The LED's drive: `LEVELS[*level]`'s, unless the session started
-    // brighter or a phase of it has gone brighter (see
-    // `heart_schedule::brighter`), keeping the gain.
+    // brighter (see `heart_schedule::bright_start`), keeping the gain.
     let mut drive = drive;
     let at = |level: usize, drive: u8| Level {
         drive,
@@ -895,14 +886,6 @@ async fn measure(
     hrs.on(at(*level, drive)).await?;
     // Ends the LED's on-time when the session returns, however it returns.
     let mut led = LedMeter::new(drive, spent);
-    // When the session's current phase runs out (its usual limit, or a
-    // brighter phase's), and the brighter phases so far: a bright arm's
-    // start counts as one.
-    let (mut limit, mut steps) = (SESSION_LIMIT, u8::from(drive != LEVELS[*level].drive));
-    // Whether the latest window was faint or aperiodic on a calm wrist,
-    // and the last whole second's mean and peak: what a brighter phase
-    // goes by.
-    let (mut last_failed, mut last_mean, mut last_peak) = (false, 0u32, 0u32);
     conversions.restart();
     let mut ppg = Ppg::new();
     let mut consensus = Consensus::new();
@@ -940,42 +923,15 @@ async fn measure(
             trace_samples(&second);
             return Ok(Ended::Charger(measured));
         }
-        // A phase that ran out without a reading on a calm wrist may go on
-        // brighter (see `heart_schedule::brighter`).
-        let brighter = budget
-            .filter(|_| !watching() && measured.is_none() && elapsed >= limit)
-            .filter(|_| last_failed && heart_schedule::calm_throughout(busy, checks))
-            .and_then(|budget| {
-                let spare = budget.saturating_sub(led.spent());
-                heart_schedule::brighter(drive, steps, last_peak, spare)
-            });
-        if let Some(next) = brighter {
-            // The part-second at the dimmer drive, for the replay.
-            trace_samples(&second);
-            info!(
-                "heart: brighter after {} s: drive {}, from mean {}, pulse {}",
-                elapsed.as_secs(),
-                next,
-                last_mean,
-                last_peak.saturating_sub(last_mean)
-            );
-            drive = next;
-            steps += 1;
-            limit = elapsed + Duration::from_secs(u64::from(heart_schedule::BRIGHTER_FOR));
-            hrs.on(at(*level, drive)).await?;
-            led.switch(drive);
-            conversions.restart();
-            ppg.reset();
-            consensus.reject();
-            (peak, sum, count, last_failed) = (0, 0, 0, false);
-            second.clear();
-            continue;
-        }
         let ended = if watching() {
             None
         } else if let Some(bpm) = measured {
             Some(Ended::Measured(bpm))
-        } else if elapsed >= limit {
+        } else if elapsed >= SESSION_LIMIT {
+            // Out of time, and that's the end of it. (Up to 0.11.3-rc.2 a
+            // session on a calm wrist with a faint pulse went on here for
+            // 15 s with a brighter LED, once or twice: 1 of 12 such phases
+            // read. See `heart_schedule::bright_start`.)
             Some(Ended::TimedOut {
                 calm: heart_schedule::calm_throughout(busy, checks),
             })
@@ -1047,7 +1003,6 @@ async fn measure(
                     // Too bright after all: back to the session's level,
                     // for good.
                     drive = LEVELS[*level].drive;
-                    steps = heart_schedule::BRIGHTER_STEPS;
                 } else if *level == 0 {
                     return Ok(Ended::TooBright);
                 } else {
@@ -1071,7 +1026,6 @@ async fn measure(
                 // Any brighter drive was the old level's.
                 drive = LEVELS[*level].drive;
             }
-            (last_mean, last_peak) = (mean, peak);
             *skin_peak = (peak >> LEVELS[before.0].gain) * heart_schedule::DRIVE_CURRENT[0]
                 / heart_schedule::DRIVE_CURRENT[usize::from(before.1)];
             (peak, sum, count) = (0, 0, 0);
@@ -1097,7 +1051,6 @@ async fn measure(
                 ppg.reset();
                 // Windows either side aren't in a row, to pair.
                 consensus.reject();
-                last_failed = false;
                 continue;
             }
         }
@@ -1109,11 +1062,6 @@ async fn measure(
         // wrist, alongside the next; the movement vetoes below can't apply
         // to one, as calm is stricter than either.
         let calm = movement.iter().all(|&m| m <= CALM);
-        last_failed = calm
-            && matches!(
-                verdict,
-                Err(Rejection::Faint(_) | Rejection::Aperiodic { .. })
-            );
         let (estimate, faint) = match verdict {
             Ok(estimate) => (estimate, false),
             Err(Rejection::Faint(estimate)) => (estimate, true),
@@ -1205,8 +1153,7 @@ fn read(
 // The samples through each session (at trace)
 // ==============================================================================
 
-/// Logs a part-second of samples (a session's end, or the dimmer drive's
-/// before a brighter phase), for the replay (host-tests/ppg, through
+/// Logs a part-second of samples (a session's end), for the replay (host-tests/ppg, through
 /// `scripts/ppg_sessions.py`).
 ///
 /// A field build packs them as differences (see [`crate::log_pack`]):

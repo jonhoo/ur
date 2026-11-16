@@ -828,34 +828,6 @@ mod tests {
     }
 
     #[test]
-    fn brighter_goes_up_two_drives_as_far_as_headroom_allows() {
-        let plenty = LED_BUDGET;
-        // A wrist's usual level at 12.5 mA ×2: 30 mA, ×2.4.
-        assert_eq!(brighter(0, 0, 2500, plenty), Some(2));
-        assert_eq!(brighter(0, 0, 3413, plenty), Some(2));
-        // Too bright for 30 mA, not for 20.
-        assert_eq!(brighter(0, 0, 3500, plenty), Some(1));
-        assert_eq!(brighter(0, 0, 5200, plenty), None);
-        // From 30 mA, only 40 is left.
-        assert_eq!(brighter(2, 1, 2500, plenty), Some(3));
-        assert_eq!(brighter(2, 1, 6200, plenty), None);
-        assert_eq!(brighter(1, 1, 2000, plenty), Some(3));
-        assert_eq!(brighter(3, 1, 100, plenty), None);
-        // At most twice a session.
-        assert_eq!(brighter(1, BRIGHTER_STEPS, 1000, plenty), None);
-    }
-
-    #[test]
-    fn brighter_leaves_the_next_session_its_reserve() {
-        // 15 s at 30 mA is 36 s of budget, at 20 mA 24.
-        let needed = |drive| budget_seconds(drive, BRIGHTER_FOR * 1000) + SESSION_RESERVE;
-        assert_eq!(brighter(0, 0, 2000, needed(2)), Some(2));
-        assert_eq!(brighter(0, 0, 2000, needed(2) - 1), Some(1));
-        assert_eq!(brighter(0, 0, 2000, needed(1) - 1), None);
-        assert_eq!(brighter(0, 0, 2000, 0), None);
-    }
-
-    #[test]
     fn a_reading_ends_the_failure_back_off() {
         let mut schedule = Schedule::new();
         for t in [0, 300] {
@@ -1292,10 +1264,10 @@ mod tests {
         assert_eq!(schedule.due(0, false), (overdue + 30, Why::Budget));
     }
 
-    /// A whole day overdue, every session failing calm and going on
-    /// brighter as often as the budget allows (30 s dim, then 15 s at
-    /// 30 mA and 15 s at 40 mA, 114 s of budget in all), as `heart` does:
-    /// the doubled budget caps the LED, the worst case docs/power-plan.md
+    /// A whole day overdue, every session failing calm at its full 30 s on
+    /// the bright arm, at the brightest start the budget allows (72 budget
+    /// seconds at 30 mA, 48 at 20 mA, 30 at 12.5), as `heart` does: the
+    /// doubled budget caps the LED, the worst case docs/power-plan.md
     /// works from.
     #[test]
     fn the_doubled_budget_caps_an_overdue_day() {
@@ -1304,13 +1276,9 @@ mod tests {
         while t < 24 * HOUR {
             let (due, _) = schedule.due(0, false);
             t = t.max(due);
-            let budget = schedule.budget(t);
-            let (mut cost, mut drive, mut steps) = (30, 0, 0);
-            while let Some(next) = brighter(drive, steps, 2500, budget.saturating_sub(cost)) {
-                cost += budget_seconds(next, BRIGHTER_FOR * 1000);
-                (drive, steps) = (next, steps + 1);
-            }
-            t += 60;
+            let drive = bright_start(0, 2500, schedule.budget(t)).unwrap_or(0);
+            let cost = budget_seconds(drive, 30_000);
+            t += 30;
             schedule.ended(t, cost, Outcome::CalmNoReading, true, awake(0));
             spent.push((t, cost));
         }
@@ -1320,8 +1288,8 @@ mod tests {
                 .filter(|(t, _)| (hour * HOUR..(hour + 1) * HOUR).contains(t))
                 .map(|(_, s)| s)
                 .sum();
-            assert!(spent <= OVERDUE_BUDGET + 114, "hour {hour}: {spent} s");
-            assert!(spent > LED_BUDGET + 114, "hour {hour}: {spent} s");
+            assert!(spent <= OVERDUE_BUDGET + 72, "hour {hour}: {spent} s");
+            assert!(spent > LED_BUDGET, "hour {hour}: {spent} s");
         }
     }
 }
@@ -1642,8 +1610,7 @@ mod proofs {
     }
 
     /// For every drive setting, and every length of LED time up to ten
-    /// minutes (a session's most is one: its 30 s and two brighter phases
-    /// of 15 s): what it costs the budget is its charge in seconds at
+    /// minutes (a session's most is half of one): what it costs the budget is its charge in seconds at
     /// the lowest drive (12.5 mA), rounded up, so never under, and under
     /// a second over; whole seconds at the lowest drive cost themselves;
     /// and a brighter drive never costs less.
@@ -1671,54 +1638,26 @@ mod proofs {
         }
     }
 
-    /// What `brighter` and `bright_start` promise of the drive they step
-    /// up to, if any: it's one or two settings up, and still a setting
-    /// (at most 3); and `peak`, scaled with the current, stays within
-    /// `BRIGHTER_PEAK_LIMIT` there.
+    /// What `bright_start` promises of the drive it steps up to, if any:
+    /// it's one or two settings up, and still a setting (at most 3); and
+    /// `peak`, scaled with the current, stays within `BRIGHT_PEAK_LIMIT`
+    /// there.
     fn steps_up_within_the_peak_limit(drive: u8, peak: u32, next: u8) {
         assert!(drive < next && next <= drive + 2 && next <= 3);
         let (now, then) = (
             u64::from(DRIVE_CURRENT[usize::from(drive)]),
             u64::from(DRIVE_CURRENT[usize::from(next)]),
         );
-        assert!(u64::from(peak) * then <= u64::from(BRIGHTER_PEAK_LIMIT) * now + now - 1);
+        assert!(u64::from(peak) * then <= u64::from(BRIGHT_PEAK_LIMIT) * now + now - 1);
     }
 
-    /// For every drive setting, peak and spare budget: a session goes on
-    /// brighter at most `BRIGHTER_STEPS` times, only to a drive
-    /// [`steps_up_within_the_peak_limit`] allows, and only if the spare
-    /// budget covers the phase and still leaves the next session's
-    /// reserve. From 12.5 mA, with a faint enough peak and budget enough,
-    /// it does go on, at 30 mA.
+    /// For every drive setting, expected peak and budget: a session starts
+    /// brighter only at a drive [`steps_up_within_the_peak_limit`] allows,
+    /// and only if the budget covers a whole session there.
     ///
     /// The drive is a setting, 0..=3, as `heart` always passes: at 254
     /// and 255 `step_up`'s `drive + 1` and `drive + 2` overflow (and the
     /// proof says so, without this bound).
-    #[kani::proof]
-    #[kani::unwind(4)]
-    fn going_on_brighter_stays_within_the_peak_and_the_budget() {
-        let (drive, steps, peak, spare): (u8, u8, u32, u32) = kani::any();
-        kani::assume(drive <= 3);
-        match brighter(drive, steps, peak, spare) {
-            Some(next) => {
-                assert!(steps < BRIGHTER_STEPS);
-                steps_up_within_the_peak_limit(drive, peak, next);
-                let phase = budget_seconds(next, BRIGHTER_FOR * 1000);
-                assert!(spare >= phase + SESSION_RESERVE);
-            }
-            None => {
-                // 15 s at 30 mA are 36 budget seconds; 8192 counts at
-                // 12.5 mA would be 19661 at 30 mA, and 3413 just fit.
-                let could = drive == 0 && steps == 0 && peak <= 3413;
-                assert!(!could || spare < 36 + SESSION_RESERVE);
-            }
-        }
-    }
-
-    /// For every drive setting (0..=3, as above), expected peak and
-    /// budget: a session starts brighter only at a drive
-    /// [`steps_up_within_the_peak_limit`] allows, and only if the budget
-    /// covers a whole session there.
     #[kani::proof]
     #[kani::unwind(4)]
     fn starting_bright_stays_within_the_peak_and_the_budget() {

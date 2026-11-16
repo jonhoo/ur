@@ -14,8 +14,8 @@ clock face (logs from before 0.9.0's `heart: due` line never say so).
 The third section also has the LED's `drive=N` (0-3: 12.5-40 mA; logs
 before 0.10's brighter phases have it from the level lines too), and
 `brighter` for a segment that went on with a brighter LED after the one
-before it ran out (see `heart_schedule::brighter`): the same session, its
-flags carried over. A segment after a level change within a session
+before it ran out (0.10 to 0.11.3-rc.2; the replay leaves these out, as
+sessions no longer do it): the same session, its flags carried over. A segment after a level change within a session
 (a bright start stepping back down, say) carries them over too, marked
 `cont`. Awake background sessions from 0.10's LED experiment (see
 `heart_schedule::Arm`) say their arm, `arm=dim` or `arm=bright`, and

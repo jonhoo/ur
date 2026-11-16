@@ -59,8 +59,7 @@
 //! hardware-free: a due background session waits up to two minutes for the
 //! wrist to be calm for a few seconds ([`START_CALM_POLLS`],
 //! [`CALM_WAIT`]), or not at all once a reading is overdue
-//! ([`Schedule::start`]), and, if it runs out of time on a calm wrist with
-//! a faint pulse, may go on brighter ([`brighter`]). Once started, it runs
+//! ([`Schedule::start`]). Once started, it runs
 //! its full length however the wrist moves (see below), unless it reads
 //! first, finds no skin, or is plainly getting nowhere on a busy wrist
 //! ([`hopeless`]).
@@ -126,9 +125,7 @@
 //! now waits for calm for at most [`CALM_WAIT`] (two minutes), and once a
 //! reading is overdue, not at all (see [`Schedule::start`]). At a desk,
 //! calm comes within the two minutes 71% of the time, so most sessions
-//! still start calm; walking, 31%. A session started busy can
-//! still go on [`brighter`] at its end only if the wrist then calmed down
-//! for most of it ([`calm_throughout`]), and [`bright_start`] is as before.
+//! still start calm; walking, 31%. ([`bright_start`] is as before.)
 //!
 //! What it costs: the schedule makes the same tries, just without the
 //! wait. At its worst, a day on a wrist never calm long enough (walking,
@@ -334,7 +331,7 @@ const SEED_AGREEMENT: u8 = 6;
 /// drain more than ~0.23 mA on average.
 ///
 /// Seconds at the lowest drive, 12.5 mA, which is all sessions use but
-/// for the occasional [`brighter`] phase and the bright arm (see [`Arm`]):
+/// for the bright arm (see [`Arm`]):
 /// a second at 30 mA costs 2.4 (see [`budget_seconds`]).
 ///
 /// It was 180 s (what the fixed schedule this replaced spent at worst, six
@@ -369,7 +366,7 @@ const _: () = assert!(SESSION_RESERVE <= LED_BUDGET);
 /// How long without a reading (any, watched or not; or since boot) before
 /// one is overdue, asleep or awake. Overdue, the [`LED_BUDGET`] doubles
 /// ([`OVERDUE_BUDGET`]) and a failure is retried within [`OVERDUE_RETRY`],
-/// so that more sessions, and more of them brighter (see [`brighter`] and
+/// so that more sessions, and more of them brighter (see
 /// [`bright_start`]), have a go, until a reading comes and it all returns
 /// to normal.
 ///
@@ -1099,11 +1096,8 @@ fn moved(active_polls: u8, asleep: bool) -> bool {
 /// a twitch, or turning over; more, and it's a wrist that won't keep still,
 /// which the usual back-off is for.
 ///
-/// It also keeps a busy wrist's session from going on [`brighter`]: now
-/// that a session runs its full length through movement, a desk session
-/// often runs out on a wrist that was busy for much of it, and more light
-/// doesn't steady the sensor on the skin. (Its last window must be calm
-/// too, so a wrist that settles only at the end doesn't qualify either.)
+/// (Up to 0.11.3-rc.2 it also decided whether a session that ran out of
+/// time might go on with a brighter LED: see [`bright_start`].)
 pub fn calm_throughout(busy: u8, checks: u8) -> bool {
     u16::from(busy) * 4 <= u16::from(checks)
 }
@@ -1126,29 +1120,21 @@ pub fn hopeless(busy: u8, checks: u8) -> bool {
 }
 
 // ==============================================================================
-// A brighter LED for a faint pulse (an experiment)
+// A brighter LED (an experiment)
 // ==============================================================================
 
 /// The LED's current at each drive setting (`heart`'s PDRIVE 0..=3), in
 /// tenths of a milliamp, from the HRS3300 datasheet: 12.5, 20, 30, 40 mA.
 /// The light that comes back, and so the counts, scale with it (as far as
-/// the datasheet goes; tomorrow's log will tell).
+/// the datasheet goes).
 pub const DRIVE_CURRENT: [u32; 4] = [125, 200, 300, 400];
 
-/// Brighter phases a background session may add (see [`brighter`]).
-pub const BRIGHTER_STEPS: u8 = 2;
-
-/// How long a brighter phase runs, at most: half a second warming up and
-/// settling, the first 8 s window, and three more after it, 2 s apart, so
-/// a calm pair or three accepted windows can form.
-pub const BRIGHTER_FOR: u32 = 15;
-
-/// The highest a brighter phase's peak may be expected to reach, in counts:
+/// The highest a bright start's peak may be expected to reach, in counts:
 /// half the 14-bit ADC's range. The prediction scales the last second's
 /// peak with the current, and the LED's light may not be quite linear in
 /// it, while the level check steps back down at 90% of full scale; half
 /// leaves the pulse and a shift of the sensor room before that.
-pub const BRIGHTER_PEAK_LIMIT: u32 = 1 << 13;
+pub const BRIGHT_PEAK_LIMIT: u32 = 1 << 13;
 
 /// What `millis` of LED at `drive` cost the [`LED_BUDGET`], which counts
 /// seconds at the lowest drive (12.5 mA), rounded up.
@@ -1160,56 +1146,35 @@ pub fn budget_seconds(drive: u8, millis: u32) -> u32 {
     weighted.div_ceil(1000 * u64::from(DRIVE_CURRENT[0])) as u32
 }
 
-/// The brighter drive a background session should go on at, if any, now
-/// that a phase (the session's usual 30 s at its starting drive, or a
-/// brighter phase's [`BRIGHTER_FOR`]) has run out without a reading on a
-/// calm wrist, its last window faint or aperiodic: it has `peak` counts
-/// at `drive`, has taken `steps` so far, and `spare` seconds of the
-/// [`LED_BUDGET`] would be left after this session's so far.
-///
-/// An experiment: does more light lift a faint pulse out of the noise?
-/// A still wrist at a desk, or lying awake, had a pulse of 2.9-5 counts
-/// on a light level of 1,600-4,000 at 12.5 mA (2026-11-09), and the level
-/// control never moves off its lowest drive there, as that only steps up
-/// for a level under ~1,000. If the noise is the sensor's own (shot noise,
-/// or the ADC's), 30 mA would raise the pulse 2.4× against noise that
-/// grows only ~1.5×; if it's the light itself flickering (the interference
-/// one analysis found to scale with the level), it gains nothing. Field
-/// logs say which.
-///
-/// Only once the session has had its usual chance at the dim drive, so a
-/// session that reads at the dim drive reads exactly as before (and so the
-/// replay of recorded sessions, which can't show a brighter LED, still
-/// holds): stepping at the first faint window instead would have cut short
-/// 9 of the 91 background sessions that read at night (2026-11-08), which
-/// read from later windows; at 14 s, 3.
-///
-/// Up two drive settings at a time (30 mA from 12.5), or one if that would
-/// take the peak past [`BRIGHTER_PEAK_LIMIT`], and only while `spare`
-/// covers the phase and still leaves [`SESSION_RESERVE`] for the next
-/// session: a brighter phase is the budget's to spend only when it's not
-/// needed for ordinary sessions.
-pub fn brighter(drive: u8, steps: u8, peak: u32, spare: u32) -> Option<u8> {
-    if steps >= BRIGHTER_STEPS {
-        return None;
-    }
-    step_up(drive, peak, |next| {
-        spare >= budget_seconds(next, BRIGHTER_FOR * 1000) + SESSION_RESERVE
-    })
-}
-
 /// The drive an awake background session in the experiment's bright arm
 /// should start at, rather than its level's `drive` (see [`Arm`]):
 /// two settings up (30 mA from 12.5), or one if the `peak` expected at
 /// `drive` (the last session's last second, scaled to this level) would
-/// pass [`BRIGHTER_PEAK_LIMIT`] at 30 mA, or none; and only if the
+/// pass [`BRIGHT_PEAK_LIMIT`] at 30 mA, or none; and only if the
 /// `budget` covers a whole session (`SESSION_RESERVE` seconds) at it.
 ///
-/// Why start brighter, rather than step up late as [`brighter`] does: at a
-/// desk, a still moment lasts seconds, and a session on a wrist that's
-/// busy for much of its 30 s never takes the late step (see
-/// [`calm_throughout`]). Whether more light helps against the tendons and
-/// fingers moving the sensor is what the arms compare.
+/// The question: does more light lift a faint pulse out of the noise? A
+/// still wrist at a desk, or lying awake, had a pulse of 2.9-5 counts on a
+/// light level of 1,600-4,000 at 12.5 mA (2026-11-09), and the level
+/// control never moves off its lowest drive there, as that only steps up
+/// for a level under ~1,000. If the noise is the sensor's own (shot noise,
+/// or the ADC's), 30 mA would raise the pulse 2.4× against noise that
+/// grows only ~1.5×; if it's the light itself flickering, or the tendons
+/// and fingers moving the sensor, it gains nothing.
+///
+/// From the start, not late: up to 0.11.3-rc.2 a session that ran out its
+/// 30 s on a calm wrist, its last window faint or aperiodic, also went on
+/// for up to two 15 s phases at a brighter drive (`brighter`). On the
+/// sealed watch (2026-11-07 to 16) no reading followed such a phase, and
+/// replayed, 1 of the 12 recorded read; the pulse over the light level
+/// rose from 4.7‰ to 5.7‰ and the windows' quality not at all (0.21 to
+/// 0.22). So the late phases are gone, and their LED time goes to
+/// another try instead. The arms' own verdict so far is no better (bright
+/// rounds read a busy wrist 22% of the time against 21%, and no more
+/// accurately), but they stay for now:
+///
+/// TODO: decide the arms too. If bright starts are dropped, sessions are
+/// 12.5 mA throughout, and [`budget_seconds`] is just seconds.
 ///
 /// TODO: once the arms have answered that, start bright only when a
 /// reading looks hard on a calm wrist (the last session failed, or read a
@@ -1257,9 +1222,7 @@ pub fn bright_start(drive: u8, peak: u32, budget: u32) -> Option<u8> {
 /// Asleep (`Asleep`), sessions stay at their level's drive, as night
 /// readings come 88% of the time without it, and an asleep session doesn't
 /// choose its round's arm (an awake one later in the round does). Watched
-/// sessions stay there too, as they're not in the comparison. A session
-/// that fails calm on either arm may still go on brighter at its end
-/// ([`brighter`]).
+/// sessions stay there too, as they're not in the comparison.
 ///
 /// TODO: once field logs have judged it, make the winner the rule.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1295,7 +1258,7 @@ impl Schedule {
 }
 
 /// The brightest drive up to two settings above `drive` at which `peak`,
-/// scaled by the current, stays within [`BRIGHTER_PEAK_LIMIT`], and that
+/// scaled by the current, stays within [`BRIGHT_PEAK_LIMIT`], and that
 /// `affordable` allows.
 fn step_up(drive: u8, peak: u32, affordable: impl Fn(u8) -> bool) -> Option<u8> {
     // As in `budget_seconds`; and from 254 on, the range below overflows.
@@ -1304,7 +1267,7 @@ fn step_up(drive: u8, peak: u32, affordable: impl Fn(u8) -> bool) -> Option<u8> 
     (drive + 1..=(drive + 2).min(3)).rev().find(|&next| {
         let current = DRIVE_CURRENT[usize::from(next)];
         let predicted = u64::from(peak) * u64::from(current) / u64::from(now);
-        predicted <= u64::from(BRIGHTER_PEAK_LIMIT) && affordable(next)
+        predicted <= u64::from(BRIGHT_PEAK_LIMIT) && affordable(next)
     })
 }
 
