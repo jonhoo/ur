@@ -138,6 +138,8 @@
 //! long calm took in the field logs, a day at a desk or walking once overdue
 //! makes ~1 or ~2.3 more tries an hour than it did, ~0.35-0.8 and
 //! ~0.9-2.1 mAh more over 16 hours (dim to bright). (See docs/power-plan.md.)
+//! Those were the figures at six overdue tries an hour; for what they are
+//! now, see [`OVERDUE_RETRY`].
 //!
 //! # Overdue tries wait for calm too
 //!
@@ -162,8 +164,9 @@
 //! prove that: a wrist that offers calm may simply be an easier wrist),
 //! overdue tries should read about 36% of the time rather than 22%.
 //!
-//! The delay it costs is made up by retrying sooner (see
-//! [`OVERDUE_RETRY`]).
+//! The delay it costs is made up by retrying sooner: every five minutes
+//! rather than ten (see [`OVERDUE_RETRY`], and there for what that costs
+//! the battery).
 //!
 //! # Giving up on a hopeless session
 //!
@@ -251,7 +254,7 @@ pub const ELEVATED_BY: u8 = 15;
 /// for 26-48 s more LED an hour; with a failure now a whole 30 s session,
 /// that's ~2.5 times the LED for at best a reading every few hours, and it
 /// would spend the budget that [`OVERDUE`]'s retries need. A desk that
-/// keeps failing reaches those (every 10 minutes) half an hour after its
+/// keeps failing reaches those (every 5 minutes) half an hour after its
 /// last reading anyway, after waits of 5 and 10 minutes.
 pub const FAILED_INTERVAL: u32 = 5 * 60;
 
@@ -269,9 +272,9 @@ pub const FAILED_INTERVAL: u32 = 5 * 60;
 ///
 /// This used to stop after six in a row (an hour), in case the watch lay on
 /// something that reflects the LED like skin (and keeps as still as a
-/// wrist), which fails calm too. An hour of failures makes a reading
-/// overdue, though, which retries as often (see [`OVERDUE_RETRY`]), and the
-/// doubled budget is what bounds such a surface now.
+/// wrist), which fails calm too. Half an hour of failures makes a reading
+/// overdue, though, which retries twice as often (see [`OVERDUE_RETRY`]),
+/// and the doubled budget is what bounds such a surface now.
 pub const CALM_RETRY_INTERVAL: u32 = 10 * 60;
 
 /// The longest wait after failures: the watch is likely off the wrist (on
@@ -368,10 +371,9 @@ const SEED_AGREEMENT: u8 = 6;
 /// rounds of tries that read at the third goes past 180: simulated over 8
 /// hours with a glance every 7.5 minutes, 180 held back 29 of 54 sessions
 /// until the budget had earned them (31 of 51 all on the bright arm), and
-/// 300 none of 78 (17 of 78). 300 also lets every try of an overdue desk
-/// on the bright arm start at 30 mA (432 budget seconds an hour, inside
-/// [`OVERDUE_BUDGET`]), where at 180 a third to a half of them stepped
-/// down. The user would rather spend battery than lose readings: the cap
+/// 300 none of 78 (17 of 78). (An overdue desk's tries on the bright arm
+/// don't all fit the doubled budget at 30 mA since they came every five
+/// minutes: see [`OVERDUE_RETRY`].) The user would rather spend battery than lose readings: the cap
 /// goes from ~3.3 to ~5.6 mAh a day, and what an hour at a desk actually
 /// spends is in docs/power-plan.md.
 pub const LED_BUDGET: u32 = 300;
@@ -403,8 +405,8 @@ const _: () = assert!(SESSION_RESERVE <= LED_BUDGET);
 /// a desk morning on the sealed watch (2026-11-10) went 51 minutes and
 /// nine failed sessions without a reading, short of it, so the faster
 /// retries never came; the user chose to retry more often. At a desk
-/// that won't read, that's a try every 10 minutes from half an hour in,
-/// rather than at 40 and then every 10 from an hour.
+/// that won't read, that's a try every 5 minutes from half an hour in
+/// (see [`OVERDUE_RETRY`]).
 ///
 /// The same by night, for one rule: asleep, sessions come every 5
 /// minutes, so half an hour is six missed in a row, which a night that
@@ -425,19 +427,53 @@ pub const OVERDUE: u32 = 30 * 60;
 pub const OVERDUE_BUDGET: u32 = 2 * LED_BUDGET;
 
 /// The longest wait after a failure while a reading is overdue (see
-/// [`OVERDUE`]), unless the watch was off the wrist: as for a calm failure
-/// (see [`CALM_RETRY_INTERVAL`]), and with no limit on how many, as the
-/// doubled budget bounds them. At a desk, failures (a busy wrist) otherwise
-/// back off to 20 minutes, or an hour with no movement in between; with
-/// this, a desk day that hasn't read for half an hour tries six times an
-/// hour at its still moments.
+/// [`OVERDUE`]), unless the watch was off the wrist, with no limit on how
+/// many: the doubled budget bounds them. At a desk, failures (a busy wrist)
+/// otherwise back off to 20 minutes, or an hour with no movement in
+/// between.
 ///
-/// Not sooner: each try is a whole session (30 s of LED, 72 budget seconds
-/// on the bright arm), so six an hour take 432 budget seconds of the
-/// doubled budget's 600 on the bright arm, leaving the rest for glances
-/// (and, should the budget run short, [`bright_start`] steps down rather
-/// than hold a try back).
-pub const OVERDUE_RETRY: u32 = CALM_RETRY_INTERVAL;
+/// Five minutes: [`FAILED_INTERVAL`] again, so once a reading is overdue
+/// the back-off simply stops growing. It was ten up to 0.11.3-rc.2, and
+/// the sealed watch's logs (2026-11-07 to 16) showed what ten cost: awake,
+/// 20 gaps of over 40 minutes and 9 of over an hour, made of 6-9 tries an
+/// hour that each read about one time in five. More tries is the only
+/// lever those logs found for a busy wrist: every loosening of the
+/// estimator bought its extra readings at 15-20% more than 10 BPM off.
+///
+/// What pays for them is LED time that used to buy nothing. With sessions
+/// that give up on a hopeless wrist at 19 s (see [`hopeless`]) and none
+/// running past 30 s or going on brighter, the same logs replay with 18%
+/// less LED (28,330 s rather than 34,563) for 2% fewer readings (1,003 of
+/// 1,028); and with each try waiting for calm first (see
+/// [`Schedule::start`]), a try is worth more than it was.
+///
+/// An overdue hour awake on a wrist that won't read, at worst, at 12.5 mA
+/// (`an_overdue_hour_is_bounded_whatever_the_wrist` pins the tries and
+/// the LED; mAh at the ~2.8 mA a session draws, see docs/power-plan.md):
+///
+/// | the wrist | tries | LED | |
+/// |---|---:|---:|---:|
+/// | up to 0.11.3-rc.2: any, at once, 30 s each | 6 | 180 s | 0.14 mAh |
+/// | never calm (each try waits 2 minutes), no window with a rate (20 s) | 9 | 180 s | 0.14 mAh |
+/// | never calm, a window with a rate but no reading (30 s) | 8 | 240 s | 0.19 mAh |
+/// | calm when due, then busy without a window with a rate (20 s) | 12 | 240 s | 0.19 mAh |
+/// | calm when due, 30 s without a reading | 11 | 330 s | 0.26 mAh |
+///
+/// So a walk, mostly the second row, gets half as many tries again for the
+/// LED it had, and the worst hour costs 0.12 mAh more than before:
+/// ~1.9 mAh over 16 waking hours, were every one of them overdue and
+/// failing, of the battery's ~170. On the bright arm (see [`Arm`]) a 30 s
+/// try costs 72 budget seconds, and 11 of those an hour would be 790, more
+/// than [`OVERDUE_BUDGET`]'s 600: there the budget binds, as it's meant
+/// to, and [`bright_start`] starts some tries at 20 mA or 12.5 mA rather
+/// than hold any back, so the bright arm's worst hour is the budget's,
+/// ~0.46 mAh, as it already was.
+///
+/// Not sooner than five minutes: at two or three, a busy wrist's tries
+/// would pass the doubled budget at 12.5 mA too, and then it's the budget,
+/// not the wrist's calm moments, that times them.
+pub const OVERDUE_RETRY: u32 = FAILED_INTERVAL;
+const _: () = assert!(MIN_INTERVAL <= OVERDUE_RETRY && OVERDUE_RETRY <= CALM_RETRY_INTERVAL);
 
 /// Consecutive failures counted (beyond this the wait is capped anyway).
 const MAX_FAILURES: u8 = 5;
