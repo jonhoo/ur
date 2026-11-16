@@ -512,6 +512,32 @@ fn replay(path: &str, reference: Option<&str>) {
         .map(|m| heart.get(&m).copied().unwrap_or(0))
         .collect();
     let (kinds, _, settles) = settling(&evidence, &heart);
+    // For analysis outside (see tmp/fleet-1116/sleep): each minute's
+    // evidence and class, one line per UTC minute.
+    if let Ok(path) = std::env::var("UR_DUMP") {
+        use std::fmt::Write as _;
+        let mut dump = String::new();
+        for (t, (minute, kind)) in evidence.iter().zip(&kinds).enumerate() {
+            let worn = match minute.worn {
+                Some(true) => 1,
+                Some(false) => 0,
+                None => -1,
+            };
+            writeln!(
+                dump,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{:?}",
+                first + t as i64,
+                u8::from(minute.seen),
+                minute.movement,
+                minute.steps,
+                worn,
+                heart[t],
+                kind
+            )
+            .expect("writing to a string");
+        }
+        std::fs::write(path, dump).expect("a writable dump");
+    }
     let stages = stages::Minutes::count(kinds.iter().copied());
     println!(
         "{} minutes, {} heart rate readings; asleep {} (light {}, deep {}, REM {}); last sleep {:?}",
@@ -1179,6 +1205,41 @@ mod tests {
                 assert_eq!(*kind, Kind::Awake, "minute {t}");
             }
         }
+    }
+
+    /// Two turns in bed a few minutes apart aren't waking: the smoothing
+    /// makes a run of six moving minutes of them (`WAKE_RUN`), but only
+    /// two moved themselves (`MOVED` wants three). Nor are they restless.
+    /// A third moving minute in the run makes it a wake, as before.
+    #[test]
+    fn twitches_are_not_waking() {
+        let still = Minute {
+            seen: true,
+            movement: 35,
+            ..Minute::default()
+        };
+        let twitch = Minute {
+            movement: 340,
+            ..still
+        };
+        // From a field log (2026-11-16 07:52): 36 336 33 38 304 34.
+        let mut minutes = vec![still; 60];
+        minutes[31] = twitch;
+        minutes[34] = twitch;
+        let kinds = batch(&minutes);
+        assert!(
+            kinds[20..].iter().all(|&k| k == Kind::Light),
+            "{}",
+            timeline(&kinds)
+        );
+        // 2026-11-09 08:31, the final wake: 570 294 81 485.
+        minutes[32] = twitch;
+        let kinds = batch(&minutes);
+        assert!(
+            kinds[30..36].iter().all(|&k| k == Kind::Awake),
+            "{}",
+            timeline(&kinds)
+        );
     }
 
     /// Walking in the night (at least `WAKE_STEPS` steps in a minute)

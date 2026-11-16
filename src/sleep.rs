@@ -11,10 +11,14 @@
 //!   the stillness, not the moment it qualified.
 //!   Within a night (after a wake of up to [`SAME_NIGHT_GAP`] minutes),
 //!   [`RESUME`] minutes are enough.
-//! - **Waking** is [`WAKE_RUN`] minutes of movement, or walking (at least
-//!   [`WAKE_STEPS`] steps in a minute). It's dated from the first of them.
+//! - **Waking** is [`WAKE_RUN`] minutes of movement, [`MOVED`] of which
+//!   moved themselves (the smoothing spreads one twitch over three), or
+//!   walking (at least [`WAKE_STEPS`] steps in a minute). It's dated from
+//!   the first of them.
 //! - Shorter movement within sleep is a stir: up to [`STIR`] minutes stay
-//!   sleep, longer is **restless** (Gadgetbridge's "awake during sleep").
+//!   sleep, as do longer runs that fewer than [`MOVED`] minutes made;
+//!   otherwise longer is **restless** (Gadgetbridge's "awake during
+//!   sleep").
 //! - **Not worn** is when the heart rate sensor's last look found no skin.
 //!
 //! Sleep comes out of this as [`Kind::Light`]; [`crate::stages`] then
@@ -125,6 +129,18 @@ pub const RESUME: usize = 10;
 /// Minutes of movement that end sleep. Two stirs in a row already make
 /// five (see [`STIR`]), so this is one more.
 pub const WAKE_RUN: usize = 6;
+/// How many minutes of a run of movement must have moved themselves (see
+/// [`moved`]) for the run to be waking or restless, rather than a stir.
+/// Three: two twitches a few minutes apart, each smoothed into three
+/// moving minutes, aren't waking; a wearer getting up moves in most
+/// minutes of the run.
+///
+/// A minute only reads as moving if it or a neighbour moved itself, so a
+/// run that fewer than three minutes made is at most six long: this
+/// changes nothing for longer runs, nor for walking ([`WAKE_STEPS`]).
+/// TODO: tune from more nights; four keeps one more false wake out, but
+/// dated one real final wake 8 minutes late (2026-11-09).
+pub const MOVED: usize = 3;
 /// Steps in a minute that end sleep at once: that's getting up.
 pub const WAKE_STEPS: u16 = 10;
 /// Moving minutes within sleep that are just a stir (light sleep). Three,
@@ -245,12 +261,27 @@ pub fn classify(before: Kind, before_evidence: Minute, minutes: &[Minute], out: 
         // spin here for ever, with the history locked (a critical section).
         debug_assert!(moving >= 1, "minute {t} isn't in its own run");
         let ends_window = t + moving == n;
-        let kind = if moving >= WAKE_RUN {
+        // Whether enough of the run's minutes moved themselves, rather
+        // than being a moving minute's neighbour: the smoothing makes
+        // three moving minutes of one twitch, so two turns in bed three
+        // minutes apart were a run of six, a wake, and falling back
+        // asleep then took `RESUME` minutes without another. (Over eight
+        // nights, 30 such wakes and restless spells made 187 minutes
+        // awake against a Garmin's 55, 101 of them its REM sleep.)
+        //
+        // The run is all of it: sleep only ever starts at a still minute,
+        // so no run is entered halfway. (But for one cut short by where
+        // these minutes start, which reads as shorter too; `CONTEXT` is
+        // there so that the minutes rewritten are well clear of that.)
+        let moved = minutes[t..t + moving].iter().filter(|m| moved(**m)).count() >= MOVED;
+        let kind = if moving >= WAKE_RUN && moved {
             asleep = false;
             Kind::Awake
-        } else if moving > STIR || ends_window {
+        } else if (moving > STIR && moved) || ends_window {
             // At the window's end, unfinished movement is restless until
-            // it's clear whether it becomes waking.
+            // it's clear whether it becomes waking: also a run already
+            // `WAKE_RUN` long that too few minutes made so far, which
+            // one more moving minute would make a wake, from its start.
             Kind::Restless
         } else {
             Kind::Light
@@ -258,6 +289,15 @@ pub fn classify(before: Kind, before_evidence: Minute, minutes: &[Minute], out: 
         out[t..t + moving].fill(kind);
         t += moving;
     }
+}
+
+/// Whether a minute moved itself: its own movement, unsmoothed, is at
+/// least [`STILL_LIMIT`], or it counted steps. A moving minute (one that
+/// isn't still: see [`still_among`]) may be only the neighbour of one
+/// that did; see [`MOVED`] for what goes by the difference.
+/// `crate::sleep_hold` goes by this too, to tell where [`classify`] wakes.
+pub fn moved(minute: Minute) -> bool {
+    minute.movement >= STILL_LIMIT || minute.steps > 0
 }
 
 /// Whether minute `t` of `minutes` is still: seen, stepless, and with its

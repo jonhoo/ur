@@ -106,11 +106,12 @@
 //! minute of any stillness long enough for a nap ([`sleep::RESUME`]
 //! minutes, the least the classifier takes), while the classifier could
 //! still find one there: while any minute from it until the classifier
-//! next wakes (walking, off the wrist, or six minutes on the move) is in
-//! its window (see [`nap`]). A nap then reaches Gadgetbridge as the
-//! watch settles it, a sleep of its own, like one later in the day. The
-//! rest the classifier calls awake whatever it reads before them, so the
-//! morning's steps go as they come while the wearer keeps busy.
+//! next wakes (walking, off the wrist, or six minutes on the move that
+//! three of them made: see [`wakes`]) is in its window (see [`nap`]). A
+//! nap then reaches Gadgetbridge as the watch settles it, a sleep of its
+//! own, like one later in the day. The rest the classifier calls awake
+//! whatever it reads before them, so the morning's steps go as they come
+//! while the wearer keeps busy.
 //!
 //! That lets a night go 47 minutes after its last minute asleep, rather
 //! than 136. On the field logs' four mornings (2026-11-08 to 11), it
@@ -318,16 +319,39 @@ fn up(minute: sleep::Minute) -> bool {
 }
 
 /// Whether the classifier wakes at `minute`, whatever came before: a
-/// minute that's up (see [`up`]), or the first of [`sleep::WAKE_RUN`]
-/// moving ones, all recorded by `newest`.
+/// minute that's up (see [`up`]), or the first of a run of moving ones
+/// that makes a wake, as recorded by `newest`: [`sleep::WAKE_RUN`] of
+/// them, of which [`sleep::MOVED`] moved themselves.
+///
+/// This must never say the classifier wakes where it may not: [`nap`]
+/// lets the minutes after a waking go as they come, and Gadgetbridge
+/// keeps the kind it first gets. So it counts as the classifier does,
+/// only from `minute` on: the classifier's run may start earlier, and
+/// then holds every moving minute this one does, and wakes if this does.
+/// (The other way is safe: a wake missed here holds a nap's minutes back
+/// for longer.)
 fn wakes(minute: i64, newest: i64, evidence: impl Fn(i64) -> sleep::Minute) -> bool {
+    if up(evidence(minute)) {
+        return true;
+    }
     let moving = |minute: i64| {
         let m = evidence(minute);
         m.seen && m.worn != Some(false) && !still_at(minute, newest, &evidence)
     };
-    up(evidence(minute))
-        || (minute + sleep::WAKE_RUN as i64 - 1 <= newest
-            && (minute..minute + sleep::WAKE_RUN as i64).all(moving))
+    // Stops at the first minute the run is a wake by, so on an active
+    // day, where every minute moved, this reads `WAKE_RUN` minutes and
+    // no more, however long the run (this runs with the history locked).
+    let mut moved = 0;
+    for (length, minute) in (minute..=newest).enumerate() {
+        if !moving(minute) {
+            return false;
+        }
+        moved += usize::from(sleep::moved(evidence(minute)));
+        if length + 1 >= sleep::WAKE_RUN && moved >= sleep::MOVED {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether `minute` is still, as the classifier sees it at `newest` (see
