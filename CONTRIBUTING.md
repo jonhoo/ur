@@ -750,7 +750,11 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   asleep). Fetch the log at least every other day.
 
 Steps come from the accelerometer's own counter, which a log can't
-replay. A capture build, `UR_ACTIVITY_LOG=trace scripts/release.sh --pre
+replay, but its polls show how the counter behaves: `scripts/step_runs.py
+decoded.log` lists its runs of counting by their opening burst (6 steps
+or more, as `STEP_BUFFER_SIZE` in `src/activity.rs` sets the chip up; 8
+with Bosch's defaults) and by their length, which is how to judge a
+change to that setting without another watch to compare with. A capture build, `UR_ACTIVITY_LOG=trace scripts/release.sh --pre
 accel tmp/accel`, also logs the accelerometer's samples while the wrist
 moves, and each poll's own line besides the minute's (several times the
 packed log on a busy day, so fetch it twice a day), and
