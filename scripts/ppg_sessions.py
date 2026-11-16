@@ -33,8 +33,8 @@ segment's samples show; and a longer one that reads on a busy wrist
 records on to 90 s (`heart: recording on`, then `heart: recorded to`),
 its later readings logged as `record-only` but not counted, so its
 segment holds all 90 s, its outcome the first reading. (The same logs'
-`accel:` lines, the accelerometer's samples through each session, aren't
-extracted here.) A session that the charger's power stopped before it read
+`accel:` lines, the accelerometer's samples through each session, or
+`accel: still` for a poll at rest, aren't extracted here.) A session that the charger's power stopped before it read
 (`heart: on the charger; stopped`, 0.11.1 on) is left out, every segment
 of it: neither a reading nor a failure, its last samples a cradle's or a
 hand's; one that had read is kept, its outcome that reading.

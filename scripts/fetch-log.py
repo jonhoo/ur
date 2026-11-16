@@ -16,7 +16,7 @@ written are assembled from it, so they hold the whole log as before. A
 full log takes about four minutes to fetch; an hour's new sectors, a few
 seconds. `--full` fetches every sector again.
 
-The log is a ring of 4 KiB sectors: 745 of them (about 3 MB, some 4½ days
+The log is a ring of 4 KiB sectors: 745 of them (about 3 MB, some 5 days
 of a worn watch) since 0.11.3, 512 before. The watch says which, so this
 fetches from either, and a cache begun on a watch with 512 carries on
 after its update.

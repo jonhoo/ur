@@ -1,5 +1,6 @@
 //! Host tests for the firmware's `log_pack` module: the field log's packed
-//! heart rate samples and minutes of polls. `cargo test` runs them. The
+//! heart rate samples and minutes of polls, and which of the accelerometer's
+//! polls through a heart rate session it leaves out. `cargo test` runs them. The
 //! byte sequences here are also in `scripts/expand_log_test.py`, which
 //! checks that `scripts/expand_log.py` unpacks them to the same samples.
 
@@ -115,6 +116,78 @@ mod tests {
         assert!(polls.movement().is_empty());
         assert!(!polls.push(500, 24, 3, 0));
         assert_eq!(polls.span_ms(2_500), 2_000);
+    }
+
+    /// A watch on a still wrist, as the sealed watch logged it: a 1/64 g
+    /// of noise on each axis.
+    #[test]
+    fn a_wrist_at_rest_is_still() {
+        let poll = [[30, -1, -58], [29, -1, -57], [28, -1, -58], [31, -2, -56]];
+        assert_eq!(still(&poll), Some([29, -2, -57]));
+        assert_eq!(still(&[[0, 0, 64]; 24]), Some([0, 0, 64]));
+    }
+
+    /// Where it says the wrist was is within 8 of every sample, on each
+    /// axis, for any poll it calls still.
+    #[test]
+    fn a_still_polls_samples_are_within_8_of_its_middle() {
+        // Each axis at both ends of the widest range that's still, about
+        // every offset an `i8` holds.
+        for base in -128i16..=112 {
+            let (low, high) = (base as i8, (base + 15) as i8);
+            for axis in 0..3 {
+                let mut poll = [[0i8, 0, 0]; 2];
+                poll[0][axis] = low;
+                poll[1][axis] = high;
+                let Some(middle) = still(&poll) else {
+                    // The magnitude ranged too far (it can, by up to 15,
+                    // when one axis is all of it).
+                    continue;
+                };
+                for sample in poll {
+                    for (value, about) in sample.iter().zip(middle) {
+                        assert!((i16::from(*value) - i16::from(about)).abs() <= 8);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A walk: the arm's swing and each step change how hard the wrist is
+    /// pulled, by far more than an eighth of a g.
+    #[test]
+    fn a_walking_wrist_is_not_still() {
+        let poll = [[30, -1, -58], [44, 5, -70], [20, -8, -49], [35, 2, -66]];
+        assert_eq!(still(&poll), None);
+        // The magnitude alone: one axis, 8 apart.
+        assert_eq!(still(&[[0, 0, 64], [0, 0, 72]]), None);
+        assert!(still(&[[0, 0, 64], [0, 0, 71]]).is_some());
+    }
+
+    /// A wrist that turns keeps gravity's 1 g, so the magnitude holds
+    /// steady: the axes' ranges catch it.
+    #[test]
+    fn a_turning_wrist_is_not_still() {
+        // From face up to tilted 30°: 64 × (sin 30°, 0, cos 30°).
+        let poll = [[0, 0, 64], [17, 0, 62], [32, 0, 55]];
+        assert_eq!(still(&poll), None);
+        // A quarter of a g on one axis, exactly, with the magnitude
+        // within 2: not still; one less is.
+        assert_eq!(still(&[[0, 0, 64], [16, 0, 62]]), None);
+        assert!(still(&[[0, 0, 64], [15, 0, 62]]).is_some());
+    }
+
+    #[test]
+    fn a_poll_without_samples_is_not_still() {
+        assert_eq!(still(&[]), None);
+    }
+
+    /// The extremes an `i8` holds don't overflow the arithmetic.
+    #[test]
+    fn the_largest_samples_fit() {
+        assert_eq!(still(&[[-128, -128, -128]; 36]), Some([-128, -128, -128]));
+        assert_eq!(still(&[[127, 127, 127]; 36]), Some([127, 127, 127]));
+        assert_eq!(still(&[[-128, -128, -128], [127, 127, 127]]), None);
     }
 
     /// Fewer samples than 24 wrap, and the expander's `(n + 24) % 256`

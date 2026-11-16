@@ -37,9 +37,11 @@ pub const SECOND: Range<u32> = 0x0B_4000..0x19_D000;
 const FIRST_SECTORS: u32 = (FIRST.end - FIRST.start) / SECTOR;
 const SECOND_SECTORS: u32 = (SECOND.end - SECOND.start) / SECTOR;
 
-/// How many sectors the ring has: about 3 MB of log, 4.5 days of a worn
-/// watch's at the 28 KB an hour 0.11.3-rc.2 logged (32 to 40 by day, ~14
-/// asleep; see [`crate::log_pack`] for what keeps it that small).
+/// How many sectors the ring has: about 3 MB of log. 0.11.3-rc.2 logged
+/// 28 KB an hour on a worn watch (32 to 40 by day, ~14 asleep), which
+/// would fill it in 4.5 days; without the still wrist's samples through
+/// heart rate sessions, 13% of that log (see [`crate::log_pack`] for
+/// these and what else keeps it small), it's ~24.5 KB an hour, 5 days.
 pub const SECTORS: u32 = FIRST_SECTORS + SECOND_SECTORS;
 
 /// Not a sector: the index a fetcher asks for to learn [`SECTORS`] (see

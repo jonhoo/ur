@@ -1265,12 +1265,23 @@ const ACCEL_TAIL: u8 = 2;
 /// the lines' times and lengths), the newest a moment before the line's
 /// time, in 1/64 g (±2 g, as the chip measures, is ±128, so each axis
 /// fits a byte), the same as a capture build's `activity: samples` (see
-/// `activity::trace_samples`). That's ~93 bytes a poll (rzCOBS-encoded,
-/// measured on a capture log's samples), ~46 a second of session, against
+/// `activity::trace_samples`). That's ~84 bytes a poll (rzCOBS-encoded,
+/// as 0.11.3-rc.2's log has them), ~42 a second of session, against
 /// the ~50 of the PPG's own (see `trace_level_samples`); ~24 samples a
 /// line, or fewer when a read failed or the FIFO was flushed. The
 /// movement's fundamental (a walk's ~1.8 Hz of steps, or ~0.9 Hz of arm
 /// swing) is well below the ~6 Hz this resolves.
+///
+/// Unless the wrist was at rest through the poll (see
+/// [`crate::log_pack::still`]: no axis ranged over a quarter of a g, nor
+/// the magnitude over an eighth), which has no rhythm to find. Then the
+/// line is `accel: still, N samples within 8 of [x, y, z]` instead: that
+/// there was a poll, how many samples it had (for the sample rate, and so
+/// that a replay knows it's missing nothing else), and where the wrist
+/// lay. That's ~12 bytes rather than ~84, for 56% of the polls in 0.11.3-rc.2's
+/// log, 13% of all its bytes. An extractor that reads `accel: [` lines
+/// doesn't see these, and should take the gap for stillness, not for a
+/// poll that's missing.
 #[cfg(feature = "field-log")]
 pub fn trace_accel(frames: &[[i16; 3]]) {
     let wanted = match ACCEL.load(Ordering::Relaxed) {
@@ -1297,5 +1308,12 @@ pub fn trace_accel(frames: &[[i16; 3]]) {
     for (out, &axis) in raw.iter_mut().zip(frames[..samples].as_flattened()) {
         *out = (axis >> 4).clamp(-128, 127) as i8;
     }
-    trace!("accel: {=[?]}", raw[..3 * samples]);
+    let (logged, _) = raw[..3 * samples].as_chunks::<3>();
+    match crate::log_pack::still(logged) {
+        Some([x, y, z]) => trace!(
+            "accel: still, {=u8} samples within 8 of [{=i8}, {=i8}, {=i8}]",
+            samples as u8, x, y, z
+        ),
+        None => trace!("accel: {=[?]}", raw[..3 * samples]),
+    }
 }

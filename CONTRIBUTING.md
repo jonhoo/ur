@@ -640,7 +640,7 @@ contribution (as `scripts/run-<probe>.sh`).
 ## Field logs
 
 A sealed watch has no debug probe. The `ur-logging` build instead keeps
-everything it logs in the watch's 4 MB SPI flash (3 MB of it, about 4½
+everything it logs in the watch's 4 MB SPI flash (3 MB of it, about 5
 days), and serves it over Bluetooth. Install it like any update (see
 the README), wear the watch, then, from a computer paired with it (the
 phone can stay connected), fetch the log with `scripts/fetch-log.py`
@@ -787,11 +787,16 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   only such a session's first 30 s. What stays is that every awake
   session logs the accelerometer's samples (`accel: [x, y, z, …]`,
   every 2 s, ~12 Hz, in 1/64 g), to find a walk's cadence and the
-  readings that lock onto it: ~46 bytes a second of session. Packed
-  (see above), 0.11.3-rc.2's worn days took 28 KB an hour (32 to 40
-  awake, ~14 asleep), so the log's 3 MB (745 sectors of 4 KiB; it was
-  512, 2 MB, up to 0.11.2) holds about 4½ days. Fetch the log at least
-  every fourth day.
+  readings that lock onto it: ~42 bytes a second of session. From
+  0.11.3-rc.3 a poll through which the wrist lay at rest (no axis
+  ranging over a quarter of a g, nor the magnitude over an eighth; see
+  `log_pack::still`) logs `accel: still, N samples within 8 of [x, y,
+  z]` instead, a seventh the size: 56% of rc.2's polls, so read a gap
+  between `accel: [` lines as stillness. Packed (see above),
+  0.11.3-rc.2's worn days took 28 KB an hour (32 to 40 awake, ~14
+  asleep), which without those still polls is ~24.5, so the log's 3 MB
+  (745 sectors of 4 KiB; it was 512, 2 MB, up to 0.11.2) holds about 5
+  days. Fetch the log at least every fourth day.
 
 Steps come from the accelerometer's own counter, which a log can't
 replay, but its polls show how the counter behaves: `scripts/step_runs.py
