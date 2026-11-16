@@ -551,6 +551,22 @@ python3 scripts/flash-stress.py target/thumbv7em-none-eabihf/release/ur --minute
 below.) Its saves stay behind under a key of their own
 (`storage::key::STRESS`), harmless to a normal build.
 
+A build with the `field-log-lap` feature checks the field log's ring
+(`src/log_ring.rs`: its two stretches of the SPI flash) on the dev kit's
+own flash: it opens a new sector every second, each holding a line that
+names it (`field log: lap test, sector 512 (#1300)`), so the log goes
+round all 745 in about a quarter of an hour, where a worn watch takes
+days. Let it run that long, fetch the log (see [Field logs](#field-logs)),
+and every sector should be present, in order, each with its own line;
+then check that an update still installs and that
+`scripts/crash-keeps-activity.py` passes, as the secondary slot and the
+checkpoints are the ring's neighbours. Run it after changing where the
+ring is. Never on a watch that's worn: it erases a sector a second.
+
+```sh
+DEFMT_LOG=info cargo build --release --features field-log-lap
+```
+
 A build with the `wedge-i2c` feature checks that the sensors come back
 from a stuck bus by themselves, as they must when a reset (a probe's, a
 watchdog's, an update's) leaves one holding it: for its first 5 s, it

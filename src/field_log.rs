@@ -289,7 +289,13 @@ pub async fn task() {
         // buffer holds far more than either. Unless [`flush`] asks for it
         // now.
         let urgent = FLUSH_NOW.swap(false, Ordering::Relaxed);
+        // A lap-test build (see `LAP_TEST`) writes a line a second, saying
+        // which sector it should land in, and doesn't wait for more.
+        if LAP_TEST {
+            info!("field log: lap test, sector {} (#{})", sector, sequence);
+        }
         if !urgent
+            && !LAP_TEST
             && waiting() < spi_flash::PAGE as usize
             && last_flush.elapsed() < embassy_time::Duration::from_secs(30)
         {
@@ -333,10 +339,26 @@ pub async fn task() {
             }
             consume(n);
         }
+        // A lap-test build gives each second's lines a sector of their
+        // own.
+        if LAP_TEST {
+            advance(flash, &mut sector, &mut sequence, used).await;
+            used = HEADER;
+        }
         flash.sleep().await;
         CURSOR.lock(|c| c.set(Some((sector, used))));
     }
 }
+
+/// Whether this is a build for testing the ring on a dev kit (the
+/// `field-log-lap` feature): its writer moves on to a new sector every
+/// second instead of when one is full, so it goes round the whole ring in
+/// a quarter of an hour rather than days, through the step between the
+/// ring's two stretches and the wrap from its last sector to its first. A
+/// fetch then shows every sector, each holding the line that names it.
+/// Never for a watch that's worn: it erases a sector a second.
+#[cfg(feature = "field-log")]
+const LAP_TEST: bool = cfg!(feature = "field-log-lap");
 
 #[cfg(feature = "field-log")]
 /// Set by [`flush`]; the writer clears it as it starts flushing.
