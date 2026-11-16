@@ -14,8 +14,13 @@ missing below were test builds for the dev kit.
 
 ### Added
 
+- Take a heart rate from two strongly periodic readings in a row that agree, rather than waiting for a third, as long as the wrist isn't walking (a swinging arm can look like a slow pulse) (5d4d89a)
+
 ### Changed
 
+- Get more heart rate readings through a busy day: a reading that's overdue (none for half an hour) now waits up to 2 minutes for a still wrist, as other readings do, rather than starting at once on a moving wrist where few of them read, and is retried every 5 minutes rather than 10; and a try on a moving wrist with nothing usable by 19 s stops there rather than running to 30 s. In the field logs, tries that start on a still wrist read about twice as often; the worst case costs about 1% of the battery a day (1c09b62, b3c34ac, 9880356)
+- Count a walk from its third arm swing rather than its fourth: the step counter holds back 6 steps rather than 8 before it believes a walk, so stop-and-go walking about the house loses fewer steps. Continuous walks count as before, and a brief burst of arm movement may now and then add a few steps (5b1a1b6)
+- Time the night's heart rate readings to finish just before the end of each 5-minute block the phone receives, so a reading reaches Gadgetbridge at most about a minute after it was taken rather than up to 5 (730485b)
 - Hold about 2½ days of a worn watch in the logging build's (`ur-logging`) field log, rather than under one (about 20 hours since 0.11.0): it now packs its busiest lines, the accelerometer's every 2 s and the heart-rate sensor's samples, so decode a fetched log with `defmt-print` and then `scripts/expand_log.py`, which writes them back as before (logs from older builds pass through unchanged). Log times are now in milliseconds rather than microseconds. The `ur` build is unchanged (bf66d61, e357323)
 - Show the Info screen's uptime in its two largest units once the watch has been up a day (`3D 4H`, `2W 3D`, `5MO 1W`, `1Y 2MO`, a month being a twelfth of a year), rather than as hours, minutes and seconds that ran into the thousands of hours; under a day it still reads `HH:MM:SS` (8f7de60)
 
@@ -23,8 +28,11 @@ missing below were test builds for the dev kit.
 
 ### Removed
 
+- Remove the logging build's longer heart rate sessions and the brighter-LED phases late in a session: in the field logs they cost several times the LED time per reading of simply trying again later (90d0a78, 0760245)
+
 ### Fixed
 
+- Stop taking two turns in bed a few minutes apart for waking up: a stretch of movement in the night now counts as awake (or restless) only if at least three of its minutes moved, which over eight nights against a Garmin cut the awake time inside the night from 187 to 113 minutes (the Garmin's: 55), and brought the time asleep to within about 2 minutes of the Garmin's on average, from 11 short (774391a)
 - Stop counting a watch lying on a desk as a nap (or a night): a watch that has lain level and face up (on a desk, a table, or the charger) for 10 minutes, without a heart rate reading, is now off the wrist back to when it was set down, so it never starts a quiet night or nap, and Gadgetbridge gets those minutes as not worn rather than as sleep, and the still minutes just before taking the watch off no longer count as sleep either; every night and nap in the field logs keeps exactly the sleep it had, and a watch lying on its side or face down still passes for asleep (24a6e4b, ce28f19)
 - Wake the touch controller as soon as the watch is picked up, put on, or the wrist turns, rather than leaving taps dead until sleep tracking sees the wearer up; keep it on through a nap, where taps now wake the screen and play music as by day; and let it sleep on a desk, where taps do nothing until the watch is picked up; in a night's (or a morning doze's) quiet, taps with the screen off still do nothing, as bedding makes them (39561bc)
 - Keep the activity the phone hasn't fetched (steps, heart rates, and the night's sleep so far) across a crash or a watchdog reset, rather than losing everything since the last sync (a hard fault at 06:19 once lost a whole night): every 2 minutes the watch saves it to its flash, and the next boot puts back the latest save, so a crash loses at most the last couple of minutes; this costs about 1.5% of the battery (da92071)
