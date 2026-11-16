@@ -7,7 +7,7 @@
 //! - in the background, when [`crate::heart_schedule`] says one is due
 //!   (every 2–20 minutes, depending on movement and recent readings), once
 //!   the wrist has been still for a few seconds after that (see [`CALM`]),
-//!   or two minutes on if it isn't, or at once if a reading is overdue
+//!   or two minutes on if it isn't
 //!   ([`heart_schedule::Schedule::start`]), for up to [`SESSION_LIMIT`] or
 //!   until it has a reading (typically ~11 s), carrying on through
 //!   movement (see `heart_schedule`'s "Trying through movement"), unless
@@ -590,15 +590,19 @@ pub async fn heart_task(i2c: Device) {
                 }
             } else {
                 let since = *due_since.get_or_insert(now);
+                // How long it waited for calm, for the log.
+                let waited = (now - since).min(255) as u8;
                 match schedule.start(now, since, activity::calm_polls()) {
                     // A calm start reads far more often, and a moment's
                     // calm at a desk rarely lasts long enough.
                     Start::Wait => 3,
-                    Start::Calm => break Some(why),
-                    Start::Busy => {
-                        // So a field log can tell these sessions apart.
-                        info!("heart: busy start ({=u8} s)", (now - since).min(255) as u8);
-                        break Some(why);
+                    start @ Start::Calm => break Some((why, start, waited)),
+                    start @ Start::Busy => {
+                        // So a field log can tell these sessions apart
+                        // (the `due` line below says so too; this one is
+                        // what analyses of earlier logs look for).
+                        info!("heart: busy start ({=u8} s)", waited);
+                        break Some((why, start, waited));
                     }
                 }
             };
@@ -627,11 +631,27 @@ pub async fn heart_task(i2c: Device) {
             }
             Arm::Dim | Arm::Asleep => base,
         };
-        if let Some(why) = due {
+        if let Some((why, start, waited)) = due {
             let (awake, asleep) = schedule.resting();
+            // Everything a field log needs to judge the schedule by,
+            // without another watch to compare with: why the session was
+            // due, whether it found the calm it waited for and how long
+            // that took, and how long ago the last reading was (half an
+            // hour or more: overdue). How it ended, and its LED time, are
+            // on the line that ends it. The first part is as it has been
+            // since 0.10, for what reads older logs.
             info!(
-                "heart: due ({}); budget {} s, resting {}/{}; round {} {} drive {}",
-                why, budget, awake, asleep, round, arm, drive
+                "heart: due ({}); budget {} s, resting {}/{}; round {} {} drive {}; {=str} start after {=u8} s, {=u16} min since a reading",
+                why,
+                budget,
+                awake,
+                asleep,
+                round,
+                arm,
+                drive,
+                if start == Start::Calm { "calm" } else { "busy" },
+                waited,
+                (schedule.since_reading(uptime()) / 60).min(u32::from(u16::MAX)) as u16
             );
         }
         // Movement from here on counts towards the next session.

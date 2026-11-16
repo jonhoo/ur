@@ -43,7 +43,9 @@
 //! - **An overdue reading spends more** ([`OVERDUE`]): half an hour
 //!   without one, and the budget doubles and failures retry every
 //!   [`OVERDUE_RETRY`], until the next reading. A gap in the data is worth
-//!   more than the battery it takes to avoid.
+//!   more than the battery it takes to avoid. (Each of those tries still
+//!   waits for a calm wrist as any other does: see "Overdue tries wait for
+//!   calm too" below.)
 //!
 //! Sessions while the clock face shows aren't scheduled (someone is
 //! looking, so `heart` measures right away), but their readings count as
@@ -58,8 +60,7 @@
 //! A few rules about the sessions themselves live here too, being as
 //! hardware-free: a due background session waits up to two minutes for the
 //! wrist to be calm for a few seconds ([`START_CALM_POLLS`],
-//! [`CALM_WAIT`]), or not at all once a reading is overdue
-//! ([`Schedule::start`]). Once started, it runs
+//! [`CALM_WAIT`]; see [`Schedule::start`]). Once started, it runs
 //! its full length however the wrist moves (see below), unless it reads
 //! first, finds no skin, or is plainly getting nowhere on a busy wrist
 //! ([`hopeless`]).
@@ -122,8 +123,9 @@
 //! Starting is the other half. Up to 0.10.0-rc.4 a due session waited for
 //! a calm wrist however long it took, and the same afternoon on the sealed
 //! watch, one waited 18 minutes through busy desk work. So a due session
-//! now waits for calm for at most [`CALM_WAIT`] (two minutes), and once a
-//! reading is overdue, not at all (see [`Schedule::start`]). At a desk,
+//! now waits for calm for at most [`CALM_WAIT`] (two minutes; and, from
+//! rc.5 to 0.11.3-rc.2, not at all once a reading was overdue, see the
+//! next section). At a desk,
 //! calm comes within the two minutes 71% of the time, so most sessions
 //! still start calm; walking, 31%. ([`bright_start`] is as before.)
 //!
@@ -136,6 +138,32 @@
 //! long calm took in the field logs, a day at a desk or walking once overdue
 //! makes ~1 or ~2.3 more tries an hour than it did, ~0.35-0.8 and
 //! ~0.9-2.1 mAh more over 16 hours (dim to bright). (See docs/power-plan.md.)
+//!
+//! # Overdue tries wait for calm too
+//!
+//! From 0.10.0-rc.5 to 0.11.3-rc.2 an overdue session started the moment
+//! it was due, whatever the wrist: the gap was what mattered, and the
+//! tries were ten minutes apart. The sealed watch's logs (2026-11-07 to
+//! 16) say what that bought. Of 128 overdue sessions, 101 started on a
+//! busy wrist and read 16% of the time; the 27 that happened to start
+//! calm read 44%. Across every reason to be due, a session that started
+//! calm read 45-86% of the time and one that started busy 9-35%. And the
+//! long gaps were made of exactly these: the longest, 146 minutes, held 14
+//! failed tries.
+//!
+//! So an overdue try now waits for [`START_CALM_POLLS`] like any other,
+//! and for no longer than any other: [`CALM_WAIT`] bounds it, so a wrist
+//! that never calms (a walk) still gets its tries, two minutes later than
+//! it did. Calm is worth those two minutes because it's short, not rare:
+//! awake, the wrist was calm at 37% of polls, and calm runs of 16 s or
+//! more (the 6 s to start and the ~10 s a reading takes) came 15 times an
+//! hour, while a try started at an arbitrary moment mostly missed them.
+//! If the calm-start advantage is the cause it looks like (the logs can't
+//! prove that: a wrist that offers calm may simply be an easier wrist),
+//! overdue tries should read about 36% of the time rather than 22%.
+//!
+//! The delay it costs is made up by retrying sooner (see
+//! [`OVERDUE_RETRY`]).
 //!
 //! # Giving up on a hopeless session
 //!
@@ -273,8 +301,7 @@ pub const MOVED_POLLS: u8 = 6;
 /// nothing: asleep, or at rest, nearly every poll is calm.
 ///
 /// Preferred, not required: a due session waits for it for at most
-/// [`CALM_WAIT`], and not at all once a reading is overdue (see
-/// [`Schedule::start`]).
+/// [`CALM_WAIT`] (see [`Schedule::start`]).
 pub const START_CALM_POLLS: u8 = 3;
 
 /// How long a due background session waits for [`START_CALM_POLLS`] before
@@ -464,8 +491,7 @@ pub enum Start {
     Wait,
     /// On a wrist that has been calm for [`START_CALM_POLLS`].
     Calm,
-    /// On a busy wrist: it has waited [`CALM_WAIT`] for calm, or a reading
-    /// is overdue.
+    /// On a busy wrist: it has waited [`CALM_WAIT`] for calm.
     Busy,
 }
 
@@ -647,12 +673,13 @@ impl Schedule {
     /// It waits for [`START_CALM_POLLS`] for up to [`CALM_WAIT`], and then
     /// starts anyway: a busy wrist reads far less often than a calm one, but
     /// a session never started never reads (on the sealed watch, 2026-11-10,
-    /// one on a wrist busy at 983 on average read 75 BPM, though that's yet
-    /// to be checked against a Garmin), and
-    /// "we should be trying through movement" (the user). Once a reading is
-    /// overdue (see [`OVERDUE`]) it doesn't wait at all: the gap is what
-    /// matters by then, and the overdue tries are already ten minutes apart
-    /// and inside their budget.
+    /// one on a wrist busy at 983 on average read 75 BPM), and "we should
+    /// be trying through movement" (the user).
+    ///
+    /// The same whether or not a reading is overdue (see "Overdue tries
+    /// wait for calm too" in the module docs): the wait is what makes a
+    /// try likely to read, and [`CALM_WAIT`] is what keeps a wrist that
+    /// never calms from holding one back.
     ///
     /// `since` is when the heart task first found the session due, not
     /// [`Self::due`]'s time: movement can bring that forward while a session
@@ -667,7 +694,7 @@ impl Schedule {
         debug_assert!(since <= now, "found due at {since}, after now ({now})");
         if calm_polls >= START_CALM_POLLS {
             Start::Calm
-        } else if now >= self.overdue_from() || now.saturating_sub(since) >= CALM_WAIT {
+        } else if now.saturating_sub(since) >= CALM_WAIT {
             Start::Busy
         } else {
             Start::Wait
@@ -929,6 +956,13 @@ impl Schedule {
         self.last_reading.saturating_add(OVERDUE)
     }
 
+    /// Seconds at `now` since the last reading, or since boot before any:
+    /// [`OVERDUE`] or more, and one is overdue. For the log, which should
+    /// say of each session whether it was an overdue one.
+    pub fn since_reading(&self, now: u32) -> u32 {
+        now.saturating_sub(self.last_reading)
+    }
+
     /// The budget at `now`, and when its last whole second was earned (to
     /// keep the part-earned one, so frequent refills don't lose time to
     /// rounding): at [`LED_BUDGET`]'s rate, into a bucket that size, until
@@ -1025,9 +1059,7 @@ impl Schedule {
     /// back on it, so a reading soon is worth having, but not at once, as
     /// it may still be in a hand. Whether a reading is overdue stays as it
     /// was, from the last real one: after a long charge it usually is, and
-    /// then that first session doesn't wait for calm (see
-    /// [`Schedule::start`]), and the doubled budget stands until a reading
-    /// comes.
+    /// then the doubled budget stands until a reading comes.
     pub fn charger(&mut self, now: u32, present: bool) -> Charger {
         debug_assert!(self.as_of() <= now, "told at {now}: {self:?}");
         let settling = self.power == Power::Left && now < self.last.saturating_add(CHARGER_SETTLE);

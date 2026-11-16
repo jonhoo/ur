@@ -65,7 +65,7 @@ mod tests {
     /// task would: background sessions only, each started once due and
     /// [`Schedule::start`] says so (the wrist calm for
     /// [`START_CALM_POLLS`] polls, or [`CALM_WAIT`] after it was first
-    /// found due, or a reading overdue). The accelerometer's counts start
+    /// found due). The accelerometer's counts start
     /// afresh, as at boot, except that the wearer is taken to have taken
     /// no steps for a while.
     fn simulate(
@@ -539,11 +539,10 @@ mod tests {
     }
 
     /// A wrist busy all the time and never reading (walking, say): each
-    /// try waits its `CALM_WAIT` until a reading is overdue, and from then
-    /// on starts as soon as it's due, every 10 minutes (see
-    /// `OVERDUE_RETRY`).
+    /// try waits its `CALM_WAIT` and starts busy, overdue or not, so the
+    /// overdue ones come every `OVERDUE_RETRY` and `CALM_WAIT`.
     #[test]
-    fn overdue_sessions_start_at_once() {
+    fn a_wrist_that_never_calms_still_gets_its_overdue_tries() {
         let mut schedule = Schedule::new();
         schedule.ended(0, 13, Outcome::Reading(60), true, awake(0));
         let sessions = simulate(&mut schedule, POLL, 3 * HOUR, |t| Moment {
@@ -565,22 +564,48 @@ mod tests {
         assert!(
             gaps(&sessions[overdue..])
                 .iter()
-                .all(|&w| about(w, OVERDUE_RETRY))
+                .all(|&w| about(w, OVERDUE_RETRY + CALM_WAIT)),
+            "{sessions:?}"
         );
-        assert!(sessions.len() - overdue >= 10, "{sessions:?}");
-        // Right at the moment it's overdue, whatever the wrist.
+        // No wrist holds an overdue try back past `CALM_WAIT`, and none
+        // starts busy before it.
         let mut fresh = Schedule::new();
         fresh.ended(0, 13, Outcome::Reading(60), true, awake(0));
-        assert_eq!(fresh.start(OVERDUE - 1, OVERDUE - 1, 0), Start::Wait);
-        assert_eq!(fresh.start(OVERDUE, OVERDUE, 0), Start::Busy);
+        let late = 2 * OVERDUE;
+        assert_eq!(fresh.start(late, late, 0), Start::Wait);
+        assert_eq!(fresh.start(late + CALM_WAIT - 1, late, 0), Start::Wait);
+        assert_eq!(fresh.start(late + CALM_WAIT, late, 0), Start::Busy);
+    }
+
+    /// An overdue try waits for a calm wrist like any other, and starts
+    /// the moment it has been calm for `START_CALM_POLLS`: a wrist calm
+    /// for 20 s in every minute, where every session fails all the same.
+    #[test]
+    fn overdue_sessions_wait_for_calm_too() {
+        let mut schedule = Schedule::new();
+        schedule.ended(0, 13, Outcome::Reading(60), true, awake(0));
+        let calm = |t: u32| t % 60 >= 40;
+        let sessions = simulate(&mut schedule, POLL, 3 * HOUR, |t| Moment {
+            calm: calm(t),
+            outcome: Outcome::NoReading,
+            seconds: 30,
+            ..resting(t)
+        });
+        let overdue: Vec<_> = sessions.iter().filter(|s| s.start >= OVERDUE).collect();
+        assert!(overdue.len() >= 10, "{sessions:?}");
+        for session in overdue {
+            assert_eq!(session.how, Start::Calm, "{sessions:?}");
+            // At the third calm poll of a calm stretch.
+            assert!((44..48).contains(&(session.start % 60)), "{sessions:?}");
+        }
     }
 
     /// A desk that won't read: each session runs its full 30 s through
     /// movement and fails, as the sealed watch's desk mornings would now.
     /// Tries come 5 and then 10 minutes apart, and from half an hour after
     /// the last reading, overdue (see `OVERDUE`), they go on every 10
-    /// minutes rather than backing off to 20 and more, starting at once
-    /// rather than at the next calm moment. The budget never holds
+    /// minutes rather than backing off to 20 and more, each at the next
+    /// calm moment. The budget never holds
     /// one back, even with every try on the bright arm (72 budget seconds
     /// each, as `heart` starts them, stepping down if the budget is short)
     /// and a 13 s glance every 7.5 minutes: an overdue desk's retries aren't
@@ -599,13 +624,10 @@ mod tests {
             }
             let (due, why) = schedule.due(0, false);
             assert_ne!(why, Why::Budget, "{sessions:?}");
-            // Three calm polls first, unless a reading is overdue.
+            // Three calm polls first.
             let due = t.max(due);
-            let (start, how) = if schedule.start(due, due, 0) == Start::Busy {
-                (due, Start::Busy)
-            } else {
-                (due + 6, Start::Calm)
-            };
+            assert_eq!(schedule.start(due, due, 0), Start::Wait);
+            let (start, how) = (due + 6, Start::Calm);
             t = start;
             let drive = bright_start(0, 2500, schedule.budget(t)).unwrap_or(0);
             assert_eq!(drive, 2, "{sessions:?}");
@@ -613,6 +635,10 @@ mod tests {
             t += 30;
             let cost = budget_seconds(drive, 30_000);
             schedule.ended(t, cost, Outcome::NoReading, true, awake(0));
+            // (A glance during the session is that session, watched.)
+            while glance < t {
+                glance += 450;
+            }
             sessions.push(Session {
                 start,
                 end: t,
@@ -623,18 +649,20 @@ mod tests {
         let waits = gaps(&sessions);
         // The first try at 4 minutes (the resting back-off), then 5 and 10
         // minutes on (and three calm polls each), then every 10 minutes,
-        // overdue, at once.
+        // overdue, the same.
         assert!(about(sessions[0].start, 4 * MINUTE + 6), "{sessions:?}");
         assert!(about(waits[0], 5 * MINUTE + 6), "{waits:?}");
         assert!(about(waits[1], 10 * MINUTE + 6), "{waits:?}");
-        assert!(waits[2..].iter().all(|&w| w == 10 * MINUTE), "{waits:?}");
+        assert!(
+            waits[2..].iter().all(|&w| w == 10 * MINUTE + 6),
+            "{waits:?}"
+        );
         // The 10 minutes after the third failure are the overdue retry's:
         // the back-off's would be 20.
         assert_eq!(sessions[2].why, Why::Retry);
         assert!(sessions[3].start >= OVERDUE, "{sessions:?}");
         assert!(sessions[3..].iter().all(|s| s.why == Why::Overdue));
-        assert!(sessions[..3].iter().all(|s| s.how == Start::Calm));
-        assert!(sessions[3..].iter().all(|s| s.how == Start::Busy));
+        assert!(sessions.iter().all(|s| s.how == Start::Calm));
         // Six tries an hour, 3 minutes of LED.
         for hour in 1..8 {
             let spent = led(&sessions, hour * HOUR, (hour + 1) * HOUR);
@@ -1134,11 +1162,11 @@ mod tests {
         );
         // Asleep (a nap after a charge), as asleep.
         assert_eq!(schedule.due(0, true), (off + MIN_INTERVAL, Why::Asleep));
-        // The last reading was hours ago: overdue, so it starts at once,
-        // calm or not.
+        // The last reading was hours ago: overdue, and it waits for a calm
+        // wrist all the same (the watch is being strapped on).
         assert_eq!(
             schedule.start(off + MIN_INTERVAL, off + MIN_INTERVAL, 0),
-            Start::Busy
+            Start::Wait
         );
         // And a reading backs off from the minimum, as after movement.
         let at = off + MIN_INTERVAL + 13;
@@ -1403,10 +1431,9 @@ mod proofs {
     /// have emptied the bucket for.
     ///
     /// And once due, it starts (see `Schedule::start`), whatever the
-    /// wrist, within `CALM_WAIT` of when it was found due, and at once
-    /// when a reading is overdue; it only waits, then, while the wrist
-    /// hasn't been calm for `START_CALM_POLLS`, and starts calm when it
-    /// has.
+    /// wrist, within `CALM_WAIT` of when it was found due, overdue or
+    /// not; it only waits, then, while the wrist hasn't been calm for
+    /// `START_CALM_POLLS`, and starts calm when it has.
     #[kani::proof]
     #[kani::unwind(7)]
     fn a_session_is_due_within_the_hour_and_the_budget() {
@@ -1418,7 +1445,7 @@ mod proofs {
         kani::assume(at <= found && found <= now && now < UPTIME);
         let start = schedule.start(now, found, calm_polls);
         let calm = calm_polls >= START_CALM_POLLS;
-        let waits = !calm && now < history.overdue_from() && now - found < CALM_WAIT;
+        let waits = !calm && now - found < CALM_WAIT;
         assert_eq!(start == Start::Wait, waits);
         assert_eq!(start == Start::Calm, calm);
 
@@ -1829,7 +1856,7 @@ mod proofs {
     /// from which it's due whatever the wrist does. From then on a wait
     /// isn't started afresh: a look that finds it due, and doesn't start
     /// it, keeps since when; and any look `CALM_WAIT` after that starts it,
-    /// however busy the wrist, as does any look once a reading is overdue.
+    /// however busy the wrist.
     /// So no wrist can hold a session back for longer than `CALM_WAIT`
     /// (and the 3 s between looks) past that time, as one did for 18
     /// minutes before 0.10.0-rc.5.
