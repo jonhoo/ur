@@ -919,8 +919,8 @@ impl Arm {
 /// reading.
 ///
 /// A session ends at its reading, where the firmware would now give up on
-/// it (see `gives_up`), or where its recording does: the totals count the
-/// LED time to then. (Recordings end where the firmware that
+/// it (see `gives_up`), at its 30 s (some were recorded to 90), or where
+/// its recording does: the totals count the LED time to then. (Recordings end where the firmware that
 /// made them stopped, up to 0.10.0-rc.3 often within seconds on a busy
 /// wrist, so sessions are a lower bound on what a longer one would have
 /// read.)
@@ -946,6 +946,12 @@ fn replay(path: &str, strict: bool) {
         let mut length = seconds(session.samples.len());
         if session.brighter {
             length = length.min(phase_limit(&session) + 1.0);
+        } else if session.background {
+            // A logging build's longer arm (0.11.0 to 0.11.3-rc.2) recorded
+            // some busy sessions to 90 s; a session ends at 30 s now, so
+            // what came later doesn't count. (A recording runs a moment
+            // past the limit: the half second before its first sample.)
+            length = length.min(SESSION_LIMIT);
         }
         let mut verdicts = Vec::new();
         let windows = windows(&session);

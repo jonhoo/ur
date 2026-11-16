@@ -132,8 +132,8 @@ static SKIN: AtomicBool = AtomicBool::new(false);
 /// end within seconds as "not on a wrist". With this, they stay at their
 /// starting level and run their whole length (a desk has no pulse to
 /// read), as a session on a wrist that won't read does: to check what a
-/// long session does (the logging build's longer arm, with input 22's
-/// busy wrist; see `heart_schedule::Length`).
+/// session that doesn't read does (with input 22's busy wrist, that it
+/// gives up early; see `heart_schedule::hopeless`).
 #[cfg(feature = "debug-input")]
 pub fn skin_forced() -> bool {
     SKIN.load(Ordering::Relaxed)

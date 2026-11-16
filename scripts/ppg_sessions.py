@@ -25,8 +25,9 @@ A segment the accelerometer counted steps through says how many,
 `steps=N` (from its polls' `activity: … N new steps` lines, at `debug`):
 the replay takes no strong pair (see `ppg::Consensus::push_strong`) from
 one, as the firmware takes none on a stepping wrist.
-Background sessions in a logging build after 0.10.0 say their length arm
-too (see `heart_schedule::Length`), `length=longer` or `length=usual`: a
+Background sessions in a logging build from 0.11.0 to 0.11.3-rc.2 say
+their length arm too (an experiment since ended, see
+`heart::SESSION_LIMIT`), `length=longer` or `length=usual`: a
 longer one on a busy wrist may run 90 s rather than 30, which its
 segment's samples show; and a longer one that reads on a busy wrist
 records on to 90 s (`heart: recording on`, then `heart: recorded to`),
