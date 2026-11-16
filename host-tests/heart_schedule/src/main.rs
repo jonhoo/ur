@@ -74,6 +74,18 @@ mod tests {
         until: u32,
         world: impl Fn(u32) -> Moment,
     ) -> Vec<Session> {
+        simulate_in_phase(schedule, from, until, None, world)
+    }
+
+    /// [`simulate`], on a watch that knows the time: `bucket` is when one
+    /// of the phone's buckets starts (see `Schedule::due_in_phase`).
+    fn simulate_in_phase(
+        schedule: &mut Schedule,
+        from: u32,
+        until: u32,
+        bucket: Option<u32>,
+        world: impl Fn(u32) -> Moment,
+    ) -> Vec<Session> {
         let mut sessions = Vec::new();
         let mut polls = 0u8;
         let mut calm = 0;
@@ -88,7 +100,7 @@ mod tests {
             let run = |n: u8, counts: bool| if counts { n.saturating_add(1) } else { 0 };
             calm = run(calm, moment.calm);
             stepless = run(stepless, !moment.active);
-            let (due, why) = schedule.due(polls, moment.asleep);
+            let (due, why) = schedule.due_in_phase(polls, moment.asleep, bucket);
             let how = if t < due {
                 due_since = None;
                 Start::Wait
@@ -324,6 +336,170 @@ mod tests {
         // Awake again: back to backing off.
         let morning = simulate(&mut schedule, 10 * HOUR, 12 * HOUR, resting);
         assert!(gaps(&morning).iter().any(|&w| about(w, MAX_INTERVAL)));
+    }
+
+    /// How far into its bucket `t` is, with a bucket starting at `bucket`.
+    fn into_bucket(t: u32, bucket: u32) -> u32 {
+        (t + BUCKET - bucket % BUCKET) % BUCKET
+    }
+
+    /// Whether `t` is in a bucket's slot for an asleep session's start.
+    fn in_slot(t: u32, bucket: u32) -> bool {
+        (BUCKET_SLOT..BUCKET_SLOT + BUCKET_SLOT_FOR).contains(&into_bucket(t, bucket))
+    }
+
+    #[test]
+    fn the_slot_is_the_start_of_a_buckets_last_minute() {
+        // Buckets from 0: the slot is 240..260 s into each.
+        assert_eq!(in_phase(0, 0), 240);
+        assert_eq!(in_phase(239, 0), 240);
+        assert_eq!(in_phase(240, 0), 240);
+        assert_eq!(in_phase(259, 0), 259);
+        assert_eq!(in_phase(260, 0), 540);
+        assert_eq!(in_phase(299, 0), 540);
+        assert_eq!(in_phase(300, 0), 540);
+        // Buckets from 37 s after boot, or from any other bucket's start,
+        // one long before boot included.
+        for bucket in [37, 337, 37 + 1000 * BUCKET] {
+            assert_eq!(in_phase(0, bucket), 277);
+            assert_eq!(in_phase(277, bucket), 277);
+            assert_eq!(in_phase(297, bucket), 577);
+            // The bucket that began before boot: its slot comes first.
+            assert_eq!(in_phase(0, bucket + 100), 77);
+        }
+    }
+
+    /// Asleep, on a watch that knows the time, sessions keep step with the
+    /// phone's buckets: after the first, each starts as its bucket's last
+    /// minute begins, so every bucket gets one reading, in that minute,
+    /// five minutes after the last. (Without the time, they come five
+    /// minutes after the last one *ended*, and drift through the buckets:
+    /// see `asleep_measures_every_five_minutes`.)
+    #[test]
+    fn asleep_sessions_keep_step_with_the_buckets() {
+        let night = |t: u32| Moment {
+            asleep: true,
+            outcome: Outcome::Reading(50),
+            seconds: 11,
+            ..resting(t)
+        };
+        for bucket in [0, 76, 250, 299] {
+            let mut schedule = Schedule::new();
+            let sessions = simulate_in_phase(&mut schedule, 0, 8 * HOUR, Some(bucket), night);
+            // The first is at boot (and three calm polls), wherever that
+            // falls.
+            assert!(sessions[0].start <= 3 * POLL);
+            assert!(sessions.len() >= 8 * 12 - 1, "{}", sessions.len());
+            for pair in sessions[1..].windows(2) {
+                assert!(about(pair[1].start - pair[0].start, BUCKET), "{pair:?}");
+            }
+            for session in &sessions[1..] {
+                // At the slot's start, give or take the poll it's seen at,
+                // and read well inside the bucket.
+                assert!(into_bucket(session.start, bucket) - BUCKET_SLOT < POLL);
+                assert!(into_bucket(session.end, bucket) < BUCKET - 30);
+                assert_eq!(session.why, Why::Asleep);
+            }
+        }
+    }
+
+    /// A night with its troubles: turning over every 47 minutes (a busy
+    /// wrist for three, so a session due then waits its `CALM_WAIT` and
+    /// runs late), and a session without a reading now and then. Sessions
+    /// fall back into step at once, each is due no more than 6 minutes 40
+    /// after the last (sleep staging compares readings up to 7 apart; the
+    /// wait for calm comes on top, as it always did), none comes within
+    /// two minutes of the last, and there are no fewer than a night of
+    /// drifting ones has.
+    #[test]
+    fn a_restless_night_falls_back_into_step() {
+        let night = |t: u32| Moment {
+            asleep: true,
+            calm: t % (47 * MINUTE) >= 3 * MINUTE,
+            outcome: if (t / 300) % 9 == 4 {
+                Outcome::NoReading
+            } else {
+                Outcome::Reading(50)
+            },
+            seconds: if (t / 300) % 9 == 4 { 30 } else { 11 },
+            ..resting(t)
+        };
+        let bucket = 131;
+        let mut schedule = Schedule::new();
+        let sessions = simulate_in_phase(&mut schedule, 0, 8 * HOUR, Some(bucket), night);
+        let waits = gaps(&sessions);
+        assert!(waits.iter().all(|&w| w >= MIN_INTERVAL), "{waits:?}");
+        for (wait, session) in waits.iter().zip(&sessions[1..]) {
+            let waited = if in_slot(session.start, bucket) {
+                0
+            } else {
+                CALM_WAIT + POLL
+            };
+            assert!(*wait <= 400 + waited, "{waits:?}");
+        }
+        let late: Vec<_> = sessions[1..]
+            .iter()
+            .filter(|s| !in_slot(s.start, bucket))
+            .collect();
+        // Only the ones that had to wait for calm start out of the slot
+        // (one each time the wearer turns over, at most), and the one
+        // after each is back in it.
+        assert!(!late.is_empty() && late.len() <= 11, "{late:?}");
+        assert!(late.iter().any(|s| s.how == Start::Busy), "{late:?}");
+        for pair in sessions[1..].windows(2) {
+            assert!(
+                in_slot(pair[0].start, bucket) || in_slot(pair[1].start, bucket),
+                "{pair:?}"
+            );
+        }
+        // Against the same night without the time.
+        let mut drifting = Schedule::new();
+        let unphased = simulate(&mut drifting, 0, 8 * HOUR, night);
+        assert!(sessions.len() >= unphased.len(), "{}", sessions.len());
+        assert!(sessions.len() <= unphased.len() + 6, "{}", sessions.len());
+    }
+
+    /// Only asleep, and only with the time: awake, a session is due when
+    /// it would be anyway, whatever the buckets, as is the first after
+    /// boot; and the budget still holds an asleep one back.
+    #[test]
+    fn only_asleep_sessions_are_timed_to_the_buckets() {
+        assert_eq!(
+            Schedule::new().due_in_phase(0, true, Some(7)),
+            (0, Why::First)
+        );
+        let mut schedule = Schedule::new();
+        schedule.ended(1000, 11, Outcome::Reading(50), true, sleeping());
+        for bucket in [0, 99, 250] {
+            for polls in [0, MOVED_POLLS] {
+                assert_eq!(
+                    schedule.due_in_phase(polls, false, Some(bucket)),
+                    schedule.due(polls, false)
+                );
+            }
+            assert_eq!(schedule.due_in_phase(0, true, None), schedule.due(0, true));
+        }
+        // Asleep: 1000 + 300 would be 100 s into a bucket from 0, so the
+        // slot before it, at 1140; a bucket from 250 has its slot at 1090,
+        // too soon after the last session, so the next, at 1390.
+        assert_eq!(schedule.due_in_phase(0, true, Some(0)), (1140, Why::Asleep));
+        assert_eq!(
+            schedule.due_in_phase(0, true, Some(250)),
+            (1390, Why::Asleep)
+        );
+        // A slot under way once two minutes have passed: then.
+        assert_eq!(
+            schedule.due_in_phase(0, true, Some(275)),
+            (1120, Why::Asleep)
+        );
+        // A failure's retry is in step too, and an emptied budget holds
+        // the session back past its slot.
+        schedule.ended(1170, 30, Outcome::NoReading, true, sleeping());
+        assert_eq!(schedule.due_in_phase(0, true, Some(0)), (1440, Why::Retry));
+        schedule.ended(1200, 400, Outcome::NoReading, false, sleeping());
+        let (at, why) = schedule.due_in_phase(0, true, Some(0));
+        assert_eq!(why, Why::Budget);
+        assert_eq!((at, why), schedule.due(0, true));
     }
 
     #[test]
@@ -1754,6 +1930,28 @@ mod proofs {
         assert!(checks == 0 || !(hopeless(busy, checks) && calm_throughout(busy, checks)));
     }
 
+    /// For every time and every bucket: the slot found is at or after the
+    /// time asked from, less than a bucket (and its slot's length) later,
+    /// in a bucket's slot, and the same if asked again from there. (Times
+    /// within ten years of boot, as everywhere here; the bucket's start
+    /// may be any `u32`.)
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn the_slot_found_is_the_next_one() {
+        let (earliest, bucket): (u32, u32) = kani::any();
+        kani::assume(earliest < UPTIME);
+        let at = in_phase(earliest, bucket);
+        assert!(earliest <= at && at <= earliest + BUCKET - BUCKET_SLOT_FOR);
+        let into = (at % BUCKET + BUCKET - bucket % BUCKET) % BUCKET;
+        assert!(BUCKET_SLOT <= into && into < BUCKET_SLOT + BUCKET_SLOT_FOR);
+        assert_eq!(in_phase(at, bucket), at);
+        // And none was passed over on the way, but the one `earliest`
+        // was already too far into.
+        if at != earliest {
+            assert_eq!(into, BUCKET_SLOT);
+        }
+    }
+
     // ==========================================================================
     // From any state
     // ==========================================================================
@@ -1859,6 +2057,47 @@ mod proofs {
         if why != Why::Budget {
             assert!(read || !moved || at <= now + MAX_INTERVAL);
             assert!(outcome != Outcome::CalmNoReading || at <= now + CALM_RETRY_INTERVAL);
+        }
+    }
+
+    /// From any consistent state, after any counted session: timing the
+    /// next to the phone's buckets (`due_in_phase`) changes nothing awake,
+    /// or without the time. Asleep, the session is still due at least
+    /// `MIN_INTERVAL` after the last, and not before the budget holds a
+    /// session's worth; and unless the budget holds it back, it's due in
+    /// a bucket's slot, no more than 3 minutes sooner than it would have
+    /// been and no more than 2 minutes 40 later.
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn an_asleep_session_is_due_in_a_slot_near_when_it_would_be() {
+        let mut schedule = any_consistent();
+        let (now, led_seconds): (u32, u32) = kani::any();
+        kani::assume(schedule.as_of() <= now && now < UPTIME);
+        let (outcome, background, before) = any_end();
+        kani::assume(background || matches!(outcome, Outcome::Reading(_)));
+        schedule.ended(now, led_seconds, outcome, background, before);
+
+        let (active_polls, asleep, bucket): (u8, bool, u32) = kani::any();
+        let (at, why) = schedule.due(active_polls, asleep);
+        assert_eq!(schedule.due_in_phase(active_polls, asleep, None), (at, why));
+        let (phased, phased_why) = schedule.due_in_phase(active_polls, asleep, Some(bucket));
+        if !asleep {
+            assert_eq!((phased, phased_why), (at, why));
+            return;
+        }
+        assert!(phased >= now + MIN_INTERVAL);
+        assert!(schedule.budget(phased) >= SESSION_RESERVE);
+        if phased_why == Why::Budget {
+            return;
+        }
+        let into = (phased % BUCKET + BUCKET - bucket % BUCKET) % BUCKET;
+        assert!(BUCKET_SLOT <= into && into < BUCKET_SLOT + BUCKET_SLOT_FOR);
+        // (Where the budget held the unphased session back, a later slot
+        // may be one it no longer does; then there's no "would be" to be
+        // near.)
+        if why != Why::Budget {
+            assert_eq!(phased_why, why);
+            assert!(phased + 180 >= at && phased <= at + 160);
         }
     }
 

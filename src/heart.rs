@@ -324,6 +324,8 @@ const _: () = assert!(
 );
 // The sensor is polled several times a conversion (see `Conversions`).
 const _: () = assert!(POLL.as_micros() * 3 <= crate::ppg::NOMINAL_PERIOD_US as u64);
+// The schedule's buckets are the ones the history is sent in.
+const _: () = assert!(heart_schedule::BUCKET as i64 == crate::gb_buckets::MINUTES * 60);
 // The calm a session waits for is stricter than what vetoes a window.
 const _: () = assert!(CALM < MOTION_LIMIT);
 
@@ -579,8 +581,17 @@ pub async fn heart_task(i2c: Device) {
             if watching() {
                 break None;
             }
-            let (at, why) = schedule.due(activity::active_polls(), activity::asleep());
             let now = uptime();
+            // Where the phone's 5-minute buckets fall, on the schedule's
+            // clock, once the watch knows the time: asleep, a session is
+            // timed to finish in its bucket's last minute (see
+            // `heart_schedule::in_phase`). Worked out afresh at each look,
+            // so a clock the phone has since corrected is followed.
+            let bucket = crate::clock::now_utc_seconds().map(|utc| {
+                (i64::from(now) - utc).rem_euclid(i64::from(heart_schedule::BUCKET)) as u32
+            });
+            let (at, why) =
+                schedule.due_in_phase(activity::active_polls(), activity::asleep(), bucket);
             let wait = if now < at {
                 due_since = None;
                 if activity::still() {

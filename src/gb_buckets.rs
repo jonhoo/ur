@@ -35,7 +35,10 @@
 //!   schedule takes while active (5 of a field day's 123 were lost), and
 //!   measuring continuously does (while the clock face is looked at, or
 //!   Gadgetbridge's live activity is open). Both Gadgetbridge's charts and
-//!   Health Connect then get at most a reading every 5 minutes.
+//!   Health Connect then get at most a reading every 5 minutes. Asleep,
+//!   the schedule times its sessions so that the bucket's one reading
+//!   comes in its last minute, within a minute of the timestamp below
+//!   (see [`crate::heart_schedule::in_phase`]).
 //! - **Kind** (activity, or a sleep stage; see
 //!   [`crate::sleep::Kind::gadgetbridge_name`]): the one most of its
 //!   minutes have, ties going to the later minute's. Sleep sessions and

@@ -25,6 +25,8 @@
 //!   20 minutes can't see. (Simulated on 60 of a Garmin's nights,
 //!   agreement with its stages fell from ~64% at a reading every 5 minutes
 //!   to ~59% at 20.)
+//!   Those sessions are also timed to the phone's 5-minute buckets, each
+//!   to finish in its bucket's last minute (see [`in_phase`]).
 //! - **An elevated reading keeps it short** ([`ELEVATED_INTERVAL`]): at
 //!   least [`ELEVATED_BY`] over the wearer's resting heart rate, learnt
 //!   from earlier readings (separately asleep and awake; see
@@ -103,8 +105,9 @@
 //! rest on stopping: every window still has to pass the signal checks,
 //! sustained movement still vetoes it, a slow one on a busy wrist is still
 //! rejected, and a reading still takes three accepted windows that agree,
-//! or two in a row on a calm wrist (see `ppg::Consensus`), so a moving
-//! wrist mostly just spends the LED. Asleep, a session gave up at 12 s too
+//! or two in a row on a calm wrist (or, since 0.11.3-rc.3, two strongly
+//! periodic ones in a row on a wrist that isn't stepping; see
+//! `ppg::Consensus`), so a moving wrist mostly just spends the LED. Asleep, a session gave up at 12 s too
 //! (4 of 82 that night, on turning over), and runs on as well now: once
 //! the wrist settles, the pulse is as before.
 //!
@@ -125,9 +128,9 @@
 //! watch, one waited 18 minutes through busy desk work. So a due session
 //! now waits for calm for at most [`CALM_WAIT`] (two minutes; and, from
 //! rc.5 to 0.11.3-rc.2, not at all once a reading was overdue, see the
-//! next section). At a desk,
-//! calm comes within the two minutes 71% of the time, so most sessions
-//! still start calm; walking, 31%. ([`bright_start`] is as before.)
+//! next section). At a desk, calm comes within the two minutes 71% of the
+//! time, so most sessions still start calm; walking, 31%.
+//! ([`bright_start`] is as before.)
 //!
 //! What it costs: the schedule makes the same tries, just without the
 //! wait. At its worst, a day on a wrist never calm long enough (walking,
@@ -225,6 +228,23 @@ pub const MAX_INTERVAL: u32 = 20 * 60;
 /// 60 of its own, readings every 2 or 3 minutes staged sleep no better than
 /// every 5, even with `crate::stages`' thresholds refitted to them.
 pub const ASLEEP_INTERVAL: u32 = 5 * 60;
+
+/// The length of the buckets the heart rate reaches the phone in, in
+/// seconds: `gb_buckets::MINUTES`, which `heart` checks.
+pub const BUCKET: u32 = 5 * 60;
+
+/// How far into a bucket an asleep session starts (see [`in_phase`]): as
+/// its last minute begins.
+pub const BUCKET_SLOT: u32 = 4 * 60;
+
+/// How long after [`BUCKET_SLOT`] an asleep session may still start
+/// without waiting for the next bucket's (see [`in_phase`]).
+pub const BUCKET_SLOT_FOR: u32 = 20;
+
+const _: () = assert!(BUCKET_SLOT + BUCKET_SLOT_FOR + SESSION_RESERVE < BUCKET);
+// One session a bucket is the asleep interval, so staying in phase costs
+// no sessions and skips no bucket.
+const _: () = assert!(ASLEEP_INTERVAL == BUCKET);
 
 /// The wait after an elevated reading (see [`ELEVATED_BY`]), to follow a
 /// heart rate that is up (or coming down after exercise; recovery takes
@@ -688,8 +708,45 @@ impl Schedule {
     /// classifier thinks the wearer is asleep.
     ///
     /// Due isn't "start now": `heart` also waits for a still wrist.
+    ///
+    /// On a watch that doesn't know the time: `heart` asks
+    /// [`Self::due_in_phase`], which is this plus the phone's buckets, so
+    /// only the host tests call this one by name.
+    #[cfg(not(target_os = "none"))]
     pub fn due(&self, active_polls: u8, asleep: bool) -> (u32, Why) {
+        self.due_in_phase(active_polls, asleep, None)
+    }
+
+    /// [`Self::due`], with an asleep session timed to the phone's buckets
+    /// (see [`in_phase`]) if `bucket` says where they fall: the uptime, in
+    /// seconds, at which any one of them started or will (only its
+    /// remainder by [`BUCKET`] matters), or `None` while the watch doesn't
+    /// know the time.
+    ///
+    /// Awake, and for the first session after boot, it's [`Self::due`].
+    /// Asleep, the session is due at the first moment in a bucket's slot
+    /// that's no more than three minutes before [`Self::due`] would have
+    /// it, and at least [`MIN_INTERVAL`] after the last session: so up to
+    /// three minutes sooner, or up to 1 minute 40 later (2 minutes 40
+    /// after an elevated reading, whose interval is 4 minutes), and in
+    /// step from then on, as a bucket is [`ASLEEP_INTERVAL`] long. Sooner
+    /// rather than later, so that a session that ran late (a wait for calm
+    /// after turning over) is followed by one in the very next slot, and
+    /// none is due more than 6 minutes 40 after the last: sleep staging
+    /// only compares readings up to 7 minutes apart (`stages::SWING_GAP`).
+    /// The budget holds a session back as before, in phase or not: a night
+    /// spends half of it.
+    pub fn due_in_phase(&self, active_polls: u8, asleep: bool, bucket: Option<u32>) -> (u32, Why) {
         let (at, why) = self.due_unbudgeted(active_polls, asleep);
+        let at = match bucket {
+            Some(bucket) if asleep && why != Why::First => {
+                let earliest = at
+                    .saturating_sub(BUCKET - MIN_INTERVAL)
+                    .max(self.last.saturating_add(MIN_INTERVAL));
+                in_phase(earliest, bucket)
+            }
+            _ => at,
+        };
 
         // The budget: when will the bucket hold a whole session's worth?
         // That holds the first session after boot back too: the clock
@@ -1146,6 +1203,56 @@ impl Schedule {
             .tokens
             .saturating_sub(led_seconds.min(u32::from(u16::MAX)) as u16);
         let _ = self.charger(now, true);
+    }
+}
+
+// ==============================================================================
+// In step with the phone's buckets
+// ==============================================================================
+
+/// The first time from `earliest` on (seconds since boot) that falls in a
+/// bucket's slot, the [`BUCKET_SLOT_FOR`] seconds from [`BUCKET_SLOT`] into
+/// it, given that a bucket starts at `bucket` (any one of them: only its
+/// remainder by [`BUCKET`] matters): when an asleep session should start.
+///
+/// Why: the heart rate reaches Gadgetbridge, and Health Connect through
+/// it, as one sample per UTC-aligned 5-minute bucket, the bucket's latest
+/// reading stamped at the bucket's last second (see `gb_buckets`, which
+/// says why it must be so). A session every 5 minutes *after the last one
+/// ended* drifts through the buckets ~11 s a time, so its readings were
+/// stamped anything up to 5 minutes late: on the sealed watch (346
+/// points, 2026-11-13 to 16), a median 130 s after the reading, over two
+/// minutes for 53% of them. Against a Garmin that alone took the mean
+/// error from 2.5 BPM at the reading's own time to 3.3 at its stamp, and
+/// doubled the points more than 8 BPM off (15 to 30). And every 27th
+/// bucket or so got no reading at all, as the drift stepped over it.
+///
+/// Started as a bucket's last minute begins, a session that reads in its
+/// usual ~11 s is stamped ~50 s after the reading, one that takes its
+/// full 30 s still lands in its bucket, and so does one that had to wait
+/// up to [`BUCKET_SLOT_FOR`] for a calm wrist first (asleep, 94% of polls
+/// already end a calm run). Each bucket gets one session, where it got
+/// 0.96: no reading is lost to this, and ~3% more LED is spent asleep.
+///
+/// A slot rather than an instant, so that a session free to start a few
+/// seconds into one (the last ran late, and [`MIN_INTERVAL`] has only now
+/// passed) starts then, rather than wait out a whole bucket more.
+///
+/// Asleep only. Awake, a due session waits up to two minutes for a calm
+/// wrist (a median 40 s at a desk), which is more than the minute aimed
+/// for, and holding a session back for a slot would make the gaps longer
+/// that the overdue retries exist to shorten (see [`OVERDUE_RETRY`]). The
+/// stamp matters most where the heart rate moves, which is awake, so:
+///
+/// TODO: awake too, where it's cheap: a session at rest, 10 or 20 minutes
+/// after the last, could come a minute or two sooner to land in a slot.
+pub fn in_phase(earliest: u32, bucket: u32) -> u32 {
+    // How far into its bucket `earliest` is.
+    let into = (earliest % BUCKET + BUCKET - bucket % BUCKET) % BUCKET;
+    if (BUCKET_SLOT..BUCKET_SLOT + BUCKET_SLOT_FOR).contains(&into) {
+        earliest
+    } else {
+        earliest.saturating_add((BUCKET_SLOT + BUCKET - into) % BUCKET)
     }
 }
 
