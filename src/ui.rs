@@ -38,7 +38,7 @@
 //!   the content moves.
 //! - Button: back to the clock, sweeping towards it; on the clock, turn the
 //!   screen off. While a call rings: silence it. In the quiet night, a
-//!   double press (two within [`DOUBLE_PRESS`]) ends it (see below).
+//!   double press (two within [`DOUBLE_PRESS`], 2 s) ends it (see below).
 //! - On the clock, while a phone is connected, the media gestures of the
 //!   screen off and a glance (see below): a double tap (the second tap
 //!   starting within [`wake::DOUBLE_TAP_MS`] of the first's lift) plays
@@ -238,8 +238,8 @@
 //!   screen waits for the first proper wake after the night, and shows
 //!   then without the buzz (see [`App::on_charged`]).
 //! - A double press of the button ends it: the first press wakes the
-//!   screen (dimly) as usual, and the second, rather than turning it off
-//!   again, brightens it.
+//!   screen (dimly) as usual, at once, and the second, within 2 s
+//!   ([`DOUBLE_PRESS`]), rather than turning it off again, brightens it.
 //! - Everything shows in the dim look (white, and red for what comes
 //!   second, on black, in retro; see [`crate::themes`]), at the glance's low
 //!   backlight.
@@ -326,7 +326,17 @@ const CENTRE_AFTER_TOUCH_WAKE: Duration =
     Duration::from_millis(wake::CENTRE_AFTER_TOUCH_WAKE_MS as u64);
 /// In the quiet night, two presses of the button this close together end
 /// it (see [`App::on_input`]).
-const DOUBLE_PRESS: Duration = Duration::from_millis(500);
+///
+/// It was half a second, which the wearer's presses never made: in
+/// 0.11.3-rc.3's field log, their pairs in a quiet night were 1.1, 3.0,
+/// and 6.2 s apart (after the first, the quiet night went on for 21
+/// minutes). A press acts at once, so a wider window delays nothing: the
+/// first wakes the screen, and only what the second does depends on how
+/// soon it comes. The cost is that pressing again within 2 s to turn the
+/// screen off, in a quiet night, ends the night instead (and leaves the
+/// screen on, bright, which says so); left alone, the screen goes off by
+/// itself.
+const DOUBLE_PRESS: Duration = Duration::from_secs(2);
 /// How long a notification banner shows.
 const BANNER_TIME: Duration = Duration::from_secs(4);
 /// How long after a notification that had the screen to itself went dark

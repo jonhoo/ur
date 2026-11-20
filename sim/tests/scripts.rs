@@ -386,6 +386,8 @@ fn the_quiet_night_leaves_idle_mode_while_the_screen_is_used() {
     // but out of idle mode (where the sweep between screens stuttered),
     // and so until the screen goes off. The next look is in idle mode
     // again, and the press that puts the screen out isn't use of it.
+    // (Each press comes 3 s after the one before: within 2 s, two are the
+    // double press that ends the quiet night.)
     std::fs::write(
         &script,
         "time 2026-11-10 23:40\nasleep on\nwait 2m\nexpect quiet-night\n\
@@ -393,8 +395,8 @@ fn the_quiet_night_leaves_idle_mode_while_the_screen_is_used() {
          left\nwait 1s\nexpect dim\nexpect not idle\n\
          right\nwait 1s\nexpect clock\nexpect not idle\n\
          wait 11s\nexpect not screen-on\n\
-         button\nwait 1s\nexpect idle\n\
-         button\nwait 2s\nexpect not screen-on\n\
+         button\nwait 3s\nexpect idle\n\
+         button\nwait 3s\nexpect not screen-on\n\
          button\nwait 1s\nexpect quiet-night\nexpect idle\n",
     )
     .expect("the target dir is writable");
@@ -943,6 +945,29 @@ fn a_tap_at_the_edge_does_not_snooze_a_ringing_alarm() {
          wait 10m\nexpect not buzzing\n\
          alarm 1 07:15 on\nuntil 07:15\nexpect buzzing\ntap 17,8 67\nexpect not buzzing\n\
          wait 8m\nexpect not buzzing\nwait 61s\nexpect buzzing\nbutton\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+}
+
+/// In a quiet night, a second press of the button within 2 s of the
+/// first (`ui::DOUBLE_PRESS`) ends it, the first having woken the screen
+/// at once, as any press: the wearer's presses in 0.11.3-rc.3's field
+/// log were 1.1 s apart, which half a second never caught. A second
+/// press later than that is a press on its own, turning the screen off.
+#[test]
+fn a_slow_double_press_ends_the_quiet_night() {
+    let dir = out("double-press-slow");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "time 2026-11-09 02:00 +01:00\nasleep on\nwait 2m\nexpect quiet-night\n\
+         button\nexpect screen-on\nexpect dim\nwait 2100ms\nbutton\n\
+         expect not screen-on\nexpect quiet-night\nwait 5s\n\
+         button\nexpect screen-on\nexpect dim\nwait 1150ms\nbutton\n\
+         expect not quiet-night\nexpect screen-on\nexpect not dim\n",
     )
     .expect("the target dir is writable");
     let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);

@@ -194,8 +194,8 @@ bar on an edge means there's more that way.
   second tap within 1.5 seconds wakes it, however light. During a quiet
   night, only the button wakes it.
 - **The button** goes back to the clock, or off from it. It also
-  stops "find my watch" (as does a touch), and a double press ends a
-  quiet night.
+  stops "find my watch" (as does a touch), and a double press (two
+  presses within 2 seconds) ends a quiet night.
 - **Long-press** (the watch buzzes once it's taken, at 0.6 s) switches
   an alarm or timer on or off, and on Info, offers storage mode.
 - **Media:** double-tap quickly to play or pause, and tap, then tap and
@@ -518,9 +518,9 @@ The watch thinks you're asleep: it's a quiet night. It ends with the
 morning's first alarm, or once you've been up for 22 minutes (7 after a
 nap, which is sleep between 09:00 and 20:00, or after dozing off again
 before noon once an alarm has rung or you've double-pressed). If you're
-up before either, double-press the button. A watch left lying still off
-your wrist can pass for asleep too, unless it lies level and face up (on
-a desk, or the charger), which it recognises.
+up before either, double-press the button (twice within 2 seconds). A
+watch left lying still off your wrist can pass for asleep too, unless it
+lies level and face up (on a desk, or the charger), which it recognises.
 
 ### N02: The watch says "TEXT AS BITMAPS"
 
