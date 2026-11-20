@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check on a dev kit that a crash keeps the activity the phone hasn't fetched.
 
-    crash-keeps-activity.py ELF ADDRESS [--steps N]
+    crash-keeps-activity.py ELF ADDRESS [--steps N] [--field-log]
 
 ELF is a build with the `debug-input` feature, already flashed and running
 (`cargo run --release --features debug-input`, then Ctrl-C once it boots),
@@ -24,6 +24,16 @@ scripts/gb-peer.py, and:
    from before the walk, as Gadgetbridge would after the crash: it must
    have the steps.
 
+A build that keeps its log in the SPI flash (the `field-log` feature, with
+`debug-input`) has moved the boot's lines there by the time step 5 looks,
+and RTT has none of them: with `--field-log`, step 5 comes last instead,
+and reads them from the log fetched over Bluetooth (scripts/fetch-log.py;
+the first fetch from a watch takes minutes).
+
+The steps come back whether the phone had fetched them or not: the walk's
+minutes are in a checkpoint until their bucket is over, and from then on
+in the activity log (see src/spill.rs), which a boot reads back whole.
+
 A dev kit lies on a desk, so it has no night to keep; the simulator's
 `a_crash_mid_night_keeps_the_night_and_the_unsynced_minutes` checks that.
 
@@ -37,6 +47,7 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -98,6 +109,50 @@ def boot_log(elf: Path) -> list[str]:
     )
     rtt.wait()
     return decoded.stdout.splitlines()
+
+
+def fetched_log(elf: Path, address: str) -> list[str]:
+    """The last boot's lines of the dev kit's field log, fetched over
+    Bluetooth (scripts/fetch-log.py, which keeps what it fetched in its
+    cache, so only the first fetch from a watch is long)."""
+    with tempfile.TemporaryDirectory() as out:
+        subprocess.run(
+            ["uv", "run", "--quiet", "--with", "bleak", "python"]
+            + [str(ROOT / "scripts" / "fetch-log.py"), "--address", address, "--out", out],
+            stdout=subprocess.DEVNULL,
+            check=True,
+        )
+        # One file per firmware version in the log, written oldest first:
+        # the last is this build's.
+        files = sorted(Path(out).glob("field-log-*.defmt"), key=lambda f: f.stat().st_mtime_ns)
+        if not files:
+            return []
+        with files[-1].open("rb") as stream:
+            decoded = subprocess.run(
+                ["defmt-print", "-e", str(elf)],
+                stdin=stream,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+    lines = decoded.stdout.splitlines()
+    boots = [i for i, line in enumerate(lines) if line.rstrip().endswith(" booting")]
+    return lines[boots[-1] :] if boots else lines
+
+
+def check_boot(log: list[str], failures: list[str], where: str) -> None:
+    """What the boot after the crash must have logged."""
+    for line in log:
+        if any(k in line for k in ("reset reason", "hard-faulted", "resumed", "snapshot:", "spill:")):
+            print(f"  {line}", flush=True)
+    for expected in (
+        "the previous run hard-faulted",
+        "clock: resumed after reset",
+        "activity: resumed with",
+        "(a checkpoint)",
+    ):
+        if not any(expected in line for line in log):
+            failures.append(f"the boot's log has no {expected!r} ({where})")
 
 
 class Peer:
@@ -196,6 +251,11 @@ def main() -> None:
     parser.add_argument("elf", type=Path)
     parser.add_argument("address")
     parser.add_argument("--steps", type=int, default=1234, help="steps to walk (up to 65535)")
+    parser.add_argument(
+        "--field-log",
+        action="store_true",
+        help="read the boot's lines from the field log (a `field-log` build)",
+    )
     args = parser.parse_args()
     if not 0 < args.steps < 1 << 16:
         sys.exit("--steps: 1 to 65535")
@@ -225,18 +285,8 @@ def main() -> None:
     peer.request("disconnect")
     inject(args.elf, HARDFAULT)
     time.sleep(BOOT_SECONDS)
-    log = boot_log(args.elf)
-    for line in log:
-        if any(k in line for k in ("reset reason", "hard-faulted", "resumed", "snapshot:")):
-            print(f"  {line}", flush=True)
-    for expected in (
-        "the previous run hard-faulted",
-        "clock: resumed after reset",
-        "activity: resumed with",
-        "(a checkpoint)",
-    ):
-        if not any(expected in line for line in log):
-            failures.append(f"the boot's log has no {expected!r} (or RTT's buffer dropped it)")
+    if not args.field_log:
+        check_boot(boot_log(args.elf), failures, "or RTT's buffer dropped it")
 
     # Gadgetbridge's fetch sends whole buckets, so wait for the walk's to end.
     bucket_end = (walked_minute // BUCKET + 1) * BUCKET
@@ -249,6 +299,10 @@ def main() -> None:
     time.sleep(2)
     samples = fetch(peer, (walked_minute - 10) * 60_000)
     peer.quit()
+    if args.field_log:
+        print("fetching the field log, for the boot's lines", flush=True)
+        time.sleep(5)
+        check_boot(fetched_log(args.elf, args.address), failures, "in the fetched field log")
     bucket_ms = (walked_minute // BUCKET * BUCKET * 60_000, bucket_end * 60_000)
     steps = sum(s.get("stp", 0) for s in samples if bucket_ms[0] <= s.get("ts", 0) < bucket_ms[1])
     print(f"the walk's bucket has {steps} steps, of {args.steps}", flush=True)

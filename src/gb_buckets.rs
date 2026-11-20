@@ -150,10 +150,14 @@
 //!   Gadgetbridge never overwrites a sample's kind. It goes out with the
 //!   first fetch after it ends. So Gadgetbridge lags the watch by up to 5
 //!   minutes.
-//! - Nor is a bucket whose first minutes the history has already dropped
-//!   (it keeps 24 hours): Gadgetbridge may have it whole.
-//! - What the watch saves before switching off starts at a bucket's start
-//!   too (see `system_off`), so a restored history holds whole buckets.
+//! - Nor is a bucket whose first minutes the watch has already dropped:
+//!   Gadgetbridge may have it whole. (The history keeps 24 hours, and
+//!   the activity log in the SPI flash, which a fetch reads what's older
+//!   from, 11 days: see `crate::spill`.)
+//! - The log takes in whole buckets, and what the watch saves besides
+//!   (before switching off, and for a crash) carries on from where the
+//!   log ends (see `system_off`), so a restored history holds whole
+//!   buckets.
 //! - Nor is a bucket any of whose minutes' kinds may still change: a fetch
 //!   in the night stops at the night's start, and the morning's sends it
 //!   whole (see [`crate::sleep_hold`] and [`Fetch::hold`]).
@@ -188,7 +192,9 @@
 //! next fetch sends from there, the minutes before the jump at their
 //! times. But a jump of more than a day drops the history at the next
 //! minute the watch files (see [`crate::minute_ring`]), so what the phone
-//! hadn't fetched is lost, unless it fetches first.
+//! hadn't fetched of the minutes not yet in the activity log (the bucket
+//! under way, and what a fetch was holding back) is lost, unless it
+//! fetches first.
 //!
 //! TODO: a clock set back drops the history's minutes after the new time;
 //! a bucket sent before that and again after it would overwrite
@@ -312,6 +318,12 @@ impl Fetch {
     /// sooner, so that a bucket is sent whole once all of it is settled.
     pub fn hold(&mut self, from: i64) {
         self.end = self.end.min(start_of(from));
+    }
+
+    /// Where the fetch ends: the start of the first bucket it doesn't
+    /// send.
+    pub fn end(&self) -> i64 {
+        self.end
     }
 
     /// Where to read the history from for [`Fetch::next`].

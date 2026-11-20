@@ -1,8 +1,18 @@
-//! The record that carries unsynced activity across System OFF (see
-//! [`crate::system_off`]) and a crash: its format, which minutes go in it,
-//! and which of the saved records a boot restores.
+//! The record that carries the newest of the activity history across
+//! System OFF (see [`crate::system_off`]) and a crash: its format, which
+//! minutes go in it, and which of the saved records a boot restores.
 //!
 //! Hardware-free, so it's tested on the host (`host-tests/snapshot`).
+//!
+//! The record holds the minutes that aren't in the activity log yet (see
+//! [`crate::spill`], which has every minute a fetch could have sent):
+//! those a fetch would hold back for now, a night under way above all
+//! (see [`crate::sleep_hold`]), and the bucket under way. Their kinds are
+//! still being revised, minute by minute, which is why they're rewritten
+//! whole rather than appended. (Up to 0.11.3-rc.4 there was no log, and
+//! the record held everything the phone hadn't fetched, up to the day
+//! the history holds: 8.6 KB rewritten every two minutes by the time the
+//! phone had been away for a day, and nothing older.)
 //!
 //! There are two kinds of record, in the same format:
 //!
@@ -26,10 +36,16 @@
 //!   record, as the header goes last; the slot before still holds the
 //!   previous checkpoint, a few minutes older.
 //! - Each save erases only the sectors its record needs ([`erase_bytes`]):
-//!   one, unless the phone hasn't fetched for more than ~11 hours. With 32
-//!   slots, each sector is erased at most every 64 minutes, 23 times a
-//!   day: a flash rated for 100,000 erases lasts 12 years.
-//! - What's in a checkpoint is what the history held (minus what the phone
+//!   one, unless a fetch is holding back more than ~11 hours (a watch
+//!   left lying still, taken for asleep). With 32 slots, each sector is
+//!   erased at most every 64 minutes, 23 times a day: a flash rated for
+//!   100,000 erases lasts 12 years. By day a record is a few dozen
+//!   bytes, and the erase (~50 ms) is nearly all a save costs.
+//!
+//!   TODO: by day, several checkpoints would fit one sector, one after
+//!   the other, for an erase every hour or so instead of every two
+//!   minutes; a boot would then look for records within a slot too.
+//! - What's in a checkpoint is what the history held (minus what the log
 //!   has): a crash that scribbled over the history before the checkpoint
 //!   puts back the same scribbles, no worse than the history the firmware
 //!   was already using. Every 6-byte sample is a valid one (plain integers,
@@ -39,11 +55,11 @@
 //!   from this side of the last planned reset and within a day of the
 //!   clock ([`newer_checkpoint`]).
 //! - A checkpoint is never retired: the next one supersedes it, holding
-//!   whatever it held that the phone hasn't fetched since.
+//!   whatever it held that hasn't gone into the log since.
 //!
 //! The record is a 32-byte header followed by one 6-byte sample per minute
 //! (the in-RAM [`crate::activity::Sample`], verbatim) from the first minute
-//! the phone may not have to the newest (one with none starts just after
+//! after the log's last to the newest (one with none starts just after
 //! the newest: see [`empty_from`]):
 //!
 //! | Offset | Size | Field |
@@ -65,7 +81,10 @@
 //! The synced word says the watch knew where the phone's copy of the
 //! history ended, from a fetch it answered (see
 //! `system_off::synced_through`), so the next fetch can start at the
-//! record's first minute. Without it, the phone may already have some of
+//! record's first minute. (Since the log, that's noted there, at each
+//! fetch, and a boot goes by the later of the two: the word matters for
+//! a record an older build saved before an update, and for an older
+//! build restoring this one's.) Without it, the phone may already have some of
 //! the record's minutes, and the next fetch starts after what the phone
 //! asks for (see [`crate::gb_buckets::start`]). It came after the rest,
 //! which is why it's outside the checksum: older builds restore a record
@@ -169,22 +188,22 @@ impl Header {
     }
 }
 
-/// The first minute worth saving, given the newest minute in the history,
-/// and the newest the phone has fetched (if the watch knows; see
-/// `system_off::synced_through`), and whether it knows: the record's
-/// first minute and its synced word.
+/// The first minute worth saving, given the newest minute in the
+/// history, the last minute the activity log is complete up to (if it
+/// holds any; see [`crate::spill`]), and how many minutes the record has
+/// room for.
 ///
-/// The phone's next fetch starts just after what it last got (see
-/// [`crate::gb_buckets::start`]), so the record starts there too. Without
-/// a fetch the watch knows of, all of the history is (as far as it knows)
-/// unsynced; so it is after a fetch that went past the newest minute, as
-/// the clock has gone back since (see [`crate::minute_ring`]), and what
-/// the phone got then says nothing of the minutes the history holds now.
-pub fn unsynced_from(newest: i64, synced_through: Option<i64>) -> (i64, bool) {
-    let oldest = newest - MAX_MINUTES as i64 + 1;
-    match synced_through.filter(|&synced| synced <= newest) {
-        Some(synced) => ((synced + 1).max(oldest), true),
-        None => (oldest, false),
+/// The log has every minute a fetch could have sent, so the record starts
+/// after it: with what a fetch holds back, and the bucket under way. A
+/// log that ends after the newest minute says nothing of the minutes the
+/// history holds now, as the clock has gone back since (see
+/// [`crate::minute_ring`]); nor does no log. Then all of the history
+/// goes in the record, as before there was a log, as far as there's room.
+pub fn unlogged_from(newest: i64, logged: Option<i64>, room: usize) -> i64 {
+    let oldest = newest - room as i64 + 1;
+    match logged.filter(|&logged| logged <= newest) {
+        Some(logged) => (logged + 1).max(oldest),
+        None => oldest,
     }
 }
 
@@ -233,8 +252,10 @@ pub const CHECKPOINT_MINUTES: i64 = 2;
 pub const CHECKPOINT_SLOTS: u32 = 32;
 /// The SPI flash's erase sector (`spi_flash::SECTOR`).
 pub const SECTOR_BYTES: u32 = 4096;
-/// A slot: room for the largest record, in whole sectors.
-pub const SLOT_BYTES: u32 = (MAX_BYTES as u32).next_multiple_of(SECTOR_BYTES);
+/// A slot: two sectors, 22 hours of minutes. (Three, room for the whole
+/// history, up to 0.11.3-rc.4, when a checkpoint held all the phone
+/// hadn't fetched.)
+pub const SLOT_BYTES: u32 = 2 * SECTOR_BYTES;
 
 /// Whether a checkpoint is due as the clock reaches `minute` (UTC minutes
 /// since 1970).

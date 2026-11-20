@@ -268,14 +268,24 @@ pub fn set_light(light: bool) {
 // Surviving a crash
 // ==============================================================================
 //
-// On the watch, `system_off` checkpoints the history the phone hasn't
-// fetched into the SPI flash every couple of minutes, and a boot after a
-// crash (or the watchdog) restores the newest, in the firmware's own
-// format (`snapshot`). The same here, with the same code choosing what
-// to save, where, and what to restore; the samples are the simulator's
-// history (steps and heart rates), and the minutes of the last night as
-// its stages, as the watch's history holds them (light, deep and REM
-// minutes, and restless ones at its end).
+// On the watch, `system_off` keeps the history in the SPI flash: every
+// couple of minutes it appends the minutes a fetch could send to a log
+// (`spill`), and checkpoints the rest (what a fetch holds back, and the
+// bucket under way); a boot after a crash (or the watchdog) reads the log
+// back, and restores the newest checkpoint on top, in the firmware's own
+// format (`snapshot`).
+//
+// The simulator has no SPI flash, and no log: its checkpoint stands for
+// both where they differ from RAM, holding everything the phone hasn't
+// fetched (as the watch's did up to 0.11.3-rc.4), with the same code
+// choosing where it goes and which one a boot restores; and a crash keeps
+// the history from before it, as the log does. The samples are the
+// simulator's history (steps and heart rates), and the minutes of the
+// last night as its stages, as the watch's history holds them (light,
+// deep and REM minutes, and restless ones at its end).
+//
+// TODO: model the log itself (`spill` runs on a computer): what a fetch
+// holds back, the eleven days it keeps, and a fetch that reads it.
 
 /// A `snapshot` sample's flags (as `activity::Sample`'s): recorded, and
 /// worn.
@@ -296,11 +306,15 @@ pub fn poll() {
     state.checkpoints.insert(slot, record);
 }
 
-/// What `system_off::save` writes, with `newest` the history's newest
-/// minute: the minutes from where the phone's next fetch starts.
+/// What `system_off::save` writes and the log holds past the phone's
+/// copy, with `newest` the history's newest minute: the minutes from
+/// where the phone's next fetch starts.
 fn record(state: &State, newest: i64) -> Vec<u8> {
     use crate::snapshot::{self, Header};
-    let (from, synced) = snapshot::unsynced_from(newest, crate::script::synced_through());
+    // The phone's copy standing for the log's end (see above).
+    let synced = crate::script::synced_through().filter(|&synced| synced <= newest);
+    let from = snapshot::unlogged_from(newest, synced, snapshot::MAX_MINUTES);
+    let synced = synced.is_some();
     let from = crate::gb_buckets::start_of(from).max(newest - snapshot::MAX_MINUTES as i64 + 1);
     let kinds = night_kinds(state);
     let has_data = |minute: i64| state.history.contains_key(&minute) || kinds.contains_key(&minute);
@@ -368,21 +382,20 @@ pub fn save_planned() {
 }
 
 /// The watch crashed and reset: what's in RAM is lost (the history, the
-/// last night, where the phone's copy of the history ends, whether the
-/// wearer's asleep), bar today's steps (in RAM that resets keep, as the
-/// clock is: see `clock`); then, as the activity task does at boot
-/// (`system_off::restore`), the newest checkpoint is put back. Call with
-/// the clock resumed. Says what it restored.
+/// last night, whether the wearer's asleep), bar today's steps (in RAM
+/// that resets keep, as the clock is: see `clock`); then, as the activity
+/// task does at boot (`system_off::restore`), the log is read back (here:
+/// the history from before the newest checkpoint stays, and where the
+/// phone's copy of it ends), and the newest checkpoint is put back. Call
+/// with the clock resumed. Says what it restored.
 pub fn crash() -> String {
     use crate::snapshot::{self, HEADER_BYTES, Header, SAMPLE_BYTES};
     let mut state = state();
-    state.history.clear();
     state.last_sleep = None;
     state.asleep = false;
     state.light = false;
     state.counted = 0;
     state.polled = None;
-    crate::script::set_synced_through(None);
 
     let now = clock::now_utc_seconds().map(|second| second.div_euclid(60));
     let header = |bytes: &[u8]| {
@@ -409,10 +422,14 @@ pub fn crash() -> String {
         }
     }
     let Some((bytes, header)) = best.map(|(bytes, header)| (bytes.clone(), header)) else {
+        // Not two minutes into the first run: no log yet either.
+        state.history.clear();
         return "nothing to restore".into();
     };
 
+    // What the log has: all that's before the checkpoint.
     let first = i64::from(header.first_minute);
+    state.history.retain(|&minute, _| minute < first);
     let mut kinds = Vec::new();
     const _: () = assert!(SAMPLE_BYTES == 6);
     for (i, &[s0, s1, _, _, heart_rate, flags]) in

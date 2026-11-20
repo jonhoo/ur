@@ -582,7 +582,8 @@ RTT_SECS=30 cargo run --release --features wedge-i2c
 ```
 
 `scripts/crash-keeps-activity.py` checks that a crash keeps the
-activity the phone hasn't fetched (see `src/snapshot.rs`'s checkpoints):
+activity the phone hasn't fetched (see `src/snapshot.rs`'s checkpoints,
+and `src/spill.rs` for the log the rest is in):
 standing in for Gadgetbridge (with `scripts/gb-peer.py`, so the computer
 must be paired with the dev kit), it sets the clock, walks some steps,
 waits for a checkpoint, hard-faults the dev kit (input 26), checks the
@@ -592,6 +593,16 @@ boot's log, and fetches the activity again, which must have the steps:
 RTT_SECS=3 cargo run --release --features debug-input
 python3 scripts/crash-keeps-activity.py target/thumbv7em-none-eabihf/release/ur <ADDRESS>
 ```
+
+On a build with `field-log` too, pass `--field-log`: the boot's lines are
+in the SPI flash by the time the script looks for them over RTT, so it
+fetches the field log for them instead.
+
+The log itself (which minutes go in, a fetch reading them back, what a
+clock set back takes out again, and all of that across resets cut in
+mid-write) is tested on the computer, against a model of the flash:
+`cd host-tests/spill && cargo test --release`, and with
+`SPILL_TESTS=100000` after a change to its format.
 
 **Probe sessions halt the core.** Most `esprobe` commands (`core read`
 and `core write`, `rtt`, `flash`) are a probe-rs session, which halts

@@ -85,8 +85,8 @@ on top:
 - **Gadgetbridge without gaps:** with [InfiniTime]'s protocol,
   Gadgetbridge records steps and heart rate only while connected, and no
   sleep. ur speaks the [Bangle.js protocol] instead, and keeps the
-  last 24 hours of activity for stock Gadgetbridge to fetch once the
-  phone is back.
+  last week and more of activity (11 days at most) for stock
+  Gadgetbridge to fetch once the phone is back.
 - **Nothing lost:** before the battery runs flat, or when put away in
   storage mode, the watch saves what the phone hasn't fetched and
   switches off. A crash restarts it at once, and leaves a backtrace in

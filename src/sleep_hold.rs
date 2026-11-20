@@ -190,7 +190,9 @@
 //! whatever the watch has, settled or not. Otherwise a sleep that never
 //! ends (a watch lying still on a nightstand, before the heart rate sensor
 //! notices it's off) would keep everything back until the history (24
-//! hours) drops it.
+//! hours) drops it: what's held back is in the history alone, and only
+//! what a fetch could send goes on into the activity log, which keeps it
+//! for days (see `crate::spill`).
 //!
 //! What's settled stays so until a reset, which loses it: the history the
 //! phone has fetched is gone then too, and what it hasn't is restored

@@ -59,6 +59,7 @@ use crate::link::{self, Link, Verdict};
 use crate::log_ring;
 use crate::packet_pool::Pool;
 use crate::phone::{PhoneEvent, Unpaired};
+use crate::system_off::minute32;
 use crate::unpaired::{Heard, Judge, Stay};
 use crate::{activity, clock, dfu, gb_buckets, storage};
 
@@ -1467,42 +1468,91 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
     //
     // The history's oldest minutes drop out as new ones come in, which may
     // happen while the fetch goes on: so it's as if a few more had already.
+    //
+    // The buckets come from the activity log in the SPI flash first (see
+    // `spill`), which has every one a fetch could have sent for the last
+    // 11 days, so a phone that was away for longer than the history's day
+    // still gets them all; then from the history, for what's not in the
+    // log yet (the last minutes; and all of it, should the flash not
+    // answer).
     let synced = crate::system_off::synced_through();
     let hold = activity::gadgetbridge_hold();
-    let mut fetch = now.map(|now| {
-        let now = now.div_euclid(60);
-        let oldest = activity::newest_minute().map_or(i64::MIN / 2, |newest| {
-            newest - activity::HISTORY_MINUTES as i64 + 1 + gb_buckets::MINUTES
-        });
-        let since = gb_buckets::start(since_ms, synced, now);
-        let mut fetch = gb_buckets::Fetch::new(since, oldest, now);
-        if let Some(hold) = hold {
-            fetch.hold(hold.from);
+    let mut log = None;
+    let mut fetch = match now {
+        Some(now) => {
+            let now = now.div_euclid(60);
+            let since = gb_buckets::start(since_ms, synced, now);
+            let mut oldest = activity::newest_minute().map_or(i64::MIN / 2, |newest| {
+                newest - activity::HISTORY_MINUTES as i64 + 1 + gb_buckets::MINUTES
+            });
+            if let Some((reader, logged)) = crate::system_off::log_open(minute32(since)).await {
+                // (Not from before the log's first whole bucket either:
+                // `Fetch::new` takes that from its oldest minute.)
+                oldest = oldest.min(i64::from(logged));
+                log = Some(reader);
+            }
+            let mut fetch = gb_buckets::Fetch::new(since, oldest, now);
+            if let Some(hold) = hold {
+                fetch.hold(hold.from);
+            }
+            Some(fetch)
         }
-        fetch
-    });
+        None => None,
+    };
     let mut sent = 0;
     // Whether every sample went out (as far as we can tell: notifications
     // aren't acknowledged).
     let mut complete = fetch.is_some();
-    // A bucket at a time: the history can't be borrowed across the awaits
-    // while sending.
-    while let Some(bucket) = fetch.as_mut().and_then(|fetch| {
-        activity::HISTORY.lock(|history| {
-            let history = history.borrow();
-            let minutes = history.since(fetch.from()).map(|(utc_minute, sample)| {
-                let minute = gb_buckets::Minute {
-                    steps: sample.steps,
-                    movement: sample.movement,
-                    heart_rate: sample.heart_rate,
-                    seen: sample.seen(),
-                    kind: sample.gadgetbridge_kind(),
-                };
-                (utc_minute, minute)
-            });
-            fetch.next(minutes)
-        })
-    }) {
+    while let Some(fetch) = fetch.as_mut() {
+        // A bucket at a time, from the log while it has any: each read
+        // takes the flash for a millisecond or so, and leaves it to the
+        // activity task in between.
+        let mut logged = None;
+        while let Some(reader) = log.as_mut() {
+            let mut want = crate::spill::Want {
+                reader,
+                from: minute32(fetch.from()),
+                end: minute32(fetch.end()),
+                out: [None; gb_buckets::MINUTES as usize],
+            };
+            match crate::system_off::log_bucket(&mut want).await {
+                crate::spill::Read::Bucket(first) => {
+                    let minutes =
+                        (i64::from(first)..)
+                            .zip(want.out)
+                            .filter_map(|(minute, sample)| {
+                                Some((minute, activity::bucket_minute(sample?)))
+                            });
+                    logged = fetch.next(minutes);
+                    break;
+                }
+                // The rest is in the history.
+                crate::spill::Read::End => log = None,
+                // A full log's oldest sector was erased as it was read:
+                // on from the oldest it has now. (That one's first
+                // bucket may have lost minutes with the sector before;
+                // what's left of it goes all the same.)
+                crate::spill::Read::Lost => {
+                    log = crate::system_off::log_open(want.from)
+                        .await
+                        .map(|(reader, _)| reader);
+                }
+            }
+        }
+        // And from the history: it can't be borrowed across the awaits
+        // while sending.
+        let bucket = logged.or_else(|| {
+            activity::HISTORY.lock(|history| {
+                let history = history.borrow();
+                let minutes = history
+                    .since(fetch.from())
+                    .map(|(utc_minute, sample)| (utc_minute, sample.bucket_minute()));
+                fetch.next(minutes)
+            })
+        });
+        let Some(bucket) = bucket else {
+            break;
+        };
         let message = Outgoing::Activity {
             timestamp_ms: bucket.timestamp_ms(),
             steps: bucket.steps,
@@ -1672,7 +1722,9 @@ fn make_room_for_bond(stack: &Stack<'_, Controller, Pool>, conn: &GattConnection
 /// done, so more than 8 of those in that time are dropped by the host
 /// (it logs `no memory for packets`, or an error processing ACL data).
 /// Sending the buckets from `serve`'s loop, between events, would fix
-/// that.
+/// that. It matters more since a fetch can be of a week (see
+/// `crate::spill`): 2016 buckets, which a dev kit sent to a computer at
+/// 40 ms each, 80 s in all (a day's 288 took 12 s).
 const PACKET_POLL: Duration = Duration::from_millis(10);
 
 /// Sends one message, split into notifications that fit the MTU, waiting

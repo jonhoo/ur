@@ -719,6 +719,17 @@ impl Sample {
         }
     }
 
+    /// The sample as a Gadgetbridge bucket takes it in.
+    pub fn bucket_minute(&self) -> crate::gb_buckets::Minute<Option<&'static str>> {
+        crate::gb_buckets::Minute {
+            steps: self.steps,
+            movement: self.movement,
+            heart_rate: self.heart_rate,
+            seen: self.seen(),
+            kind: self.gadgetbridge_kind(),
+        }
+    }
+
     fn evidence(&self) -> sleep::Minute {
         sleep::Minute {
             seen: self.seen(),
@@ -1480,11 +1491,12 @@ fn log_poll(
 #[embassy_executor::task]
 pub async fn activity_task(i2c: Device) {
     restore_today();
-    // What was saved before the watch last switched itself off, if
-    // anything: here, before any minute is recorded, and because saving
-    // and restoring the history in this task's future costs no static RAM
-    // (see `system_off`).
-    crate::system_off::restore().await;
+    // What the flash holds of the history (the log of its minutes, and
+    // what was saved before the watch last reset, or switched itself
+    // off): here, before any minute is recorded, and because saving and
+    // restoring the history in this task's future costs little static
+    // RAM (see `system_off`).
+    let mut log = crate::system_off::restore().await;
     // Let the touch controller be configured first: it only listens for a
     // moment after its reset, and our config upload holds the shared bus
     // for about a third of a second.
@@ -1515,7 +1527,7 @@ pub async fn activity_task(i2c: Device) {
         while wait_ms > 0 {
             let piece = wait_ms.min(POLL_SECONDS as u32 * 1000);
             Timer::after_millis(u64::from(piece)).await;
-            crate::system_off::serve().await;
+            crate::system_off::serve(&mut log).await;
             wait_ms -= piece;
         }
     }
@@ -1539,7 +1551,7 @@ pub async fn activity_task(i2c: Device) {
 
     loop {
         Timer::after_secs(POLL_SECONDS).await;
-        crate::system_off::serve().await;
+        crate::system_off::serve(&mut log).await;
 
         // In a block, so the samples are gone by the next `await` rather
         // than kept in this task's (static) future.
@@ -1847,9 +1859,12 @@ pub async fn activity_task(i2c: Device) {
                 // one under way end, without waiting out its timer.
                 crate::heart::wake();
             }
-            // Every couple of minutes, what the phone hasn't fetched goes
-            // to the SPI flash too, for a crash to lose no more than those
-            // minutes (see `snapshot`): at the next poll, from `serve`.
+            // Every couple of minutes, the SPI flash is brought up to
+            // date, for a crash to lose no more than those minutes: the
+            // buckets a fetch could now send are appended to the activity
+            // log (see `spill`), and the rest, what a fetch holds back,
+            // is checkpointed (see `snapshot`). At the next poll, from
+            // `serve`.
             if crate::snapshot::checkpoint_due(utc_minute) {
                 crate::system_off::checkpoint();
             }
@@ -1945,6 +1960,13 @@ pub fn copy_samples(first: i64, out: &mut [u8]) {
             *bytes = sample.to_bytes();
         }
     });
+}
+
+/// A minute's sample as bytes (see [`Sample::to_bytes`]), read from the
+/// activity log (see [`crate::spill`]), as a Gadgetbridge bucket takes it
+/// in.
+pub fn bucket_minute(bytes: [u8; 6]) -> crate::gb_buckets::Minute<Option<&'static str>> {
+    Sample::from_bytes(bytes).bucket_minute()
 }
 
 /// Puts back saved samples from `first` on (see [`History::restore`]).

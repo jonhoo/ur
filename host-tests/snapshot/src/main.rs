@@ -137,40 +137,55 @@ mod tests {
         assert!(!read(&older).expect("still valid").0.synced);
     }
 
+    /// What a checkpoint's slot has room for (`system_off` takes a
+    /// bucket off, to start at one's start).
+    const ROOM: usize = (SLOT_BYTES as usize - HEADER_BYTES) / SAMPLE_BYTES;
+
     #[test]
-    fn without_a_sync_the_whole_day_is_saved() {
+    fn without_a_log_all_there_is_room_for_is_saved() {
         let newest = 29_500_000;
         assert_eq!(
-            unsynced_from(newest, None),
-            (newest - MAX_MINUTES as i64 + 1, false)
+            unlogged_from(newest, None, MAX_MINUTES),
+            newest - MAX_MINUTES as i64 + 1
+        );
+        assert_eq!(unlogged_from(newest, None, ROOM), newest - ROOM as i64 + 1);
+    }
+
+    #[test]
+    fn after_the_log_from_where_it_ends() {
+        let newest = 29_500_000;
+        // The log has everything up to an hour ago (a nap held back
+        // since): the record holds the hour.
+        assert_eq!(unlogged_from(newest, Some(newest - 60), ROOM), newest - 59);
+        // The log is up to date: nothing but the minute under way.
+        assert_eq!(unlogged_from(newest, Some(newest - 1), ROOM), newest);
+        assert_eq!(unlogged_from(newest, Some(newest), ROOM), newest + 1);
+        // The log ended long ago (it can't be written): never more than
+        // there's room for.
+        assert_eq!(
+            unlogged_from(newest, Some(newest - 5000), ROOM),
+            newest - ROOM as i64 + 1
         );
     }
 
     #[test]
-    fn after_a_sync_from_where_the_next_fetch_starts() {
-        let newest = 29_500_000;
-        // Synced an hour ago: the next fetch sends from just after that.
-        assert_eq!(
-            unsynced_from(newest, Some(newest - 60)),
-            (newest - 59, true)
-        );
-        // Synced long ago: never more than the history holds.
-        assert_eq!(
-            unsynced_from(newest, Some(newest - 5000)),
-            (newest - MAX_MINUTES as i64 + 1, true)
-        );
-    }
-
-    #[test]
-    fn a_sync_past_the_newest_minute_saves_the_whole_day() {
-        // The phone fetched up to minute 29_500_600 while its clock was
+    fn a_log_past_the_newest_minute_saves_all_there_is_room_for() {
+        // The log took in minutes up to 29_500_600 while the clock was
         // ten hours ahead; put right, the history dropped those minutes,
-        // and holds new ones the phone hasn't had.
+        // and holds new ones the log hasn't had (it's about to drop its
+        // own from the new time on).
         let newest = 29_500_000;
         assert_eq!(
-            unsynced_from(newest, Some(newest + 600)),
-            (newest - MAX_MINUTES as i64 + 1, false)
+            unlogged_from(newest, Some(newest + 600), ROOM),
+            newest - ROOM as i64 + 1
         );
+    }
+
+    #[test]
+    fn a_checkpoint_has_room_for_all_a_fetch_holds_back() {
+        // `sleep_hold::CAP`, 18 hours, and the bucket under way.
+        assert_eq!(ROOM, 1360);
+        const { assert!(ROOM >= 18 * 60 + 2 * 5) };
     }
 
     #[test]
@@ -178,7 +193,9 @@ mod tests {
         assert_eq!(MAX_BYTES, 32 + 1440 * 6);
         let bytes = record(&samples(MAX_MINUTES));
         assert!(read(&bytes).is_some());
-        assert!(MAX_BYTES as u32 <= SLOT_BYTES);
+        // In the planned record's three sectors (`system_off::RECORD`);
+        // a checkpoint's slot has two.
+        assert!(MAX_BYTES as u32 <= 3 * SECTOR_BYTES);
     }
 
     // ==========================================================================
@@ -310,8 +327,10 @@ mod tests {
         // A sector holds 677 minutes after the header: 11 hours.
         assert_eq!(erase_bytes(677), 4096);
         assert_eq!(erase_bytes(678), 8192);
-        assert_eq!(erase_bytes(MAX_MINUTES as u16), SLOT_BYTES);
-        assert_eq!(SLOT_BYTES, 3 * 4096);
+        assert_eq!(erase_bytes(1360), SLOT_BYTES);
+        assert_eq!(SLOT_BYTES, 2 * 4096);
+        // The planned record, at its longest.
+        assert_eq!(erase_bytes(MAX_MINUTES as u16), 3 * 4096);
     }
 
     #[test]
@@ -508,38 +527,29 @@ mod proofs {
         }
     }
 
-    /// For any newest minute (to the year 6000) and any minute the phone
-    /// has fetched through (or none): the record starts within the
-    /// history (the day up to the newest minute), or just after it when
-    /// the phone has it all, so it never holds more minutes than a record
-    /// can, which `from_bytes` would refuse at the next boot. It starts
-    /// where the phone's next fetch will (just after what it has), and
-    /// says so, when that's in the history; it holds the whole history,
-    /// still saying so, when the phone's copy ends before it; and it
-    /// holds the whole history, saying nothing is known, when the phone
-    /// has nothing, or has "fetched" a minute the history hasn't reached
-    /// (the clock went back since).
+    /// For any newest minute the history can have, any end of the log
+    /// and any room up to a day's: the record starts within the room,
+    /// and no later than the minute after the newest; just after the
+    /// log, when that's within both; and with all there's room for when
+    /// there's no log, or it ends past the newest minute (the clock went
+    /// back since).
     #[kani::proof]
-    fn the_record_starts_within_the_history() {
+    fn the_record_starts_within_its_room() {
         let newest: i64 = kani::any();
         kani::assume((0..1 << 31).contains(&newest));
-        let synced: Option<i64> = kani::any();
-        if let Some(synced) = synced {
-            kani::assume((0..1 << 32).contains(&synced));
+        let logged: Option<i64> = kani::any();
+        if let Some(logged) = logged {
+            kani::assume((0..1 << 32).contains(&logged));
         }
-        let (from, known) = unsynced_from(newest, synced);
+        let room: usize = kani::any();
+        kani::assume((1..=MAX_MINUTES).contains(&room));
+        let from = unlogged_from(newest, logged, room);
         let minutes = newest - from + 1;
-        assert!(0 <= minutes && minutes <= MAX_MINUTES as i64);
-        let oldest = newest - MAX_MINUTES as i64 + 1;
-        match synced {
-            Some(synced) if synced <= newest => {
-                assert!(known);
-                assert_eq!(from, (synced + 1).max(oldest));
-            }
-            _ => {
-                assert!(!known);
-                assert_eq!(from, oldest);
-            }
+        assert!(0 <= minutes && minutes <= room as i64);
+        let oldest = newest - room as i64 + 1;
+        match logged {
+            Some(logged) if logged <= newest => assert_eq!(from, (logged + 1).max(oldest)),
+            _ => assert_eq!(from, oldest),
         }
     }
 
@@ -563,7 +573,8 @@ mod proofs {
     #[kani::proof]
     fn a_save_erases_its_record_within_its_slot() {
         let minutes: u16 = kani::any();
-        kani::assume(usize::from(minutes) <= MAX_MINUTES);
+        // What `system_off` gives a checkpoint room for, at most.
+        kani::assume(usize::from(minutes) <= (SLOT_BYTES as usize - HEADER_BYTES) / SAMPLE_BYTES);
         let erased = erase_bytes(minutes);
         assert!(erased as usize >= HEADER_BYTES + usize::from(minutes) * SAMPLE_BYTES);
         assert!(erased <= SLOT_BYTES);

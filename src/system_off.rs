@@ -39,6 +39,17 @@
 //! hard fault on a sealed watch, mid-night, once lost the night's sleep
 //! and five hours of heart rate and steps.)
 //!
+//! Neither kind of record holds all the phone hasn't fetched, only its
+//! newest part: the minutes a fetch would hold back for now (a night
+//! under way; see [`crate::sleep_hold`]) and the bucket under way. The
+//! rest, every minute a fetch could have sent, is in the activity log
+//! (see [`crate::spill`]), which this module also keeps ([`serve`]): it
+//! appends those minutes as they become fetchable, notes each fetch the
+//! phone completes, and takes back what a clock set back undoes. A boot
+//! reads the log back into the history, then the newest record on top;
+//! and a fetch reads the log itself, so that what the phone didn't fetch
+//! for days still reaches it ([`log_open`], [`log_bucket`]).
+//!
 //! What the watch draws while off, roughly (E: estimate, D: datasheet,
 //! M: measured by others; nothing here is measured on this watch):
 //!
@@ -66,7 +77,7 @@
 //! the record anyway, and a breadcrumb only matters after a crash.
 
 use core::ops::Range;
-use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use defmt::{debug, info, warn};
 use embassy_nrf::pac;
@@ -77,7 +88,7 @@ use crate::canvas::Canvas;
 use crate::display::Display;
 use crate::snapshot::{self, HEADER_BYTES, Header, SAMPLE_BYTES};
 use crate::spi_flash::{self, FLASH};
-use crate::{Backlight, activity, clock, field_log, gb_buckets, heart, i2c, spi, touch};
+use crate::{Backlight, activity, clock, field_log, gb_buckets, heart, i2c, spi, spill, touch};
 
 /// Why the watch is switching off.
 #[derive(Clone, Copy, PartialEq, Eq, defmt::Format)]
@@ -94,25 +105,42 @@ const _: () = assert!(snapshot::MAX_BYTES as u32 <= RECORD.end - RECORD.start);
 
 /// Where the checkpoints are (see [`crate::snapshot`]'s Checkpoints): their
 /// slots, one after the other, just below the planned record, in space
-/// the bootloader doesn't use (see [`crate::spi_flash`]), and just above the
-/// field log's second stretch.
-pub(crate) const CHECKPOINTS: Range<u32> = 0x19_D000..0x1F_D000;
+/// the bootloader doesn't use (see [`crate::spi_flash`]), and just above
+/// the activity log.
+pub(crate) const CHECKPOINTS: Range<u32> = 0x1B_D000..0x1F_D000;
+
+/// Where the activity log is (see [`crate::spill`]): 32 sectors, 11 days
+/// of minutes, just above the field log's second stretch. Up to
+/// 0.11.3-rc.4 the checkpoints had these sectors too, in slots of three:
+/// a week of minutes needs 21, and the checkpoints, now that they only
+/// hold what a fetch holds back, fit slots of two, as many as before (so
+/// each sector's wear is what it was). The field log keeps its 745.
+pub(crate) const SPILL: Range<u32> = 0x19_D000..0x1B_D000;
+const LOG: spill::Ring = spill::Ring {
+    start: SPILL.start,
+    sectors: (SPILL.end - SPILL.start) / spi_flash::SECTOR,
+};
+const _: () = assert!(spill::SECTOR == spi_flash::SECTOR);
+const _: () = assert!(SPILL.start.is_multiple_of(spi_flash::SECTOR));
+const _: () = assert!(SPILL.end == CHECKPOINTS.start && LOG.sectors == 32);
+// A week of minutes, with a note of a fetch every bucket (six entries to
+// five minutes), and the oldest sector about to be erased.
+const _: () = assert!((LOG.sectors - 1) * (spill::SLOTS as u32 - 2) * 5 / 6 >= 7 * 24 * 60);
 const _: () = assert!(
     CHECKPOINTS.end - CHECKPOINTS.start == snapshot::CHECKPOINT_SLOTS * snapshot::SLOT_BYTES
 );
 const _: () = assert!(CHECKPOINTS.end <= RECORD.start);
 const _: () = assert!(CHECKPOINTS.start.is_multiple_of(spi_flash::SECTOR));
-const _: () =
-    assert!(crate::dfu_slot::SLOT_START + crate::dfu_slot::SLOT_SIZE <= CHECKPOINTS.start);
+const _: () = assert!(crate::dfu_slot::SLOT_START + crate::dfu_slot::SLOT_SIZE <= SPILL.start);
 const _: () = assert!(snapshot::SECTOR_BYTES == spi_flash::SECTOR);
 const _: () = assert!(
     CHUNK >= HEADER_BYTES,
     "headers are staged in a chunk's buffer"
 );
-// The field log is on both sides of the two (see [`crate::log_ring`]): its
-// second stretch ends where the checkpoints start, and its first starts
-// where the record ends.
-const _: () = assert!(crate::log_ring::SECOND.end <= CHECKPOINTS.start);
+// The field log is on both sides of the three (see [`crate::log_ring`]):
+// its second stretch ends where the activity log starts, and its first
+// starts where the record ends.
+const _: () = assert!(crate::log_ring::SECOND.end <= SPILL.start);
 const _: () = assert!(RECORD.end <= crate::log_ring::FIRST.start);
 const _: () = assert!(RECORD.start.is_multiple_of(spi_flash::SECTOR));
 
@@ -121,6 +149,56 @@ const _: () = assert!(RECORD.start.is_multiple_of(spi_flash::SECTOR));
 /// it sits in a task's future for good, in a build with little RAM to
 /// spare. A day's record then takes 240 small writes, about a second.
 const CHUNK: usize = 6 * SAMPLE_BYTES;
+
+/// The most minutes the activity log takes in at once, every couple of
+/// minutes: a write each, a millisecond or two, with the activity task
+/// (alone) waiting. A night that's just been settled is in within a few
+/// minutes; a planned save takes whatever there is.
+const SPILL_AT_ONCE: i64 = 6 * 60;
+const _: () = assert!(SPILL_AT_ONCE % gb_buckets::MINUTES == 0);
+
+/// The most minutes a checkpoint holds: its slot's worth, less a bucket
+/// (it starts at a bucket's start). More than a fetch ever holds back,
+/// so more than is ever outside the log, unless the log can't be written.
+const CHECKPOINT_ROOM: usize =
+    (snapshot::SLOT_BYTES as usize - HEADER_BYTES) / SAMPLE_BYTES - gb_buckets::MINUTES as usize;
+const _: () = assert!(CHECKPOINT_ROOM as i64 > crate::sleep_hold::CAP + 2 * gb_buckets::MINUTES);
+
+/// The activity log's end, as the activity task keeps it (in its future,
+/// so in static RAM: 16 bytes) between the calls here that need it.
+pub type Log = spill::Writer;
+
+/// Whether [`SYNCED`] has changed since the log last noted it (see
+/// [`keep`]).
+static NOTE: AtomicBool = AtomicBool::new(false);
+
+/// A minute as the log has them: UTC minutes since 1970, in 32 bits.
+pub fn minute32(minute: i64) -> u32 {
+    minute.clamp(0, i64::from(u32::MAX)) as u32
+}
+
+// Straight through to the driver, with no `async fn` of their own in
+// between: each would be a future around the driver's, and these are
+// awaited from the Bluetooth task, where every byte of future counts.
+impl spill::Flash for spi_flash::SpiFlash {
+    type Error = spi_flash::Error;
+
+    fn read(&mut self, address: u32, data: &mut [u8]) -> impl Future<Output = ()> {
+        spi_flash::SpiFlash::read(self, address, data)
+    }
+
+    fn program(
+        &mut self,
+        address: u32,
+        data: &[u8],
+    ) -> impl Future<Output = Result<(), Self::Error>> {
+        spi_flash::SpiFlash::program(self, address, data)
+    }
+
+    fn erase(&mut self, address: u32) -> impl Future<Output = Result<(), Self::Error>> {
+        spi_flash::SpiFlash::erase(self, address..address + spi_flash::SECTOR)
+    }
+}
 
 /// How long the switching-off screen shows.
 const SHOW_FOR: Duration = Duration::from_secs(3);
@@ -157,18 +235,30 @@ static SYNCED: AtomicU32 = AtomicU32::new(0);
 // ==============================================================================
 
 /// Writes a record at `start` (the planned record's, or a checkpoint's
-/// slot): today's steps, and the history from where the phone's next
-/// fetch would start. Failures are logged; there's nothing else to do
-/// about them with the battery running out, and a checkpoint's next try is
-/// minutes away.
-async fn save(start: u32) {
-    // From a bucket's start, so that the history restored from it holds
-    // whole buckets: one cut short would go to the phone as less than it
-    // has (see `gb_buckets`). (Where the phone's copy ends is one already.)
+/// slot): today's steps, and the history from where the activity log
+/// ends (`logged`, its last minute). Failures are logged; there's nothing
+/// else to do about them with the battery running out, and a checkpoint's
+/// next try is minutes away.
+async fn save(flash: &mut spi_flash::SpiFlash, start: u32, logged: Option<u32>) {
     let newest = activity::newest_minute();
-    let (from, synced) = newest
-        .map(|newest| snapshot::unsynced_from(newest, synced_through()))
-        .unwrap_or((0, false));
+    let room = if start == RECORD.start {
+        snapshot::MAX_MINUTES
+    } else {
+        CHECKPOINT_ROOM
+    };
+    let from = newest.map_or(0, |newest| {
+        snapshot::unlogged_from(newest, logged.map(i64::from), room)
+    });
+    // Whether the phone has all there is before the record, so that a
+    // boot that finds no note of it in the log still knows (see
+    // `snapshot`): the log couldn't be written, or an older build boots.
+    let synced = synced_through()
+        .is_some_and(|synced| synced >= from - 1 && newest.is_some_and(|newest| synced <= newest));
+    // From a bucket's start, as the planned record always has (older
+    // builds, which may yet restore it, send what's restored in whole
+    // buckets: see `gb_buckets`); the log has those minutes too, and the
+    // restore keeps the log's.
+    //
     // With nothing to save, the record starts after the newest minute, so
     // that it still says when it was saved (see `snapshot::empty_from`).
     let (first, minutes) = activity::span_from(gb_buckets::start_of(from))
@@ -177,10 +267,7 @@ async fn save(start: u32) {
     // activity task's future, so they're kept few and small.
     let (first, minutes) = (first as u32, minutes as u16);
 
-    let mut flash = FLASH.lock().await;
-    let flash = flash.as_mut().expect("set at boot");
     let written = async {
-        flash.wake().await?;
         // Only the sectors the record takes, the header's first: a save
         // cut short here leaves no record, never half of one.
         flash
@@ -230,17 +317,19 @@ async fn save(start: u32) {
         flash.write(start, &buffer[..HEADER_BYTES]).await
     }
     .await;
-    flash.sleep().await;
     if let Err(e) = written {
         warn!("snapshot: saving at {=u32:#x} failed: {}", start, e);
     }
 }
 
-/// Puts back the newest record the phone hasn't fetched: the newest
-/// checkpoint, after a crash (or the watchdog), or the planned record,
-/// after System OFF or an update (see [`snapshot::newer_checkpoint`]).
-/// Call once at boot, from the activity task, before it records anything.
-pub async fn restore() {
+/// Puts back what the flash holds of the history: the activity log,
+/// then, for the minutes since, the newest record: the newest checkpoint,
+/// after a crash (or the watchdog), or the planned record, after System
+/// OFF or an update (see [`snapshot::newer_checkpoint`]). Call once at
+/// boot, from the activity task, before it records anything. Returns the
+/// log's end, for [`serve`].
+pub async fn restore() -> Log {
+    let mut log = Log::UNREAD;
     // The SPI flash is set up in `main`, after the display.
     while FLASH.lock().await.is_none() {
         Timer::after_millis(20).await;
@@ -248,8 +337,29 @@ pub async fn restore() {
     let mut flash = FLASH.lock().await;
     let flash = flash.as_mut().expect("set at boot");
     if flash.wake().await.is_err() {
-        return;
+        return log;
     }
+
+    // The log first, oldest first, so the history ends up with its last
+    // day: the minutes the phone hasn't fetched, and those it has, which
+    // the Today screen and last night's sleep are drawn from all the
+    // same. A full log is 128 KB, read in under a second.
+    let mut minutes = 0u32;
+    let noted;
+    (log, noted) = spill::scan(flash, LOG, |minute, sample| {
+        activity::restore_samples(i64::from(minute), sample);
+        minutes += 1;
+    })
+    .await;
+    if let Some(through) = log.through() {
+        info!(
+            "spill: the log holds {} minutes up to minute {}; phone has up to {}",
+            minutes,
+            through,
+            noted.unwrap_or(0)
+        );
+    }
+
     // One buffer for the headers and the samples, as in `save`.
     let mut buffer = [0u8; CHUNK];
     let header = &mut buffer[..HEADER_BYTES];
@@ -312,7 +422,148 @@ pub async fn restore() {
             }
         );
     }
+
+    // Where the phone's copy ends: the log's last note of a fetch, or
+    // what the record knew (`put_back`), whichever is later: an older
+    // build's record knows of fetches the log never heard of. `serve`
+    // notes it if the log is the one behind.
+    let noted = noted.unwrap_or(0);
+    if SYNCED.fetch_max(noted, Ordering::Relaxed) > noted {
+        NOTE.store(true, Ordering::Relaxed);
+    }
+    // What the record put back that a fetch could send goes in the log
+    // at `serve`'s first run, with a checkpoint, rather than at the next
+    // minute that's due: a reset in the middle of a bucket's minutes
+    // going in leaves the rest of them for this. (Not here, in this
+    // function's future, which is the activity task's largest as it is.)
+    checkpoint();
     flash.sleep().await;
+    log
+}
+
+// ==============================================================================
+// The activity log
+// ==============================================================================
+
+/// Brings the activity log up to date (see [`crate::spill`]), so that it
+/// holds what a fetch could send now and no more: takes back what no
+/// longer is that, notes the last fetch, and appends up to `at_once` of
+/// the minutes that newly are.
+async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64) {
+    // Boot couldn't read the log (the flash didn't answer): find its end
+    // now, before anything is appended over it.
+    if writer.is_unread() {
+        (*writer, _) = spill::scan(flash, LOG, |_, _| ()).await;
+    }
+    let Some(newest) = activity::newest_minute() else {
+        return;
+    };
+
+    // What a fetch would send now: the buckets that are over, before any
+    // minute held back (see `gb_buckets::Fetch`). The hold is worked out
+    // over the history with interrupts off, a millisecond or so; like the
+    // minute's sleep review, which is why this is every couple of
+    // minutes, not every poll.
+    let mut end = gb_buckets::start_of(newest);
+    if let Some(hold) = activity::gadgetbridge_hold() {
+        end = end.min(gb_buckets::start_of(hold.from));
+    }
+
+    // The log may reach past that, in two ways, and then lets go of every
+    // bucket from there on, to take them in again when they can go (until
+    // that's done nothing is appended: samples are in order):
+    //
+    // - A clock set back: the history has dropped the minutes after the
+    //   new time, and files them again from there (see `minute_ring`).
+    // - A hold from before the log's end: a wearer gone still, whose last
+    //   minutes awake may yet turn out the first of a sleep. Their kinds
+    //   are being revised, so the copies in the log would go stale, and a
+    //   fetch (or a boot) would get the sleep's start as awake. The next
+    //   record has them, as it starts where the log ends.
+    if writer
+        .through()
+        .is_some_and(|logged| end <= i64::from(logged))
+    {
+        let from = minute32(end);
+        debug!("spill: taking the log back to minute {}", from);
+        if let Err(e) = spill::truncate(flash, LOG, writer, from).await {
+            warn!("spill: taking back failed: {}", e);
+            return;
+        }
+    }
+
+    // Where the phone's copy ends now, if that's changed: what a boot
+    // goes by (see `restore`).
+    if NOTE.swap(false, Ordering::Relaxed) {
+        let synced = SYNCED.load(Ordering::Relaxed);
+        if let Err(e) = spill::synced(flash, LOG, writer, synced).await {
+            warn!("spill: noting the fetch failed: {}", e);
+            NOTE.store(true, Ordering::Relaxed);
+        }
+    }
+
+    // And what's new of it goes in, of the buckets the history still has
+    // whole.
+    let oldest =
+        gb_buckets::start_of(newest - activity::HISTORY_MINUTES as i64 + gb_buckets::MINUTES);
+    let first = writer
+        .through()
+        .map_or(oldest, |logged| (i64::from(logged) + 1).max(oldest));
+    // Whole buckets only: a fetch reads the log as it is (the flash is
+    // locked while this writes, but not between calls).
+    let end = end.min(gb_buckets::start_of(first + at_once));
+    let mut appended = 0u32;
+    for minute in first..end {
+        let mut sample = [0; spill::SAMPLE];
+        activity::copy_samples(minute, &mut sample);
+        // Minutes with nothing recorded take no room (see `spill`).
+        if spill::recorded(&sample) {
+            if let Err(e) = spill::append(flash, LOG, writer, minute32(minute), &sample).await {
+                warn!("spill: appending failed: {}", e);
+                return;
+            }
+            appended += 1;
+        }
+    }
+    if end > first {
+        writer.passed(minute32(end - 1));
+        debug!(
+            "spill: {} minutes into the log, now up to minute {}",
+            appended,
+            end - 1
+        );
+    }
+}
+
+/// For a fetch of the minutes from `from` on: a reader of the activity
+/// log, and a minute that nothing it will read is before (see
+/// [`spill::open`]); `None` if the log holds nothing (or can't be read).
+/// Called from the Bluetooth task, which then asks for a bucket at a time
+/// ([`log_bucket`]), with the flash free in between for the activity
+/// task's writes.
+///
+/// Minutes in 32 bits here and in [`log_bucket`], as the log has them
+/// ([`minute32`]): an `async fn` keeps its arguments twice over.
+pub async fn log_open(from: u32) -> Option<(spill::Reader, u32)> {
+    let mut flash = FLASH.lock().await;
+    let flash = flash.as_mut()?;
+    let opened = spill::open(flash, LOG, from).await;
+    flash.sleep().await;
+    opened
+}
+
+/// The log's next bucket for a fetch (see [`spill::bucket`]), its
+/// minutes' samples in `out`.
+pub async fn log_bucket(
+    want: &mut spill::Want<'_, { gb_buckets::MINUTES as usize }>,
+) -> spill::Read {
+    let mut flash = FLASH.lock().await;
+    let Some(flash) = flash.as_mut() else {
+        return spill::Read::End;
+    };
+    let read = spill::bucket(flash, LOG, want).await;
+    flash.sleep().await;
+    read
 }
 
 /// The header of a fresh record at `start` (see [`Header::from_bytes`]),
@@ -386,10 +637,10 @@ fn put_back(header: &Header) {
 /// minute it got: from then on, the phone has everything a restored record
 /// held, so the record can be retired (by [`retire`]).
 pub fn on_synced(through_minute: i64) {
-    SYNCED.store(
-        through_minute.clamp(0, i64::from(u32::MAX)) as u32,
-        Ordering::Relaxed,
-    );
+    let synced = minute32(through_minute);
+    if SYNCED.swap(synced, Ordering::Relaxed) != synced {
+        NOTE.store(true, Ordering::Relaxed);
+    }
     let _ = RECORD_STATE.compare_exchange(RESTORED, RETIRING, Ordering::Relaxed, Ordering::Relaxed);
 }
 
@@ -399,11 +650,15 @@ pub fn on_synced(through_minute: i64) {
 /// `gb_buckets`' "A clock put right"). After a restore, too: the record
 /// may have been saved by a clock that was ahead.
 pub fn on_clock_set(minute: i64) {
+    let before = SYNCED.load(Ordering::Relaxed);
     let _ = SYNCED.try_update(Ordering::Relaxed, Ordering::Relaxed, |synced| {
         let synced = (synced != 0).then_some(i64::from(synced));
         let synced = gb_buckets::synced_after_set(synced, minute)?;
         Some(synced.clamp(0, i64::from(u32::MAX)) as u32)
     });
+    if SYNCED.load(Ordering::Relaxed) != before {
+        NOTE.store(true, Ordering::Relaxed);
+    }
 }
 
 /// Where the phone's copy of the history ends, as far as the watch knows:
@@ -421,31 +676,64 @@ pub fn synced_through() -> Option<i64> {
 
 /// The flash work asked of the activity task: retiring a restored record
 /// once the phone has fetched it (see [`on_synced`]), so no later boot
-/// restores it again, and saving, for [`shut_down`] or an update, or a
-/// checkpoint (see [`checkpoint`]). Call every few seconds.
+/// restores it again; keeping the activity log (see [`keep`]); and saving,
+/// for [`shut_down`] or an update, or a checkpoint (see [`checkpoint`]).
+/// Call every few seconds, with what [`restore`] returned.
 ///
 /// Why there: the futures of SPI flash operations are a hundred-odd bytes,
 /// and every task's future is static RAM, which is scarce. The activity
 /// task's has room to spare between its polls (its own peak is reading the
 /// accelerometer); the UI task's and the Bluetooth task's don't.
-pub async fn serve() {
+pub async fn serve(log: &mut Log) {
     if RECORD_STATE.load(Ordering::Relaxed) == RETIRING {
         retire().await;
     }
-    match SAVE.load(Ordering::Relaxed) {
-        SAVE_ASKED => {
-            // The new record replaces any restored one, and holds all
-            // that's unsynced: nothing to retire after a fetch that ends
-            // meanwhile.
-            RECORD_STATE.store(NONE, Ordering::Relaxed);
-            save(RECORD.start).await;
-            SAVE.store(SAVE_DONE, Ordering::Relaxed);
-        }
-        CHECKPOINT_ASKED => {
-            if let Some(newest) = activity::newest_minute() {
-                let slot = snapshot::checkpoint_slot(newest);
-                save(CHECKPOINTS.start + slot * snapshot::SLOT_BYTES).await;
+    let asked = SAVE.load(Ordering::Relaxed);
+    let saving = matches!(asked, SAVE_ASKED | CHECKPOINT_ASKED);
+    // Between saves, the log wants writing only for a fetch to note.
+    if !(saving || NOTE.load(Ordering::Relaxed)) {
+        return;
+    }
+    {
+        let mut flash = FLASH.lock().await;
+        let flash = flash.as_mut().expect("set at boot");
+        match flash.wake().await {
+            Ok(()) => {
+                // First the log, so that the record starts where it ends.
+                // Before a planned reset, all there is: the record is
+                // what an older build would restore, and has only a day.
+                let at_once = match asked {
+                    SAVE_ASKED => snapshot::MAX_MINUTES as i64,
+                    CHECKPOINT_ASKED => SPILL_AT_ONCE,
+                    _ => 0,
+                };
+                keep(flash, log, at_once).await;
+                let logged = log.through();
+                match asked {
+                    SAVE_ASKED => {
+                        // The new record replaces any restored one, and
+                        // with the log holds all that's unsynced: nothing
+                        // to retire after a fetch that ends meanwhile.
+                        RECORD_STATE.store(NONE, Ordering::Relaxed);
+                        save(flash, RECORD.start, logged).await;
+                    }
+                    CHECKPOINT_ASKED => {
+                        if let Some(newest) = activity::newest_minute() {
+                            let slot = snapshot::checkpoint_slot(newest);
+                            let start = CHECKPOINTS.start + slot * snapshot::SLOT_BYTES;
+                            save(flash, start, logged).await;
+                        }
+                    }
+                    _ => {}
+                }
             }
+            Err(e) => warn!("snapshot: the flash didn't wake: {}", e),
+        }
+        flash.sleep().await;
+    }
+    match asked {
+        SAVE_ASKED => SAVE.store(SAVE_DONE, Ordering::Relaxed),
+        CHECKPOINT_ASKED => {
             // Unless the planned save was asked for meanwhile, which then
             // goes next.
             let _ =

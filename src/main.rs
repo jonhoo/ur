@@ -19,7 +19,9 @@
 //!   ring.
 //! - [`battery`]: battery voltage and charge state.
 //! - [`system_off`] / [`snapshot`]: switching off when the battery is
-//!   critically low, or for storage, saving what the phone hasn't fetched.
+//!   critically low, or for storage, saving what the phone hasn't fetched;
+//!   [`spill`]: the log of activity minutes in the SPI flash, which keeps
+//!   them for days, until it has.
 //! - [`activity`] / [`sleep`]: steps, movement, and sleep, from the
 //!   accelerometer; [`minute_ring`]: which minutes their history keeps as
 //!   the clock moves; [`day`]: the day's activity by the hour, for the UI.
@@ -129,6 +131,7 @@ mod sleep_hold;
 mod snapshot;
 mod spi;
 mod spi_flash;
+mod spill;
 mod stages;
 mod step_counter;
 mod storage;

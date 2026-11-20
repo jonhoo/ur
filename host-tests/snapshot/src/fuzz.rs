@@ -160,27 +160,25 @@ fn checksum_in_any_pieces_is_fnv1a() {
         });
 }
 
-/// For any newest minute and the phone's last fetch (within a few
-/// thousand years of 1970, in minutes), the record starts no earlier than
-/// the history does (a day back), and no later than the minute after the
-/// newest; and it holds every minute from just after what the phone last
-/// got, as far as the history goes, saying so; without a fetch the watch
-/// knows of (or one past the newest minute), the whole day, not knowing.
+/// For any newest minute and end of the log (within a few thousand
+/// years of 1970, in minutes), and any room: the record starts no earlier
+/// than its room allows, and no later than the minute after the newest;
+/// it holds every minute after the log's end, as far as there's room;
+/// and without a log (or with one past the newest minute), all there's
+/// room for.
 #[test]
-fn the_record_starts_where_the_phone_will_fetch() {
+fn the_record_starts_where_the_log_ends() {
     bolero::check!()
-        .with_type::<(i32, Option<i32>)>()
-        .for_each(|&(newest, synced)| {
-            let (newest, synced) = (i64::from(newest), synced.map(i64::from));
-            let (from, knows) = unsynced_from(newest, synced);
-            let oldest = newest - MAX_MINUTES as i64 + 1;
+        .with_type::<(i32, Option<i32>, u16)>()
+        .for_each(|&(newest, logged, room)| {
+            let (newest, logged) = (i64::from(newest), logged.map(i64::from));
+            let room = usize::from(room) % MAX_MINUTES + 1;
+            let from = unlogged_from(newest, logged, room);
+            let oldest = newest - room as i64 + 1;
             assert!((oldest..=newest + 1).contains(&from), "{from} for {newest}");
-            match synced {
-                Some(synced) if synced <= newest => {
-                    assert_eq!(from, (synced + 1).max(oldest));
-                    assert!(knows);
-                }
-                _ => assert_eq!((from, knows), (oldest, false)),
+            match logged {
+                Some(logged) if logged <= newest => assert_eq!(from, (logged + 1).max(oldest)),
+                _ => assert_eq!(from, oldest),
             }
         });
 }
