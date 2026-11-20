@@ -64,6 +64,32 @@
 //! replaced were stamped at their start, so their steps landed a minute
 //! early in Health Connect.)
 //!
+//! **In Health Connect, steps are counted twice** where the phone counts
+//! them too. Gadgetbridge's export writes every sample as a record one
+//! minute long ([Gadgetbridge#7391]), so the bucket's last minute holds
+//! all 5 minutes' steps. Health Connect settles overlapping records by
+//! the sources' priority, interval by interval, so wherever the phone has
+//! nothing in that minute, the watch's 5 minutes are added to what the
+//! phone counted in the other four: a day the watch counted 17,110 steps
+//! and the phone 13,699 came to 19,470. Nothing the watch sends can fix
+//! that, as samples a minute apart are merged (above).
+//!
+//! Three more bugs in the same export touch what the watch sends:
+//! - heart rates on a sync's boundary are written twice
+//!   ([Gadgetbridge#7392]);
+//! - two sleep sessions starting in the same UTC hour share an id, so
+//!   Health Connect keeps only one ([Gadgetbridge#7393]); Gadgetbridge
+//!   splits a night at any short wake with steps;
+//! - all-day steps are marked as actively recorded ([Gadgetbridge#7394]).
+//!
+//! TODO: once #7391 is fixed (records spanning the sample's period),
+//! check Health Connect's daily total against the watch's own.
+//!
+//! [Gadgetbridge#7391]: https://codeberg.org/Freeyourgadget/Gadgetbridge/issues/7391
+//! [Gadgetbridge#7392]: https://codeberg.org/Freeyourgadget/Gadgetbridge/issues/7392
+//! [Gadgetbridge#7393]: https://codeberg.org/Freeyourgadget/Gadgetbridge/issues/7393
+//! [Gadgetbridge#7394]: https://codeberg.org/Freeyourgadget/Gadgetbridge/issues/7394
+//!
 //! **Where a fetch starts** ([`start`]): where the watch's last fetch
 //! stopped, as the watch knows it ([`Fetch::synced_through`], kept across
 //! a switch-off by `system_off`), so that what a hold kept back goes out;
