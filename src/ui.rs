@@ -173,7 +173,8 @@
 //!   long-press to switch it on or off (or start/stop the timer).
 //! - In the editor: drag up/down on the left half for hours, the right
 //!   half for minutes: the time follows the finger while it's down (see
-//!   [`Drag`]), and settles where it lifts. Tap the bottom left to switch
+//!   [`Drag`]), and stays at the minute it shows as it lifts (a swipe
+//!   too short to move it steps it instead, an alarm's minutes by 5). Tap the bottom left to switch
 //!   it on/off, the bottom right for the next page or done. Done also
 //!   switches an alarm on, as setting its time is most often to have it
 //!   ring then, unless the switch was tapped while the editor was open:
@@ -455,20 +456,18 @@ struct Drag {
 /// How far the finger goes for the time to move an hour, in canvas pixels
 /// (as [`Gesture::Drag`] counts them, three panel pixels each): 1.8 mm of
 /// the 23 mm panel, so a thumb's comfortable 15 mm or so is seven hours
-/// (the first 2 mm being the slack), and nowhere on the clock is more than two drags away (the
-/// time wraps at midnight).
+/// (the first 2 mm being the slack), and nowhere on the clock is more
+/// than two drags away (the time wraps at midnight).
 const DRAG_HOUR: i32 = 6;
-/// The same for a minute of an alarm's time: 0.3 mm, so the same drag
-/// covers most of an hour, and the minutes run under the finger rather
-/// than tick. That's finer than a finger can lift at, which is why an
-/// alarm's minutes settle on a multiple of [`ALARM_MINUTES`].
-const DRAG_MINUTE: i32 = 1;
-/// The same for a minute of a timer, which settles on any minute (three
-/// for the tea, seven for the eggs), so its steps are twice as far
-/// apart: 0.6 mm, about what a lifting finger keeps.
-const DRAG_TIMER_MINUTE: i32 = 2;
-/// What an alarm's minutes are set in: a swipe's step, and what a drag
-/// settles on.
+/// The same for a minute, of an alarm's time or a timer's length: 0.6 mm,
+/// so that drag is 22 minutes, and an hour's worth is three. A drag
+/// settles on the very minute it shows (07:03 for the train, three
+/// minutes for the tea), so a step has to be about what a lifting finger
+/// keeps; half that (a canvas pixel a minute) ran through the minutes
+/// faster, but couldn't be let go of on a chosen one.
+const DRAG_MINUTE: i32 = 2;
+/// What a swipe steps an alarm's minutes by: a whole gesture is for
+/// getting near a time quickly, where a drag is for landing on it.
 const ALARM_MINUTES: u16 = 5;
 
 impl Drag {
@@ -480,28 +479,14 @@ impl Drag {
     /// from 07:59 reads 08:00. A time of day wraps at midnight; a timer
     /// stops at its ends.
     fn to(base: u16, editing: Editing, field: EditorField, by: i8) -> u16 {
-        let timer = matches!(editing, Editing::Timer(_));
         let up = -i32::from(by);
         // Towards zero, so the time is `base` for as far either side of
         // where the drag began.
-        let moved = match (field, timer) {
-            (EditorField::Hours, _) => up / DRAG_HOUR * 60,
-            (EditorField::Minutes, true) => up / DRAG_TIMER_MINUTE,
-            (EditorField::Minutes, false) => up / DRAG_MINUTE,
+        let moved = match field {
+            EditorField::Hours => up / DRAG_HOUR * 60,
+            EditorField::Minutes => up / DRAG_MINUTE,
         };
         within(editing, i32::from(base) + moved)
-    }
-
-    /// Where the drag settles, the finger lifted: where it was, but for an
-    /// alarm's time that the drag moved, the nearest multiple of
-    /// [`ALARM_MINUTES`]. (One it left alone stays as it was, whatever
-    /// that is: storage may hold any minute.)
-    fn settled(self, editing: Editing) -> u16 {
-        if matches!(editing, Editing::Timer(_)) || self.live == self.base {
-            return self.live;
-        }
-        let step = i32::from(ALARM_MINUTES);
-        within(editing, (i32::from(self.live) + step / 2) / step * step)
     }
 }
 
@@ -2454,14 +2439,14 @@ impl App {
     }
 
     /// The finger dragging the editor's time is done: the setting becomes
-    /// what it left (see [`Drag::settled`]), which the pass then saves.
-    /// Returns whether that changed the setting, if there was a drag.
+    /// the time it showed under the finger, to the minute, which the pass
+    /// then saves. Returns whether that changed the setting, if there was
+    /// a drag.
     fn settle_drag(&mut self) -> Option<bool> {
         let drag = self.drag.take()?;
         let editing = self.editing?;
-        let settled = drag.settled(editing);
-        *setting(&mut self.alarms, editing) = settled;
-        Some(settled != drag.base)
+        *setting(&mut self.alarms, editing) = drag.live;
+        Some(drag.live != drag.base)
     }
 
     /// Closes the alarm editor, if it's open. A drag in progress settles

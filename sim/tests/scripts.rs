@@ -454,19 +454,21 @@ fn stored_alarms(log: &str) -> Vec<&str> {
 }
 
 /// The editor's time follows the finger while it's down: a minute for
-/// each canvas pixel past the first 20 panel pixels, drawn as it goes,
-/// but only set (and saved) once the finger lifts, on a multiple of five.
+/// every 2 canvas pixels past the first 20 panel pixels, drawn as it
+/// goes, but only set (and saved) once the finger lifts, at the very
+/// minute it showed then: not the nearest five, as a swipe's steps are.
 #[test]
 fn the_editors_minutes_follow_a_dragged_finger() {
     let (dir, log) = in_the_editor(
         "editor-drag-minutes",
         "shot before.png\n\
-         # Down on the minutes, and up 30 panel pixels: 3 minutes.\n\
-         press 60,50\npress 60,40\nshot three.png\nsettings\n\
-         # 57 pixels: 12 minutes, which settles on 10.\n\
-         press 60,31\nshot twelve.png\nsettings\n\
-         lift\nshot ten.png\nsettings\n\
-         # And back down again, past midnight's side of the hour.\n\
+         # Down on the minutes, and up 30 panel pixels: 3 canvas pixels\n\
+         # past the slack, a minute.\n\
+         press 60,50\npress 60,40\nshot one.png\nsettings\n\
+         # 57 pixels: 12 canvas pixels, 6 minutes, where it stays.\n\
+         press 60,31\nshot six.png\nsettings\n\
+         lift\nshot lifted.png\nsettings\n\
+         # And back down again, into the hour before: 10 minutes.\n\
          press 60,30\npress 60,57\nlift\nsettings\n",
     );
     assert!(log.contains("drag by -3 at (60,50)"), "{log}");
@@ -477,20 +479,22 @@ fn the_editors_minutes_follow_a_dragged_finger() {
         [
             "not stored",
             "not stored",
-            "07:10 off, 07:30 off",
-            "06:50 off, 07:30 off"
+            "07:06 off, 07:30 off",
+            "06:56 off, 07:30 off"
         ],
         "{log}"
     );
-    // Each step of the way was drawn: four different screens.
-    let shots: BTreeSet<Vec<u8>> = ["before", "three", "twelve", "ten"]
-        .map(|shot| std::fs::read(dir.join(format!("{shot}.png"))).expect("the shot was taken"))
-        .into();
-    assert_eq!(shots.len(), 4, "{log}");
+    // Each step of the way was drawn, and the lift changed nothing on
+    // screen: three different screens, the last of them twice.
+    let shot =
+        |name: &str| std::fs::read(dir.join(format!("{name}.png"))).expect("the shot was taken");
+    let shots: BTreeSet<Vec<u8>> = ["before", "one", "six"].map(shot).into();
+    assert_eq!(shots.len(), 3, "{log}");
+    assert!(shot("six") == shot("lifted"), "{log}");
 }
 
-/// The hours go a step every 6 canvas pixels, a timer's minutes every 2
-/// (and settle on any minute, within what a timer can be), and a drag
+/// The hours go a step every 6 canvas pixels, a timer's minutes every 2,
+/// as an alarm's do (within what a timer can be), and a drag
 /// that comes back to where it started changes nothing: not even as the
 /// tap its touch then is, on the button it started on.
 #[test]
@@ -535,7 +539,7 @@ fn the_editors_drags_go_by_what_they_change() {
 fn a_swipe_in_the_editor_still_steps_the_time() {
     let (_, log) = in_the_editor(
         "editor-swipe",
-        "# 24 panel pixels up: a minute's drag, which settles back.\n\
+        "# 24 panel pixels up: a canvas pixel's drag, short of a minute.\n\
          press 60,50\npress 60,42\nlift\nsettings\n\
          up 60,40\nsettings\ndown 20,40\nsettings\n",
     );
@@ -562,7 +566,7 @@ fn closing_the_editor_settles_a_drag() {
     );
     assert_eq!(
         stored_alarms(&log),
-        ["07:10 off, 07:30 off", "07:10 off, 07:30 off"],
+        ["07:06 off, 07:30 off", "07:06 off, 07:30 off"],
         "{log}"
     );
 }

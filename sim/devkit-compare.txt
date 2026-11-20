@@ -48,10 +48,11 @@ long 20,40
 wait 500ms
 compare 08-alarm-off
 
-# Its editor: the minutes follow a finger dragged up them, a minute a
-# canvas pixel past the first 20 panel pixels, and settle on a multiple
-# of five as it lifts; then dragged back down to where they were. (`drag`:
-# two `press`es over the probe are a long press before the second lands.)
+# Its editor: the minutes follow a finger dragged up them, a minute for
+# every 2 canvas pixels past the first 20 panel pixels (07:01, then
+# 07:05), and stay there as it lifts; then dragged back down to where
+# they were. (`drag`: two `press`es over the probe are a long press
+# before the second lands.)
 # The button closes it: DONE would switch the alarm on.
 tap 20,40
 wait 500ms
