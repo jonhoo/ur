@@ -49,7 +49,9 @@ it's down already), and `lift` lifts it: these go through the touch
 task as the touch controller's reports would, so a long press is
 recognised while the finger is held (e.g. `--input press:40,40 lift`
 holds it for --wait seconds), and moving it (`press:40,40 press:40,70
-lift --wait 0.3`) makes a swipe. `blip` (or `blip:MS`) has the touch
+lift --wait 0.3`) makes a swipe. `drag:X,Y,TO` puts it down at X,Y and
+moves it to X,TO 20 ms later, where it stays until `lift`: what the alarm
+editor's time follows, as it happens (a `press` there moves it on). `blip` (or `blip:MS`) has the touch
 controller report that finger lifted, and back where it was 10 (or MS)
 ms later, as it does mid-hold: within 30 ms, the same touch.
 `asleep:1,0` makes the watch take the wearer as asleep from then on, as
@@ -120,6 +122,7 @@ KINDS = {
     "blip": 24,
     "charger": 25,
     "hardfault": 26,
+    "drag": 27,
 }
 
 
@@ -170,8 +173,11 @@ def inject(elf: Path, step: str) -> None:
         x, y, rest = int(where) if where else 0, 0, []
     else:
         x, y, *rest = (int(v) for v in where.split(",")) if where else (40, 40)
-    # A tap's duration, in milliseconds (0: the default), in the top byte.
-    held_ms = rest[0] if name == "tap" and rest else 0
+    # A tap's duration, in milliseconds (0: the default), in the top byte;
+    # or the y a drag goes to.
+    held_ms = rest[0] if name in ("tap", "drag") and rest else 0
+    if name == "drag" and not rest:
+        sys.exit("a drag needs where it goes: drag:X,Y,TO")
     if not 0 <= held_ms <= 255:
         sys.exit(f"a tap is held for at most 255 ms here, not {held_ms}")
     write_word(symbol(elf, "UR_INPUT"), KINDS[name] | x << 8 | y << 16 | held_ms << 24)

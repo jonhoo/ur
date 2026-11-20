@@ -849,6 +849,12 @@ impl<'a> Follower<'a> {
                 let (x, y) = script::point(arg(0).ok_or("press: needs X,Y")?)?;
                 self.inject(16, x as u8, y as u8, 0)?;
             }
+            "drag" => {
+                let (x, y) = script::point(arg(0).ok_or("drag: needs X,Y TO")?)?;
+                let to = arg(1).ok_or("drag: needs X,Y TO")?;
+                let (_, to) = script::point(&format!("0,{to}"))?;
+                self.inject(27, x as u8, y as u8, to as u8)?;
+            }
             "lift" => self.inject(17, 0, 0, 0)?,
             "blip" => {
                 let ms = arg(0).map_or(Ok(10), |ms| {

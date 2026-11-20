@@ -47,6 +47,32 @@ compare 07-alarm-on
 long 20,40
 wait 500ms
 compare 08-alarm-off
+
+# Its editor: the minutes follow a finger dragged up them, a minute a
+# canvas pixel past the first 20 panel pixels, and settle on a multiple
+# of five as it lifts; then dragged back down to where they were. (`drag`:
+# two `press`es over the probe are a long press before the second lands.)
+# The button closes it: DONE would switch the alarm on.
+tap 20,40
+wait 500ms
+compare 08a-editor
+drag 60,50 40
+wait 500ms
+compare 08b-editor-dragging
+press 60,33
+wait 500ms
+compare 08c-editor-dragged
+lift
+wait 500ms
+compare 08d-editor-settled
+drag 60,30 47
+wait 500ms
+lift
+wait 500ms
+compare 08e-editor-back
+button
+wait 500ms
+compare 08f-alarms
 button
 wait 500ms
 

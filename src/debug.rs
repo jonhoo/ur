@@ -64,7 +64,11 @@ static UR_CANVAS: AtomicPtr<Canvas> = AtomicPtr::new(core::ptr::null_mut());
 /// instead of the measured: charging if `x` is 1, charged (power, not
 /// charging) if 2, unplugged if 3, measured again if 0 (see
 /// [`charger_forced`]), 26 a HardFault, precise if `x` is 0 or imprecise
-/// if 1 (to test what the fault handler records)) and the next two the
+/// if 1 (to test what the fault handler records), 27 the simulated
+/// finger (of 16) down at (`x`, `y`) and, 20 ms later, moved to the top
+/// byte's canvas y, where it stays until 17 lifts it: the start of a
+/// drag, as 16 twice over the probe can be too slow for (the finger,
+/// still for 0.6 s, is a long press by then)) and the next two the
 /// canvas x and y. Cleared once taken.
 #[cfg(feature = "debug-input")]
 #[unsafe(no_mangle)]
@@ -277,6 +281,18 @@ pub async fn input_task() {
                 let scale = crate::canvas::SCALE as u8;
                 finger = (kind == 16).then(|| (x.min(79) * scale, y.min(79) * scale));
                 defmt::warn!("debug: finger at {}", finger);
+                crate::touch::SIMULATED.signal(finger);
+                continue;
+            }
+            // Down, then moved before it can be a long press: two of the
+            // chip's reports, a couple of its ~10 ms apart.
+            27 => {
+                let scale = crate::canvas::SCALE as u8;
+                let x = x.min(79) * scale;
+                crate::touch::SIMULATED.signal(Some((x, y.min(79) * scale)));
+                Timer::after_millis(20).await;
+                finger = Some((x, held_ms.min(79) * scale));
+                defmt::warn!("debug: finger dragged to {}", finger);
                 crate::touch::SIMULATED.signal(finger);
                 continue;
             }

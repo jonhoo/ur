@@ -36,6 +36,9 @@ Inputs (X,Y in canvas pixels, 0-79; 40,40 if left out):
   press X,Y | lift          a finger down (or moved), and up: through the
                             touch task's recogniser, so holding it still
                             for 0.6 s is a long press, and moving it a swipe
+  drag X,Y TO               a finger down at X,Y and, 20 ms on, moved to
+                            X,TO, still down: what the alarm editor's time
+                            follows (press moves it on, lift ends it)
   blip [MS]                 the touch controller reports the finger lifted,
                             but it's back MS ms later (10 if left out)
 The phone:
@@ -233,6 +236,15 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
             let (x, y) = point(need(0, "X,Y")?)?;
             // The middle of the canvas pixel, in panel pixels.
             watch.finger_at(x * 3 + 1, y * 3 + 1);
+        }
+        // As the dev kit's input 27: down, and moved before it can be a
+        // long press, which two `press`es over a dev kit's probe can't.
+        "drag" => {
+            let (x, y) = point(need(0, "X,Y TO")?)?;
+            let (_, to) = point(&format!("0,{}", need(1, "X,Y TO")?))?;
+            watch.finger_at(x * 3 + 1, y * 3 + 1);
+            watch.advance(Duration::from_millis(20));
+            watch.finger_at(x * 3 + 1, to * 3 + 1);
         }
         "lift" => watch.lift(),
         "blip" => watch.blip(arg(0).map_or(Ok(10), number)?),
