@@ -233,9 +233,20 @@ pub const ASLEEP_INTERVAL: u32 = 5 * 60;
 /// seconds: `gb_buckets::MINUTES`, which `heart` checks.
 pub const BUCKET: u32 = 5 * 60;
 
-/// How far into a bucket an asleep session starts (see [`in_phase`]): as
-/// its last minute begins.
-pub const BUCKET_SLOT: u32 = 4 * 60;
+/// How far into a bucket an asleep session starts (see [`in_phase`]):
+/// [`MINUTE_CLEAR`] after its last minute begins.
+pub const BUCKET_SLOT: u32 = 4 * 60 + MINUTE_CLEAR;
+
+/// How long after a minute begins an asleep session waits to start, in
+/// seconds: until `activity` has revised the night's sleep, which it does
+/// at its first poll of each minute (they're 2 s apart), with every other
+/// task waiting. Late in a night that took up to 93 ms (0.11.3-rc.3), and
+/// a session's I2C transfers time out after 50: started on the minute, as
+/// rc.3's were, 9 sessions in four nights were lost to that, against 2
+/// when sessions fell anywhere. The revision is quicker now, but still
+/// not one to sample a pulse across; and a session started in its slot
+/// ends before the next minute begins (see the assertion below).
+pub const MINUTE_CLEAR: u32 = 5;
 
 /// How long after [`BUCKET_SLOT`] an asleep session may still start
 /// without waiting for the next bucket's (see [`in_phase`]).
@@ -1227,8 +1238,9 @@ impl Schedule {
 /// doubled the points more than 8 BPM off (15 to 30). And every 27th
 /// bucket or so got no reading at all, as the drift stepped over it.
 ///
-/// Started as a bucket's last minute begins, a session that reads in its
-/// usual ~11 s is stamped ~50 s after the reading, one that takes its
+/// Started as a bucket's last minute begins (and [`MINUTE_CLEAR`], to
+/// keep clear of the minute's sleep revision), a session that reads in its
+/// usual ~11 s is stamped ~45 s after the reading, one that takes its
 /// full 30 s still lands in its bucket, and so does one that had to wait
 /// up to [`BUCKET_SLOT_FOR`] for a calm wrist first (asleep, 94% of polls
 /// already end a calm run). Each bucket gets one session, where it got

@@ -349,23 +349,25 @@ mod tests {
     }
 
     #[test]
-    fn the_slot_is_the_start_of_a_buckets_last_minute() {
-        // Buckets from 0: the slot is 240..260 s into each.
-        assert_eq!(in_phase(0, 0), 240);
-        assert_eq!(in_phase(239, 0), 240);
-        assert_eq!(in_phase(240, 0), 240);
-        assert_eq!(in_phase(259, 0), 259);
-        assert_eq!(in_phase(260, 0), 540);
-        assert_eq!(in_phase(299, 0), 540);
-        assert_eq!(in_phase(300, 0), 540);
+    fn the_slot_is_just_into_a_buckets_last_minute() {
+        // Buckets from 0: the slot is 245..265 s into each, clear of the
+        // minute's start (`MINUTE_CLEAR`).
+        assert_eq!(in_phase(0, 0), 245);
+        assert_eq!(in_phase(240, 0), 245);
+        assert_eq!(in_phase(244, 0), 245);
+        assert_eq!(in_phase(245, 0), 245);
+        assert_eq!(in_phase(264, 0), 264);
+        assert_eq!(in_phase(265, 0), 545);
+        assert_eq!(in_phase(299, 0), 545);
+        assert_eq!(in_phase(300, 0), 545);
         // Buckets from 37 s after boot, or from any other bucket's start,
         // one long before boot included.
         for bucket in [37, 337, 37 + 1000 * BUCKET] {
-            assert_eq!(in_phase(0, bucket), 277);
-            assert_eq!(in_phase(277, bucket), 277);
-            assert_eq!(in_phase(297, bucket), 577);
+            assert_eq!(in_phase(10, bucket), 282);
+            assert_eq!(in_phase(282, bucket), 282);
+            assert_eq!(in_phase(302, bucket), 582);
             // The bucket that began before boot: its slot comes first.
-            assert_eq!(in_phase(0, bucket + 100), 77);
+            assert_eq!(in_phase(0, bucket + 100), 82);
         }
     }
 
@@ -480,12 +482,12 @@ mod tests {
             assert_eq!(schedule.due_in_phase(0, true, None), schedule.due(0, true));
         }
         // Asleep: 1000 + 300 would be 100 s into a bucket from 0, so the
-        // slot before it, at 1140; a bucket from 250 has its slot at 1090,
-        // too soon after the last session, so the next, at 1390.
-        assert_eq!(schedule.due_in_phase(0, true, Some(0)), (1140, Why::Asleep));
+        // slot before it, at 1145; a bucket from 250 has its slot at 1095,
+        // too soon after the last session, so the next, at 1395.
+        assert_eq!(schedule.due_in_phase(0, true, Some(0)), (1145, Why::Asleep));
         assert_eq!(
             schedule.due_in_phase(0, true, Some(250)),
-            (1390, Why::Asleep)
+            (1395, Why::Asleep)
         );
         // A slot under way once two minutes have passed: then.
         assert_eq!(
@@ -495,7 +497,7 @@ mod tests {
         // A failure's retry is in step too, and an emptied budget holds
         // the session back past its slot.
         schedule.ended(1170, 30, Outcome::NoReading, true, sleeping());
-        assert_eq!(schedule.due_in_phase(0, true, Some(0)), (1440, Why::Retry));
+        assert_eq!(schedule.due_in_phase(0, true, Some(0)), (1445, Why::Retry));
         schedule.ended(1200, 400, Outcome::NoReading, false, sleeping());
         let (at, why) = schedule.due_in_phase(0, true, Some(0));
         assert_eq!(why, Why::Budget);
