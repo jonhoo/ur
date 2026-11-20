@@ -155,6 +155,13 @@ wait 1s
 expect dim
 shot dim-notification.png
 wait 6s
+# One from nobody (no sender, nor a title): its app is the name, and
+# nothing is in the app's corner.
+gb GB({"t":"notify","id":1,"src":"Parcelly","title":"","body":"Your parcel is ready for pickup","sender":""})
+wait 1s
+expect dim
+shot dim-notification-app.png
+wait 6s
 until 23:40
 asleep on
 wait 2m

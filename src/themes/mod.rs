@@ -134,6 +134,10 @@ pub trait Theme: Sync {
     /// one that arrived with the screen off (then in the dim look).
     /// `arrived` says when, in the history ([`crate::arrival`]); empty
     /// for one that has just come.
+    /// One from nobody comes with its app as `who`, to be as prominent
+    /// as a name is, and `app` empty, rather than with the screen all
+    /// but empty; a theme needs nothing for it but to draw an empty
+    /// `app` as nothing.
     fn notification(&self, canvas: &mut Canvas, app: &str, who: &str, arrived: &str);
     /// What the phone is playing, with its controls (see
     /// [`Theme::music_control`]).

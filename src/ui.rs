@@ -191,7 +191,9 @@
 //!   glance, as a history page shows it (see [`Theme::notification`]), and the
 //!   screen sleeps again after. Either way, it's kept in
 //!   the history above the clock; one arriving while that's showing goes
-//!   straight to its first page instead of a banner.
+//!   straight to its first page instead of a banner. One from nobody (no
+//!   sender, nor a title) has its app where who it's from goes on a screen
+//!   of its own (see `card_text`).
 //! - Calls: take over the screen, ringing, until the phone says the call is
 //!   over (answered, rejected, ended) or the user acts.
 //! - "Find my watch" (Gadgetbridge's "Find lost device"): takes over the
@@ -2903,6 +2905,7 @@ impl App {
             // alone. A tap wakes it to the clock, with the notification as
             // a banner, for the time.
             self.banner_text(banner.shows, &mut app, &mut who);
+            card_text(&mut app, &mut who);
             theme.notification(canvas, &app, &who, "");
             return;
         }
@@ -2985,6 +2988,7 @@ impl App {
                     }
                     n.app.write_to(&mut app);
                     n.who.write_to(&mut who);
+                    card_text(&mut app, &mut who);
                     theme.notification(canvas, &app, &who, &arrived);
                 }
                 None => clock(canvas, None),
@@ -3423,3 +3427,24 @@ impl App {
 /// what [`Text`] keeps of each (see [`Text::write_to`]).
 type AppText = String<{ 2 * 24 + 1 }>;
 type WhoText = String<{ 2 * 40 + 1 }>;
+
+/// What a notification with the whole screen says (see
+/// [`Theme::notification`]), from what its banner would: one from nobody
+/// (no sender, and no title, or none of either that can be drawn: a
+/// title of emoji, say) gives who it's from's place to its app, the one
+/// thing known of it. Left as it was, the app small in its corner over
+/// nothing at all, the screen mostly read as empty. The app moves
+/// rather than shows twice: the corner's copy would say nothing the big
+/// one doesn't.
+///
+/// Here rather than in each theme, so every theme's screen does it, with
+/// the type it already gives a name. Not for the banner, which is never
+/// most of an empty screen: there the app keeps its own line, in its own
+/// colour, over the screen beneath.
+fn card_text(app: &mut AppText, who: &mut WhoText) {
+    if who.is_empty() {
+        // An app's text is the shorter of the two.
+        who.push_str(app).fits();
+        app.clear();
+    }
+}

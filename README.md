@@ -175,7 +175,7 @@ title without one), never what it says, and without emoji (nor the
 caller's name or what's playing). One that comes with
 the screen on shows along the bottom for 4 seconds; with the
 screen off, it gets the whole screen, dimly, the name centred, and large
-if it's short.
+if it's short (the app's name, for one with neither sender nor title).
 
 **Screens:** swipe right for Today (steps and heart rate by the hour),
 then Last night; left for Alarms, the alarms set in Gadgetbridge,

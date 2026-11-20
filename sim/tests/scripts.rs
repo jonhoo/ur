@@ -1677,6 +1677,76 @@ fn a_notification_wake_always_ends() {
     assert!(ok, "{log}");
 }
 
+/// Runs `script` (its screenshots into the fresh directory `name`), which
+/// must pass, and returns the directory and the log.
+fn passes(name: &str, script: &str) -> (PathBuf, String) {
+    let dir = out(name);
+    let file = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(&file, script).expect("the target dir is writable");
+    let (ok, log) = run(
+        file.to_str().expect("UTF-8"),
+        &["--out", dir.to_str().expect("UTF-8")],
+    );
+    assert!(ok, "{log}");
+    (dir, log)
+}
+
+/// A notification from nobody (no sender, and no title: only its body,
+/// which never shows) has its app where the name would be, as big, on a
+/// screen of its own, rather than small in the corner of an empty one;
+/// one with a title is as before. The banner is as before for both.
+#[test]
+fn a_notification_from_nobody_shows_its_app_as_the_name() {
+    let line = |src: &str, title: &str, sender: &str| {
+        format!(
+            "gb GB({{\"t\":\"notify\",\"id\":1,\"src\":\"{src}\",\"title\":\"{title}\",\
+             \"body\":\"Ready for pickup\",\"sender\":\"{sender}\"}})\n"
+        )
+    };
+    let script = |first: &str, second: &str| {
+        format!(
+            "time 2026-11-09 15:42 +01:00\nconnect\nwait 11s\nexpect not screen-on\n\
+             {first}wait 1s\nexpect dim\nshot quiet.png\n\
+             wait 6s\nbutton\nwait 1s\n{second}wait 1s\nshot banner.png\n\
+             down\nwait 1s\nshot history.png\n"
+        )
+    };
+    // From nobody: as one from someone called what the app is, from an
+    // app with no name, on a screen of its own. (The same app twice in
+    // the history, so the other pages' handles match too.)
+    let nobody = line("Parcelly", "", "");
+    let (nobody_dir, log) = passes("nobody", &script(&nobody, &nobody));
+    let named = "notify \"\" Parcelly\n";
+    let (named_dir, _) = passes("nobody-named", &script(named, named));
+    let shot = |dir: &Path, name| std::fs::read(dir.join(name)).expect("the script took it");
+    assert!(log.contains("notification: Parcelly: \n"), "{log}");
+    for name in ["quiet.png", "history.png"] {
+        assert!(
+            shot(&nobody_dir, name) == shot(&named_dir, name),
+            "{name}: {log}"
+        );
+    }
+    // The banner keeps the app on its own line: as before.
+    assert!(
+        shot(&nobody_dir, "banner.png") != shot(&named_dir, "banner.png"),
+        "{log}"
+    );
+
+    // With a title, or a sender, the app stays in its corner.
+    let titled = line("Parcelly", "Emil Dahl", "");
+    let sent = line("Parcelly", "", "Emil Dahl");
+    let (titled_dir, _) = passes("nobody-titled", &script(&titled, &titled));
+    let (sent_dir, _) = passes("nobody-sent", &script(&sent, &sent));
+    let both = "notify Parcelly \"Emil Dahl\"\n";
+    let (both_dir, _) = passes("nobody-both", &script(both, both));
+    for name in ["quiet.png", "banner.png", "history.png"] {
+        assert!(shot(&titled_dir, name) == shot(&both_dir, name), "{name}");
+        assert!(shot(&sent_dir, name) == shot(&both_dir, name), "{name}");
+        assert!(shot(&titled_dir, name) != shot(&nobody_dir, name), "{name}");
+    }
+}
+
 /// A client that won't pair, reconnecting (as `ble` cuts it off after
 /// 40 s): its NOT PAIRED banner shows, and buzzes, at most once every five
 /// minutes, while the wearer's own phone saying PAIRING LOST meanwhile
