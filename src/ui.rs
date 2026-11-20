@@ -248,6 +248,7 @@
 //! | The touch controller sleeps | Yields: only while the screen is off, and the wrist doesn't stir | A touch with the screen off is as likely bedding |
 //! | Touches don't wake the screen, nor do the media gestures with it off | Kept (not in a nap, which is as by day) | As above; the button wakes it. A touch that woke it from a glance doesn't hold it on either |
 //! | No glances while asleep (as sleep tracking says) | Kept | That's turning over in bed; and the screen's on anyway |
+//! | The panel's idle mode (~8 Hz; see `ui_loop::UiLoop::idle`) | Yields: from the first press or touch with the screen on, until it goes off | At ~8 Hz a sweep between screens stutters, and every redraw lags |
 //! | The dim look, at the low backlight | Kept | Eyes adapted to the dark, and maybe someone asleep alongside; a double press of the button ends the night for the full look |
 //! | Notifications don't buzz or light the screen | Yields already: one waiting shows as a banner while the screen is on. Still no buzz | The banner is seen; the buzz would only wake someone alongside |
 //! | No room sensor scans in the background | Yields already: the clock face, or the Air screen, scans (see [`aranet::Nearby::due`]) | |

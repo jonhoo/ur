@@ -288,6 +288,8 @@ heart 64
 button
 wait 1s
 expect dim
+# Only looked at, the panel is in idle mode (~8 Hz).
+expect idle
 shot 17-quiet-night.png
 button
 
@@ -420,10 +422,14 @@ wait 1s
 # slash.
 expect charging
 expect dim
+expect idle
 tap 40,40
 wait 1s
 expect clock
 expect dim
+# In use, the panel leaves idle mode, still dim: at ~8 Hz, the sweeps
+# between screens would stutter.
+expect not idle
 shot 22b-quiet-no-phone.png
 right
 wait 1s

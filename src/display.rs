@@ -21,7 +21,9 @@
 //!   InfiniTime's VDV (VDVS) too, which also evens out the step from black
 //!   to the darkest greys.
 //! - **Idle mode** for the dim white-on-black look ([`Display::set_idle`]):
-//!   8 colours, refreshed at ~8 Hz instead of 60.
+//!   8 colours, refreshed at ~8 Hz instead of 60. Only while the screen is
+//!   looked at: in use in the quiet night, the UI loop leaves it, as a
+//!   sweep between screens stutters at ~8 Hz (see `ui_loop::UiLoop::idle`).
 //!
 //! The SPI bus is shared with the SPI flash (see [`crate::spi`]), so the
 //! driver locks it per command, and for the whole of each rectangle of pixels
@@ -201,7 +203,9 @@ impl Display {
     /// bottom rows, rather than [`REFRESH`]. So the UI loop leaves idle
     /// mode before drawing a frame to show with the backlight off (waking,
     /// or going into or out of the dim look), shows it at the normal frame
-    /// rate, and only then enters idle mode.
+    /// rate, and only then enters idle mode. (Leaving it under a lit, dim
+    /// frame, as the UI loop does once the quiet night's screen is used,
+    /// changes no colour: a dim look has only idle mode's.)
     ///
     /// The mode survives sleep. Does nothing if already in that mode.
     pub async fn set_idle(&mut self, idle: bool) {

@@ -369,6 +369,11 @@ pub struct UiLoop {
     last_power_report: Instant,
     /// Whether the last frame was in the dim look; see [`UiLoop::pass`].
     was_dim: bool,
+    /// Whether the wearer has used the screen since it came on: pressed
+    /// the button or touched it, beyond what woke it. In the quiet night,
+    /// the panel then leaves idle mode until the screen goes off (see
+    /// [`UiLoop::idle`]).
+    used: bool,
     /// The clock face's temperature (tenths of a degree), once read, and
     /// where from; and what goes into it (see `temperature`): the die's
     /// own, in quarter degrees, whether the watch is worn, and the
@@ -416,6 +421,7 @@ impl UiLoop {
             next_battery_log: now + Duration::from_secs(60),
             last_power_report: now,
             was_dim: false,
+            used: false,
             temperature: None,
             die: None,
             wear: temperature::Wear::new(now.as_millis()),
@@ -429,6 +435,39 @@ impl UiLoop {
             live: live::Live::new(),
         };
         (app, ui)
+    }
+
+    /// Whether the panel should be in idle mode (see `Display::set_idle`)
+    /// for what `app` shows: in the dim look, which is made of the 8
+    /// colours it has, while the screen is only looked at.
+    ///
+    /// Idle mode refreshes the panel at ~8 Hz. A still screen looks the
+    /// same, but a sweep between screens ([`Canvas::transition`], ~230 ms)
+    /// then shows as two or three torn jumps, and every redraw up to 125 ms
+    /// late: a field report had the watch "laggy, its animations
+    /// stuttering", each time swiping between screens in a quiet night
+    /// that had begun with the wearer awake (lying still in bed; and once
+    /// with the watch off the wrist). So the quiet night yields here too
+    /// (see `ui`'s table): once the wearer uses the screen, it's at the
+    /// normal rate until it goes off. The look stays dim, and the same:
+    /// its colours are idle mode's own (`Palette::idle_mode_safe`).
+    ///
+    /// Only the quiet night's dim look needs this. A glance and a quiet
+    /// notification show no sweeps, and a touch that does anything there
+    /// ends the dim look; and the hidden puzzle's moves are single
+    /// redraws.
+    ///
+    /// What it costs is idle mode's saving (1.5–3 mA, by estimate: see
+    /// docs/power-plan.md, #15) for the seconds the screen is used at
+    /// night: over four days of that field log, two evenings' ~1.5 min. A
+    /// press of the button for the time, most of a night's screen time,
+    /// stays in idle mode.
+    ///
+    /// TODO: text that scrolls on a dim screen no one has touched (a
+    /// caller's long name, on a call in the quiet night) still does so in
+    /// idle mode: 10 steps a second, shown at ~8 Hz.
+    fn idle(&self, app: &App) -> bool {
+        app.dim() && !(self.used && app.quiet_night())
     }
 
     /// Reads what the UI shows, then, if the screen is on, renders a full
@@ -608,7 +647,8 @@ impl UiLoop {
             // whole by the time the backlight comes on (see
             // `Display::set_idle`); so is anything not in the dim look,
             // which needs all its colours.
-            if !self.panel_awake || relighting || !app.dim() {
+            let idle = self.idle(app);
+            if !self.panel_awake || relighting || !idle {
                 board.set_idle(false).await;
             }
             canvas.set_palette(app.palette());
@@ -641,7 +681,7 @@ impl UiLoop {
             } else if relighting {
                 board.wait_for_refresh().await;
             }
-            board.set_idle(app.dim()).await;
+            board.set_idle(idle).await;
             // Low for a glance, and back up if it turns into a proper wake;
             // brightening while a wake alarm rings (see `brightness`).
             board.backlight(app.backlight(Instant::now()));
@@ -658,6 +698,9 @@ impl UiLoop {
             // idea of what's on the panel stays valid across sleep/wake.
             board.sleep_panel().await;
             self.panel_awake = false;
+            // The next wake is only a look at the screen again, until
+            // it's used (see `idle`).
+            self.used = false;
         }
         // Someone looking at the clock face gets a fresh heart rate, but one
         // is enough: the LED (3–8 mA) needn't stay on for the rest of the
@@ -892,10 +935,16 @@ impl UiLoop {
                 let at = Instant::now();
                 #[cfg(feature = "compare")]
                 crate::compare::input(&event, at);
+                // The screen in use, for the panel's frame rate (see
+                // `idle`): the button or a touch with it already on. Not
+                // what woke it: a look at the time is the button and
+                // nothing more.
+                let hands = matches!(event, InputEvent::Button | InputEvent::Touch(_));
                 app.on_input(event, at);
                 if !was_awake && app.awake {
                     power::count(wake);
                 }
+                self.used |= hands && was_awake && app.awake;
             }
         }
         // Each wake leaves the UI's state whole (see `App::check`): here,

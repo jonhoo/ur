@@ -377,6 +377,32 @@ fn a_failed_expectation_fails_the_run() {
 }
 
 #[test]
+fn the_quiet_night_leaves_idle_mode_while_the_screen_is_used() {
+    let dir = out("quiet-idle");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    // The button for the time, in the quiet night: dim, the panel in idle
+    // mode (~8 Hz). A swipe is the wearer using the screen: still dim,
+    // but out of idle mode (where the sweep between screens stuttered),
+    // and so until the screen goes off. The next look is in idle mode
+    // again, and the press that puts the screen out isn't use of it.
+    std::fs::write(
+        &script,
+        "time 2026-11-10 23:40\nasleep on\nwait 2m\nexpect quiet-night\n\
+         button\nwait 1s\nexpect dim\nexpect idle\n\
+         left\nwait 1s\nexpect dim\nexpect not idle\n\
+         right\nwait 1s\nexpect clock\nexpect not idle\n\
+         wait 11s\nexpect not screen-on\n\
+         button\nwait 1s\nexpect idle\n\
+         button\nwait 2s\nexpect not screen-on\n\
+         button\nwait 1s\nexpect quiet-night\nexpect idle\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+}
+
+#[test]
 fn a_held_finger_is_a_long_press_while_still_down() {
     let dir = out("press");
     let script = dir.join("script.txt");
