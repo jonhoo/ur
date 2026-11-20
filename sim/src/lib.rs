@@ -272,7 +272,8 @@ mod system_off {
 }
 
 /// `src/touch.rs`, the touch controller's driver: only its types, which
-/// are [`crate::gesture`]'s, and whether the UI loop has put it to sleep.
+/// are [`crate::gesture`]'s, and whether the UI loop has put it to sleep,
+/// or wants a finger's drags.
 /// [`watch`] feeds the gesture recogniser itself.
 mod touch {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -288,6 +289,17 @@ mod touch {
     /// Whether touches go unnoticed (see `set_asleep`).
     pub fn asleep() -> bool {
         ASLEEP.load(Ordering::Relaxed)
+    }
+
+    static DRAGS: AtomicBool = AtomicBool::new(false);
+
+    pub fn set_drags(drags: bool) {
+        DRAGS.store(drags, Ordering::Relaxed);
+    }
+
+    /// Whether the screen showing follows the finger (see `set_drags`).
+    pub fn drags() -> bool {
+        DRAGS.load(Ordering::Relaxed)
     }
 }
 

@@ -369,7 +369,7 @@ must be where the drawing shows it.
 |---|---|
 | `alarm_at` | Which alarm (smart wake, an alarm, a timer) a tap or long press is on, if any |
 | `editor_button` | Which of the editor's buttons (switch, next or done) a tap is on, if any |
-| `editor_field` | Whether a swipe up or down changes the hours or the minutes |
+| `editor_field` | Whether a drag (or a swipe) up or down from there changes the hours or the minutes |
 | `settings_row` | Which of a settings screen's rows (its index in `page.rows`, as `settings` draws them) a tap is on, if any |
 | `grid_button` | Which button of the grid a touch is on: always one, 1 to `layout.buttons()` (Retro uses `buttons::at`) |
 | `call_button` | Decline or answer, if either |

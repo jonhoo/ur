@@ -47,6 +47,18 @@
 //! TODO: find what drops the finger (`AutoReset`, 0xFB? the baseline's
 //! update rate?).
 //!
+//! While a screen follows the finger (the alarm editor; see [`set_drags`]),
+//! the touch doesn't wait for its lift to be heard of: those ~10 ms
+//! reports also go on to the UI, as how far the finger has dragged
+//! ([`Gesture::Drag`]), as fast as the UI takes them. Each is the whole
+//! distance, so the UI only ever gets the latest: one is sent only once
+//! the UI has taken everything before it, rather than queued behind it.
+//! Nothing about the chip changes for it: it's the same reports, in the
+//! same mode, that every touch is classified from.
+//! TODO: measure, on a dev kit, how often the UI gets one while it
+//! redraws the editor's digits (the log's `touch:` line for the touch
+//! says how many it sent).
+//!
 //! [`LONG_PRESS`]: crate::gesture::LONG_PRESS
 //! [`HOLD_LIMIT`]: crate::gesture::HOLD_LIMIT
 //!
@@ -129,6 +141,44 @@ static DOWN: AtomicBool = AtomicBool::new(false);
 /// over).
 pub fn finger_down() -> bool {
     DOWN.load(Ordering::Relaxed)
+}
+
+/// Whether the UI wants to hear of a finger's drags as it makes them (see
+/// [`set_drags`]).
+static DRAGS: AtomicBool = AtomicBool::new(false);
+
+/// Whether the screen showing follows the finger, and so wants a
+/// [`Gesture::Drag`] for each move of a touch, not only the touch's event
+/// at its lift. The UI loop calls this every pass. Off, the UI is only
+/// woken by a touch once it's over, as it was before any screen followed
+/// one.
+pub fn set_drags(drags: bool) {
+    DRAGS.store(drags, Ordering::Relaxed);
+}
+
+/// Sends the UI how far `touch` has dragged, if a screen follows it and
+/// that's news (see [`Tracking::drag`]). Mid-touch, only if the UI has
+/// nothing else waiting: a drag is only worth the latest position, so
+/// they aren't queued behind each other, and the next report (~10 ms on)
+/// tries again, with where the finger is then. The `last` one, as the
+/// finger lifts, is queued whatever waits, so that the drag ends where
+/// the finger did.
+///
+/// Never waited for, as the touch's own event is: a wait here would be
+/// another future kept in the task's (static RAM, which the `compare`
+/// build is short of). So should the queue be full at the lift, the
+/// drag ends a report short of the finger.
+fn send_drag(touch: &mut Tracking, last: bool) {
+    if !DRAGS.load(Ordering::Relaxed) || !(last || crate::INPUT.is_empty()) {
+        return;
+    }
+    if let Some(drag) = touch.drag()
+        && crate::INPUT
+            .try_send(crate::InputEvent::Touch(drag))
+            .is_err()
+    {
+        warn!("touch: no room for a drag");
+    }
 }
 
 /// Whether the chip should be asleep, as last asked (see [`set_asleep`]).
@@ -237,8 +287,8 @@ pub async fn touch_task(
             // Over: reports dried up, or a lift wasn't followed by the
             // finger coming back.
             Either3::Second(false) => {
-                let touch = tracking.take().expect("only times out while tracking");
-                finish(&touch).await;
+                let mut touch = tracking.take().expect("only times out while tracking");
+                finish(&mut touch).await;
                 continue;
             }
             Either3::Third(()) => {
@@ -250,8 +300,8 @@ pub async fn touch_task(
                     // finger lifted, waiting to see if it comes back, is
                     // over as of its lift.
                     match tracking.take() {
-                        Some(touch) if touch.over_at().is_some() => {
-                            finish(&touch).await;
+                        Some(mut touch) if touch.over_at().is_some() => {
+                            finish(&mut touch).await;
                         }
                         Some(touch) => {
                             if let Some(release) = touch.lost() {
@@ -343,6 +393,11 @@ pub async fn touch_task(
                         "touch: rejoined a lift of [gesture, fingers, event] {}",
                         lift_bits
                     );
+                }
+                // The finger moved, perhaps: a screen that follows it
+                // hears now, not at the lift.
+                if let Some(touch) = &mut tracking {
+                    send_drag(touch, false);
                 }
             }
             // Lifted. The touch is over once the finger hasn't come back
@@ -442,10 +497,12 @@ async fn configure(i2c: &mut Device) -> bool {
 }
 
 /// The touch is over: reports it, as it was when the finger lifted.
-async fn finish(touch: &Tracking) {
+async fn finish(touch: &mut Tracking) {
     // Over, as of now: the UI may act on the event before the loop comes
     // round to say so.
     DOWN.store(false, Ordering::Relaxed);
+    // Where a drag ended, before what the touch was (see `send_drag`).
+    send_drag(touch, true);
     let (event, release) = touch.lifted();
     // A long press was reported while held, and that was the touch's one
     // event, whatever the finger did after: its lift is only a release.
@@ -456,14 +513,15 @@ async fn finish(touch: &Tracking) {
         );
     } else {
         info!(
-            "touch: {} from ({},{}) to ({},{}) in {}ms, rejoined {}",
+            "touch: {} from ({},{}) to ({},{}) in {}ms, rejoined {}, {} drags",
             event.gesture,
             touch.start.0,
             touch.start.1,
             touch.last.0,
             touch.last.1,
             event.held_ms,
-            touch.rejoined
+            touch.rejoined,
+            touch.drags
         );
     }
     crate::INPUT.send(crate::InputEvent::Touch(event)).await;

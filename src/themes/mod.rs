@@ -211,7 +211,8 @@ pub trait Theme: Sync {
     fn alarm_at(&self, x: i32, y: i32) -> Option<Editing>;
     /// Which of the editor's buttons a tap is on, if any.
     fn editor_button(&self, x: i32, y: i32) -> Option<EditorButton>;
-    /// Which part of the time a swipe up or down in the editor changes.
+    /// Which part of the time a drag (or a swipe) up or down in the
+    /// editor changes, from where it started.
     fn editor_field(&self, x: i32, y: i32) -> EditorField;
     /// Which of a settings screen's rows (its index in `page.rows`, as
     /// [`Theme::settings`] draws them) a tap is on, if any.
@@ -250,7 +251,8 @@ pub enum EditorButton {
     Next,
 }
 
-/// What a swipe in the alarm editor changes (see [`Theme::editor_field`]).
+/// What a drag or a swipe in the alarm editor changes (see
+/// [`Theme::editor_field`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EditorField {
     Hours,
@@ -390,6 +392,10 @@ pub enum RowKind {
 /// The alarm editor's.
 pub struct Editor<'a> {
     pub editing: Editing,
+    /// As to show them: while a finger drags the time, with the time
+    /// under it, which isn't set until it lifts. The editor is redrawn
+    /// for every step of a drag, so what it draws for a time should
+    /// change little from one minute to the next.
     pub settings: &'a alarm::Settings,
     pub state: &'a alarm::State,
     pub uptime_secs: i64,

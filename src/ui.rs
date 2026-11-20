@@ -171,15 +171,16 @@
 //!
 //! - On the alarms screen, tap a row (smart wake, alarm, timer) to edit it;
 //!   long-press to switch it on or off (or start/stop the timer).
-//! - In the editor: swipe up/down on the left half for hours, the right
-//!   half for minutes; tap the bottom left to switch it on/off, the bottom
-//!   right for the next page or done. Done also switches an alarm on, as
-//!   setting its time is most often to have it ring then, unless the
-//!   switch was tapped while the editor was open: then it stays as the
-//!   wearer left it. The button closes the editor too, as does the
-//!   screen going off, with the switch as it is: each change takes
-//!   effect, and is saved, as it's made, so there's nothing to keep or
-//!   throw away.
+//! - In the editor: drag up/down on the left half for hours, the right
+//!   half for minutes: the time follows the finger while it's down (see
+//!   [`Drag`]), and settles where it lifts. Tap the bottom left to switch
+//!   it on/off, the bottom right for the next page or done. Done also
+//!   switches an alarm on, as setting its time is most often to have it
+//!   ring then, unless the switch was tapped while the editor was open:
+//!   then it stays as the wearer left it. The button closes the editor
+//!   too, as does the screen going off, with the switch as it is: each
+//!   change takes effect, and is saved, as it's made (a drag's, as the
+//!   finger lifts), so there's nothing to keep or throw away.
 //! - The phone's alarms (see [`alarm::Phone`]) have a screen of their own,
 //!   read-only: they're set in Gadgetbridge.
 //! - Ringing takes over the screen: tap to snooze, button to stop. Alarms
@@ -432,6 +433,98 @@ struct Ringing {
     since: Instant,
 }
 
+// ==============================================================================
+// Dragging the editor's time
+// ==============================================================================
+
+/// A finger dragging the alarm editor's time: the setting as it was when
+/// the drag began, and as it is now, under the finger.
+///
+/// The time follows the finger, a step every few pixels (see
+/// [`Drag::to`]), but the setting itself only changes once the finger
+/// lifts (or the editor closes under it): every change to a setting is
+/// saved to flash by the pass it's made in, and a drag makes dozens a
+/// second. Until then the editor is drawn with `live` in the setting's
+/// place.
+#[derive(Clone, Copy)]
+struct Drag {
+    base: u16,
+    live: u16,
+}
+
+/// How far the finger goes for the time to move an hour, in canvas pixels
+/// (as [`Gesture::Drag`] counts them, three panel pixels each): 1.8 mm of
+/// the 23 mm panel, so a thumb's comfortable 15 mm or so is seven hours
+/// (the first 2 mm being the slack), and nowhere on the clock is more than two drags away (the
+/// time wraps at midnight).
+const DRAG_HOUR: i32 = 6;
+/// The same for a minute of an alarm's time: 0.3 mm, so the same drag
+/// covers most of an hour, and the minutes run under the finger rather
+/// than tick. That's finer than a finger can lift at, which is why an
+/// alarm's minutes settle on a multiple of [`ALARM_MINUTES`].
+const DRAG_MINUTE: i32 = 1;
+/// The same for a minute of a timer, which settles on any minute (three
+/// for the tea, seven for the eggs), so its steps are twice as far
+/// apart: 0.6 mm, about what a lifting finger keeps.
+const DRAG_TIMER_MINUTE: i32 = 2;
+/// What an alarm's minutes are set in: a swipe's step, and what a drag
+/// settles on.
+const ALARM_MINUTES: u16 = 5;
+
+impl Drag {
+    /// The setting `base`, of `editing`, dragged `by` (see
+    /// [`Gesture::Drag`]: down is positive, and counts the time down, as
+    /// a swipe down does) on `field`.
+    ///
+    /// Minutes carry into the hours, as a swipe's steps do, so dragging on
+    /// from 07:59 reads 08:00. A time of day wraps at midnight; a timer
+    /// stops at its ends.
+    fn to(base: u16, editing: Editing, field: EditorField, by: i8) -> u16 {
+        let timer = matches!(editing, Editing::Timer(_));
+        let up = -i32::from(by);
+        // Towards zero, so the time is `base` for as far either side of
+        // where the drag began.
+        let moved = match (field, timer) {
+            (EditorField::Hours, _) => up / DRAG_HOUR * 60,
+            (EditorField::Minutes, true) => up / DRAG_TIMER_MINUTE,
+            (EditorField::Minutes, false) => up / DRAG_MINUTE,
+        };
+        within(editing, i32::from(base) + moved)
+    }
+
+    /// Where the drag settles, the finger lifted: where it was, but for an
+    /// alarm's time that the drag moved, the nearest multiple of
+    /// [`ALARM_MINUTES`]. (One it left alone stays as it was, whatever
+    /// that is: storage may hold any minute.)
+    fn settled(self, editing: Editing) -> u16 {
+        if matches!(editing, Editing::Timer(_)) || self.live == self.base {
+            return self.live;
+        }
+        let step = i32::from(ALARM_MINUTES);
+        within(editing, (i32::from(self.live) + step / 2) / step * step)
+    }
+}
+
+/// `value` as a setting of `editing` can be: a timer's length within what
+/// a timer can run for, a time of day within the day (wrapping).
+fn within(editing: Editing, value: i32) -> u16 {
+    if let Editing::Timer(_) = editing {
+        value.clamp(1, i32::from(alarm::MAX_TIMER)) as u16
+    } else {
+        value.rem_euclid(24 * 60) as u16
+    }
+}
+
+/// The setting the editor changes for `editing`.
+fn setting(alarms: &mut alarm::Settings, editing: Editing) -> &mut u16 {
+    match editing {
+        Editing::SmartWeekday => &mut alarms.smart_weekday,
+        Editing::SmartWeekend => &mut alarms.smart_weekend,
+        Editing::At(i) => &mut alarms.at_time[usize::from(i)],
+        Editing::Timer(i) => &mut alarms.timers[usize::from(i)],
+    }
+}
+
 /// Which setting the editor is changing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Editing {
@@ -624,6 +717,8 @@ pub struct App {
     finding: Option<Instant>,
     /// The alarm editor, while open.
     editing: Option<Editing>,
+    /// In the editor: the finger dragging its time, while it does.
+    drag: Option<Drag>,
     /// In the editor: its switch was tapped since it opened, so DONE
     /// leaves the alarm as that left it (see `on_editor_input`).
     switched: bool,
@@ -790,6 +885,7 @@ impl App {
             ringing: None,
             finding: None,
             editing: None,
+            drag: None,
             switched: false,
             local_second: None,
             glance_until: None,
@@ -883,6 +979,9 @@ impl App {
             debug_assert!(!self.brief_wake, "the full charge in a notification's wake");
         }
         debug_assert!(self.ringing.is_none() || self.editing.is_none());
+        // A drag is of the editor's time: closing the editor settles it
+        // (`close_editor`).
+        debug_assert!(self.drag.is_none() || self.editing.is_some());
         // The charge screen covers the clock face, lit, only on the
         // charger: a wake there sets it, any wake by input ends a glance
         // first, the first input on it ends it, and so do the power
@@ -1593,7 +1692,33 @@ impl App {
                 }
                 return;
             }
+            // A finger on its way somewhere: only the alarm editor
+            // follows it, and only while it's what shows. Anywhere else
+            // (one sent as the editor closed, say) it's nothing at all,
+            // not even an input to keep the screen on for: its touch's
+            // own event comes at the lift.
+            InputEvent::Touch(touch) if let Gesture::Drag(by) = touch.gesture => {
+                if let Some(editing) = self.editing.filter(|_| self.follows_finger()) {
+                    let field = self.theme().editor_field(touch.x, touch.y);
+                    let base = match self.drag {
+                        Some(drag) => drag.base,
+                        None => *setting(&mut self.alarms, editing),
+                    };
+                    let live = Drag::to(base, editing, field, by);
+                    self.drag = Some(Drag { base, live });
+                    self.last_input = now;
+                }
+                return;
+            }
             other => other,
+        };
+        // A touch's own event ends its drag, wherever it goes from here
+        // (to a call that came in over the editor, say): the time settles
+        // where the finger left it. The editor then leaves that event be,
+        // if the drag did what a swipe would (see `on_editor_input`).
+        let dragged = match event {
+            InputEvent::Touch(_) => self.settle_drag(),
+            _ => None,
         };
         // The full charge's screen: the button or a touch only ends it,
         // to the screen beneath, for its usual time (see `on_charged`).
@@ -1893,7 +2018,7 @@ impl App {
         }
 
         if let Some(editing) = self.editing {
-            self.on_editor_input(editing, event, now);
+            self.on_editor_input(editing, event, now, dragged);
             return;
         }
 
@@ -2320,15 +2445,62 @@ impl App {
         }
     }
 
-    fn on_editor_input(&mut self, editing: Editing, event: InputEvent, now: Instant) {
+    /// Whether the screen showing follows a finger as it moves, so that
+    /// the touch task should say where it is ([`Gesture::Drag`]; see
+    /// `touch::set_drags`): the alarm editor, when nothing has the screen
+    /// over it (as `render` stacks them).
+    pub fn follows_finger(&self) -> bool {
+        self.editing.is_some() && !self.takeover && !self.ringing_any() && !self.showing_charged()
+    }
+
+    /// The finger dragging the editor's time is done: the setting becomes
+    /// what it left (see [`Drag::settled`]), which the pass then saves.
+    /// Returns whether that changed the setting, if there was a drag.
+    fn settle_drag(&mut self) -> Option<bool> {
+        let drag = self.drag.take()?;
+        let editing = self.editing?;
+        let settled = drag.settled(editing);
+        *setting(&mut self.alarms, editing) = settled;
+        Some(settled != drag.base)
+    }
+
+    /// Closes the alarm editor, if it's open. A drag in progress settles
+    /// where it is, as if the finger had lifted: what the editor showed
+    /// is what's set.
+    fn close_editor(&mut self) {
+        self.settle_drag();
+        self.editing = None;
+    }
+
+    /// An input for the alarm editor. `dragged`: it's the event of a
+    /// touch that dragged the time, which has now settled, and whether
+    /// that changed it.
+    fn on_editor_input(
+        &mut self,
+        editing: Editing,
+        event: InputEvent,
+        now: Instant,
+        dragged: Option<bool>,
+    ) {
         let InputEvent::Touch(touch) = event else {
             // The button closes the editor as it is: the way out that
             // leaves an alarm's switch alone.
             if let InputEvent::Button = event {
-                self.editing = None;
+                self.close_editor();
             }
             return;
         };
+        // The drag was the touch: its swipe mustn't step the time as
+        // well, nor a finger that went back to where it started (a tap,
+        // as the touch task has it) press the button it started on. But
+        // a swipe too short for the drag to have moved the time (a flick
+        // of the finger, as the editor used to be worked) still steps it
+        // once, below: a swipe is never worth less than it was.
+        if let Some(changed) = dragged
+            && (changed || touch.gesture == Gesture::Tap)
+        {
+            return;
+        }
         let theme = self.theme();
         let up = match touch.gesture {
             Gesture::SwipeUp => 1,
@@ -2359,7 +2531,7 @@ impl App {
                                 Editing::Timer(_) => {}
                             }
                         }
-                        self.editing = None;
+                        self.close_editor();
                     }
                     None => {}
                 }
@@ -2367,25 +2539,17 @@ impl App {
             }
             _ => return,
         };
-        // Hours, or minutes: 5 at a time, but 1 for the timer, where short
-        // durations are common.
+        // A swipe that wasn't followed as a drag (an injected gesture: the
+        // dev kit's debug input, the simulator's scripts and keys), or
+        // whose drag came to nothing: one step. Hours, or minutes: 5 at a time, but 1 for the timer, where
+        // short durations are common.
         let step = match (theme.editor_field(touch.x, touch.y), editing) {
             (EditorField::Hours, _) => 60,
             (EditorField::Minutes, Editing::Timer(_)) => 1,
-            (EditorField::Minutes, _) => 5,
+            (EditorField::Minutes, _) => i32::from(ALARM_MINUTES),
         };
-        let value = match editing {
-            Editing::SmartWeekday => &mut self.alarms.smart_weekday,
-            Editing::SmartWeekend => &mut self.alarms.smart_weekend,
-            Editing::At(i) => &mut self.alarms.at_time[usize::from(i)],
-            Editing::Timer(i) => &mut self.alarms.timers[usize::from(i)],
-        };
-        let changed = i32::from(*value) + up * step;
-        *value = if let Editing::Timer(_) = editing {
-            changed.clamp(1, i32::from(alarm::MAX_TIMER)) as u16
-        } else {
-            changed.rem_euclid(24 * 60) as u16
-        };
+        let value = setting(&mut self.alarms, editing);
+        *value = within(editing, i32::from(*value) + up * step);
     }
 
     /// Turns the screen off, closing the alarm editor if it's open. The
@@ -2399,7 +2563,7 @@ impl App {
     /// layout) amount to when a wake takes the wearer off them.
     fn screen_off(&mut self) {
         self.awake = false;
-        self.editing = None;
+        self.close_editor();
         self.charge_screen = false;
         // As does the full charge's screen, if anything ever puts the
         // screen out under it (see `check`).
@@ -2788,7 +2952,7 @@ impl App {
                 self.small_hours = false;
             }
             self.ringing = Some(Ringing { kind, since: now });
-            self.editing = None;
+            self.close_editor();
             // Not a glance any more: that would end, and turn the screen
             // off, mid-ring (and keep the backlight low).
             self.glance_until = None;
@@ -3027,9 +3191,15 @@ impl App {
             return;
         }
         if let Some(editing) = self.editing {
+            // Mid-drag, the time under the finger, which the setting
+            // isn't yet (see `Drag`).
+            let mut shown = self.alarms;
+            if let Some(drag) = self.drag {
+                *setting(&mut shown, editing) = drag.live;
+            }
             let editor = themes::Editor {
                 editing,
-                settings: &self.alarms,
+                settings: &shown,
                 state: &self.alarm_state,
                 uptime_secs: status.uptime_secs as i64,
             };

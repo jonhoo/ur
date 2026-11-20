@@ -1369,7 +1369,7 @@ impl<'a> Follower<'a> {
             kind::ATTENTION => Some(InputEvent::Attention),
             kind::GLANCE => Some(InputEvent::Glance),
             kind::TOUCH => Some(InputEvent::Touch(Touch {
-                gesture: compare::gesture_from_code(event.gesture)
+                gesture: compare::gesture_from_code(event.gesture, event.flags)
                     .ok_or("the dev kit logged an unknown gesture")?,
                 x: i32::from(event.x),
                 y: i32::from(event.y),
@@ -1818,6 +1818,7 @@ fn describe(event: &InputEvent) -> String {
                 Gesture::SwipeLeft => "swipe left",
                 Gesture::SwipeRight => "swipe right",
                 Gesture::Release => "release",
+                Gesture::Drag(_) => "drag",
             },
             touch.x,
             touch.y,

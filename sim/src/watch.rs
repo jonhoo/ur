@@ -373,6 +373,7 @@ impl Watch {
         if let Some(finger) = &mut self.finger
             && finger.pressed(at)
         {
+            self.drag();
             return;
         }
         // A finger lifted (see `blip`), and this isn't it come back.
@@ -409,8 +410,24 @@ impl Watch {
         self.finger_at(at.0, at.1);
     }
 
+    /// The finger moved, perhaps: how far it has dragged, if the screen
+    /// showing follows it, as the touch task sends it (`touch::send_drag`).
+    /// Every one, where the watch only sends those its UI keeps up with:
+    /// here each input is handled, and drawn, before the next.
+    fn drag(&mut self) {
+        if touch::drags()
+            && let Some(drag) = self.finger.as_mut().and_then(Tracking::drag)
+        {
+            self.input(InputEvent::Touch(drag));
+        }
+    }
+
     /// A finger that lifted is over: what it did.
     fn finger_over(&mut self) {
+        // Where its drag ended, first, if it wasn't where it last moved
+        // to (a script's `lift` is always where its `press` was; a touch
+        // the UI wasn't following until now may not be).
+        self.drag();
         let Some(finger) = self.finger.take() else {
             return;
         };
@@ -1008,7 +1025,10 @@ fn describe(event: &InputEvent) -> String {
         InputEvent::Attention => "attention".into(),
         InputEvent::Touch(touch) => format!(
             "{} at ({},{}), {} ms",
-            gesture_name(touch.gesture),
+            match touch.gesture {
+                crate::gesture::Gesture::Drag(by) => format!("drag by {by}"),
+                gesture => gesture_name(gesture).to_owned(),
+            },
             touch.x,
             touch.y,
             touch.held_ms
@@ -1048,5 +1068,6 @@ fn gesture_name(gesture: crate::gesture::Gesture) -> &'static str {
         Gesture::SwipeLeft => "swipe left",
         Gesture::SwipeRight => "swipe right",
         Gesture::Release => "release",
+        Gesture::Drag(_) => "drag",
     }
 }

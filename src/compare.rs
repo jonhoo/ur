@@ -233,7 +233,8 @@ pub struct Event {
     /// A tick's local second for `check_alarms`, or [`NONE_I64`].
     pub local_second: i64,
     pub kind: u8,
-    /// [`flag`]s, for a tick.
+    /// [`flag`]s, for a tick; for a touch that's a drag
+    /// ([`Gesture::Drag`]), how far, as an `i8`.
     pub flags: u8,
     /// A touch's gesture (as [`gesture_code`]), and where it started.
     pub gesture: u8,
@@ -443,8 +444,13 @@ pub fn gesture_code(gesture: Gesture) -> u8 {
         Gesture::SwipeLeft => 5,
         Gesture::SwipeRight => 6,
         Gesture::Release => 7,
+        Gesture::Drag(_) => DRAG,
     }
 }
+
+/// [`gesture_code`] for a [`Gesture::Drag`], whose distance is in
+/// [`Event::flags`].
+pub const DRAG: u8 = 8;
 
 /// A grid press's gesture, as a [`kind::HA_PRESS`] event says.
 pub fn ha_gesture_code(gesture: buttons::Gesture) -> u8 {
@@ -479,8 +485,9 @@ pub fn phone_code(message: &PhoneEvent) -> u8 {
 
 /// For the simulator, which reads the events.
 #[cfg(not(target_os = "none"))]
-pub fn gesture_from_code(code: u8) -> Option<Gesture> {
+pub fn gesture_from_code(code: u8, flags: u8) -> Option<Gesture> {
     Some(match code {
+        DRAG => Gesture::Drag(flags as i8),
         1 => Gesture::Tap,
         2 => Gesture::LongPress,
         3 => Gesture::SwipeUp,
@@ -746,6 +753,10 @@ pub fn input(input: &InputEvent, at: Instant) {
         InputEvent::Attention => event(kind::ATTENTION, at),
         InputEvent::Glance => event(kind::GLANCE, at),
         InputEvent::Touch(touch) => Event {
+            flags: match touch.gesture {
+                Gesture::Drag(by) => by as u8,
+                _ => 0,
+            },
             gesture: gesture_code(touch.gesture),
             x: touch.x as u8,
             y: touch.y as u8,

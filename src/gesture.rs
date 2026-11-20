@@ -21,6 +21,15 @@
 //! a swipe, and the long press is off for that touch, even if it comes
 //! back. Anything else is a tap.
 //!
+//! A screen may also follow the finger while it's down (the alarm
+//! editor's time does), rather than wait for the lift to say what the
+//! touch was: for that, once a touch is on its way to a swipe,
+//! [`Tracking::drag`] says how far up or down it has gone so far
+//! ([`Gesture::Drag`]), each time that changes. Those come before the
+//! touch's one event at its lift (the swipe, or a tap if the finger went
+//! back to where it started), and never for a touch that became a long
+//! press.
+//!
 //! A lift isn't always the end of the touch: the touch controller
 //! sometimes reports a finger held still as lifted, and pressed again
 //! ~10 ms later at the same spot (see [`REJOIN_WINDOW`]). So a lift only
@@ -82,6 +91,12 @@ pub const REJOIN_WINDOW: Duration = Duration::from_millis(30);
 /// something else touching (a second finger, a sleeve), so a new touch.
 pub const REJOIN_DISTANCE: i32 = SWIPE_DISTANCE;
 
+/// How far a finger moves from where it started, in panel pixels, before
+/// a [`Gesture::Drag`] says it has: a tap's tolerance. A drag counts from
+/// there rather than from the start, so that it begins at nothing instead
+/// of with a jump, and a finger back near its start is back at nothing.
+pub const DRAG_SLACK: i32 = SWIPE_DISTANCE;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(target_os = "none", derive(defmt::Format))]
 pub enum Gesture {
@@ -91,6 +106,17 @@ pub enum Gesture {
     SwipeDown,
     SwipeLeft,
     SwipeRight,
+    /// The finger, still down, is this many canvas pixels below where it
+    /// started (above, if negative), not counting the first
+    /// [`DRAG_SLACK`]: see [`Tracking::drag`]. Not the touch's one event,
+    /// which still comes at its lift, but any number before it.
+    ///
+    /// An `i8`, which the panel's 80 canvas pixels fit, in the byte of
+    /// padding [`Touch`] had: a wider one would grow every queued input
+    /// event (see [`Touch::held_ms`]).
+    // TODO: sideways too, when a screen wants it; only the alarm editor
+    // follows a finger, and only up and down.
+    Drag(i8),
     /// The finger lifted after a [`Gesture::LongPress`] (see
     /// [`Tracking::release`]).
     Release,
@@ -131,6 +157,12 @@ impl Touch {
         }
     }
 
+    /// Whether this is only where a finger still down has got to
+    /// ([`Gesture::Drag`]), not what its touch was.
+    pub fn is_drag(&self) -> bool {
+        matches!(self.gesture, Gesture::Drag(_))
+    }
+
     /// When the touch ended, as far as its event goes, in the same
     /// milliseconds as [`Touch::start_ms`]: a tap's or swipe's lift (not
     /// the [`REJOIN_WINDOW`] waited after it), a long press's report while
@@ -164,6 +196,11 @@ pub struct Tracking {
     /// How many times the finger came back after a lift (saturating):
     /// for the log, to see how often the controller does it.
     pub rejoined: u8,
+    /// How far [`Tracking::drag`] last said the finger had gone.
+    dragged: i8,
+    /// How many times it has said so (saturating): for the log, to see
+    /// how fast the UI keeps up with a finger.
+    pub drags: u8,
 }
 
 impl Tracking {
@@ -177,6 +214,8 @@ impl Tracking {
             held: false,
             lifted_at: None,
             rejoined: 0,
+            dragged: 0,
+            drags: 0,
         }
     }
 
@@ -222,6 +261,36 @@ impl Tracking {
         self.last = at;
         let (dx, dy) = (at.0 - self.start.0, at.1 - self.start.1);
         self.moved |= dx.abs().max(dy.abs()) >= SWIPE_DISTANCE;
+    }
+
+    /// How far up or down the finger has dragged ([`Gesture::Drag`]), if
+    /// that's news: the touch is on its way to a swipe (so not a tap that
+    /// drifts, nor a long press, whose touch is spent), and the finger is
+    /// a canvas pixel or more from where this last said it was (at first,
+    /// from where it started, give or take [`DRAG_SLACK`]). So a touch
+    /// that only goes sideways never drags, and each drag is worth a
+    /// redraw.
+    ///
+    /// For whoever feeds this to send on, when a screen follows the
+    /// finger: every time it moves, and once more as it lifts, before
+    /// [`Tracking::lifted`]'s event, so that the last drag is where the
+    /// finger ended. Not asking (when no screen follows, or the last
+    /// drag has yet to be handled) loses nothing: the next answer is the
+    /// whole distance, not a step.
+    pub fn drag(&mut self) -> Option<Touch> {
+        if !self.moved || self.held {
+            return None;
+        }
+        let dy = self.last.1 - self.start.1;
+        let beyond = dy.signum() * (dy.abs() - DRAG_SLACK).max(0);
+        // On the panel (see `on_panel`), so at most 73 either way.
+        let by = (beyond / canvas::SCALE as i32) as i8;
+        if by == self.dragged {
+            return None;
+        }
+        self.dragged = by;
+        self.drags = self.drags.saturating_add(1);
+        Some(self.touch(Gesture::Drag(by)))
     }
 
     /// When this touch becomes a long press, if it still can. Not while

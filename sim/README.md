@@ -29,8 +29,8 @@ those built in, with how many colour schemes each has for night and day.
 The watch, drawn to scale from PINE64's dimensions and photos: the 1.3″
 screen in a black 37.5 × 40 mm case, and the button on its left edge. The
 mouse is a finger: click to tap, hold still for 0.6 s to long press, drag
-to swipe, all through the firmware's gesture recogniser
-(`src/gesture.rs`). Click the button to press it. The screen dims with
+to swipe (the alarm editor's time follows it as it goes), all through the
+firmware's gesture recogniser (`src/gesture.rs`). Click the button to press it. The screen dims with
 the backlight and goes black when it's off, and the watch shakes while
 the motor buzzes. The title bar has the rest: the backlight's level (1–7),
 the phone, the battery and charger, and the time since boot (and

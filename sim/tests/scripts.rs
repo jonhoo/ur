@@ -453,6 +453,120 @@ fn stored_alarms(log: &str) -> Vec<&str> {
         .collect()
 }
 
+/// The editor's time follows the finger while it's down: a minute for
+/// each canvas pixel past the first 20 panel pixels, drawn as it goes,
+/// but only set (and saved) once the finger lifts, on a multiple of five.
+#[test]
+fn the_editors_minutes_follow_a_dragged_finger() {
+    let (dir, log) = in_the_editor(
+        "editor-drag-minutes",
+        "shot before.png\n\
+         # Down on the minutes, and up 30 panel pixels: 3 minutes.\n\
+         press 60,50\npress 60,40\nshot three.png\nsettings\n\
+         # 57 pixels: 12 minutes, which settles on 10.\n\
+         press 60,31\nshot twelve.png\nsettings\n\
+         lift\nshot ten.png\nsettings\n\
+         # And back down again, past midnight's side of the hour.\n\
+         press 60,30\npress 60,57\nlift\nsettings\n",
+    );
+    assert!(log.contains("drag by -3 at (60,50)"), "{log}");
+    assert!(log.contains("drag by -12 at (60,50)"), "{log}");
+    // Nothing's saved until the lift (a fresh watch has nothing stored).
+    assert_eq!(
+        stored_alarms(&log),
+        [
+            "not stored",
+            "not stored",
+            "07:10 off, 07:30 off",
+            "06:50 off, 07:30 off"
+        ],
+        "{log}"
+    );
+    // Each step of the way was drawn: four different screens.
+    let shots: BTreeSet<Vec<u8>> = ["before", "three", "twelve", "ten"]
+        .map(|shot| std::fs::read(dir.join(format!("{shot}.png"))).expect("the shot was taken"))
+        .into();
+    assert_eq!(shots.len(), 4, "{log}");
+}
+
+/// The hours go a step every 6 canvas pixels, a timer's minutes every 2
+/// (and settle on any minute, within what a timer can be), and a drag
+/// that comes back to where it started changes nothing: not even as the
+/// tap its touch then is, on the button it started on.
+#[test]
+fn the_editors_drags_go_by_what_they_change() {
+    let (_, log) = in_the_editor(
+        "editor-drag-fields",
+        "# The hours: 60 panel pixels up, 40 past the slack, 13 canvas\n\
+         # pixels, 2 hours.\n\
+         press 20,50\npress 20,30\nlift\nsettings\n\
+         # From DONE, up and back: no drag, and no DONE.\n\
+         press 60,70\npress 60,50\npress 60,70\nlift\nsettings\n\
+         button\nwait 1s\n\
+         # TIMER 2 (3 minutes): 7 canvas pixels up are 3 minutes more;\n\
+         # down as far as the screen goes, it stops at 1.\n\
+         tap 60,56\nwait 1s\n\
+         press 60,50\npress 60,36\nlift\nsettings\n\
+         press 60,10\npress 60,79\nlift\nsettings\n",
+    );
+    let stored: Vec<&str> = log
+        .lines()
+        .filter_map(|line| line.split_once("] alarms: "))
+        .map(|(_, alarms)| alarms)
+        .collect();
+    let rest = "07:30 off; smart wake off (weekdays 07:00, weekends 09:00); timers 10 min,";
+    assert_eq!(
+        stored,
+        [
+            format!("09:00 off, {rest} 3 min"),
+            format!("09:00 off, {rest} 3 min"),
+            format!("09:00 off, {rest} 6 min"),
+            format!("09:00 off, {rest} 1 min"),
+        ],
+        "{log}"
+    );
+}
+
+/// A swipe is still worth a step, as it was before the time followed the
+/// finger: one too short for its drag to move the time (a flick), and one
+/// that comes as a gesture, with no finger to follow (the dev kit's
+/// injected swipes, the simulator's arrow keys).
+#[test]
+fn a_swipe_in_the_editor_still_steps_the_time() {
+    let (_, log) = in_the_editor(
+        "editor-swipe",
+        "# 24 panel pixels up: a minute's drag, which settles back.\n\
+         press 60,50\npress 60,42\nlift\nsettings\n\
+         up 60,40\nsettings\ndown 20,40\nsettings\n",
+    );
+    assert_eq!(
+        stored_alarms(&log),
+        [
+            "07:05 off, 07:30 off",
+            "07:10 off, 07:30 off",
+            "06:10 off, 07:30 off"
+        ],
+        "{log}"
+    );
+}
+
+/// A drag in progress when the editor closes under it (the button, here)
+/// settles as if the finger had lifted: what showed is what's set. The
+/// rest of that touch is then the alarms screen's, where a swipe up goes
+/// nowhere.
+#[test]
+fn closing_the_editor_settles_a_drag() {
+    let (_, log) = in_the_editor(
+        "editor-drag-closed",
+        "press 60,50\npress 60,31\nbutton\nsettings\npress 60,20\nlift\nsettings\n",
+    );
+    assert_eq!(
+        stored_alarms(&log),
+        ["07:10 off, 07:30 off", "07:10 off, 07:30 off"],
+        "{log}"
+    );
+}
+
 /// DONE switches an alarm on, whether or not its time was changed: the
 /// plain alarms and the smart wake (whose DONE is on its second page).
 #[test]

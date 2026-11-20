@@ -364,6 +364,76 @@ mod tests {
         );
     }
 
+    /// How far the finger has dragged, as [`Tracking::drag`] says it, if
+    /// it says anything.
+    fn dragged(tracking: &mut Tracking) -> Option<i8> {
+        tracking.drag().map(|drag| match drag.gesture {
+            Gesture::Drag(by) => by,
+            other => panic!("a drag that's a {other:?}"),
+        })
+    }
+
+    #[test]
+    fn a_drag_is_how_far_the_finger_went_past_a_taps_drift() {
+        let _clock = clock();
+        let mut tracking = Tracking::new((120, 120));
+        // Within a tap's drift: nothing yet.
+        tracking.moved_to((120, 120 - (DRAG_SLACK - 1)));
+        assert_eq!(dragged(&mut tracking), None);
+        // On its way to a swipe, but not a canvas pixel past the slack.
+        tracking.moved_to((120, 120 - DRAG_SLACK - 2));
+        assert_eq!(dragged(&mut tracking), None);
+        // A canvas pixel (3 of the panel's) past it: up is negative.
+        wait(40);
+        tracking.moved_to((120, 120 - DRAG_SLACK - 3));
+        let drag = tracking.drag().expect("it moved a canvas pixel");
+        assert_eq!(drag.gesture, Gesture::Drag(-1));
+        assert!(drag.is_drag());
+        // From where the touch started, and as long as it's been down.
+        assert_eq!((drag.x, drag.y, drag.held_ms), (40, 40, 40));
+        // Said once: nothing more until the finger's somewhere else.
+        assert_eq!(dragged(&mut tracking), None);
+        tracking.moved_to((120, 120 - DRAG_SLACK - 4));
+        assert_eq!(dragged(&mut tracking), None);
+        // The whole distance each time, not a step: positions nobody
+        // asked about aren't missed.
+        tracking.moved_to((120, 30));
+        tracking.moved_to((120, 60));
+        assert_eq!(dragged(&mut tracking), Some(-13));
+        // Back near its start, it's back at nothing, and that's news;
+        // then on down the other side.
+        tracking.moved_to((120, 125));
+        assert_eq!(dragged(&mut tracking), Some(0));
+        tracking.moved_to((120, 239));
+        assert_eq!(dragged(&mut tracking), Some(33));
+        assert_eq!(tracking.drags, 4);
+        // Its lift is still the touch's one event.
+        assert_eq!(lifted(&tracking), (Gesture::SwipeDown, None));
+    }
+
+    #[test]
+    fn only_a_touch_going_up_or_down_drags() {
+        let _clock = clock();
+        // Sideways: a swipe, but never a drag.
+        let mut sideways = Tracking::new((120, 120));
+        sideways.moved_to((200, 120 + DRAG_SLACK + 2));
+        assert_eq!(dragged(&mut sideways), None);
+        assert_eq!(sideways.drags, 0);
+        // A long press is spent: moving it then does nothing more.
+        let mut held = Tracking::new((120, 120));
+        wait(LONG_PRESS.as_millis());
+        held.held = true;
+        held.moved_to((120, 200));
+        assert_eq!(dragged(&mut held), None);
+        // From either edge to the other, it fits its `i8`.
+        let mut down = Tracking::new((0, 0));
+        down.moved_to((0, 239));
+        assert_eq!(dragged(&mut down), Some(73));
+        let mut up = Tracking::new((239, 239));
+        up.moved_to((239, 0));
+        assert_eq!(dragged(&mut up), Some(-73));
+    }
+
     #[test]
     fn a_lift_is_over_unless_the_finger_comes_back_soon_and_near() {
         let _clock = clock();
@@ -578,6 +648,7 @@ mod proofs {
                 assert!(!strayed(start, last) && (ever_strayed || !long_enough));
             }
             Gesture::Release => panic!("only `release` says so"),
+            Gesture::Drag(_) => panic!("only `drag` says so"),
         }
         kani::cover!(touch.gesture == Gesture::LongPress, "a long press");
         kani::cover!(
@@ -651,6 +722,35 @@ mod proofs {
     fn positions_off_the_panel_would_overflow() {
         let mut tracking = Tracking::new(kani::any());
         tracking.moved_to(kani::any());
+    }
+
+    /// A drag, wherever on the panel the finger started and has got to:
+    /// its distance fits the `i8` it's sent in (the cast in
+    /// [`Tracking::drag`] loses nothing), is nothing within
+    /// [`DRAG_SLACK`] of the start's height, and otherwise has the sign
+    /// of the way the finger went and counts whole canvas pixels past the
+    /// slack. And only a touch that strayed has one.
+    #[kani::proof]
+    #[kani::stub(Instant::now, now)]
+    #[kani::unwind(3)]
+    fn a_drag_fits_and_counts_from_the_slack() {
+        let (start, at) = (any_position(), any_position());
+        let mut tracking = Tracking::new(start);
+        tracking.moved_to(at);
+        let Some(drag) = tracking.drag() else {
+            return;
+        };
+        let Gesture::Drag(by) = drag.gesture else {
+            panic!("a drag that isn't one");
+        };
+        assert!(strayed(start, at));
+        // Said because it's news: the first is never nothing.
+        assert!(by != 0);
+        let dy = at.1 - start.1;
+        let past = dy.abs() - DRAG_SLACK;
+        assert!(past >= 3);
+        assert!(i32::from(by).abs() == past / 3);
+        assert!((by > 0) == (dy > 0));
     }
 
     /// Every long press gets exactly one release, and nothing else does:

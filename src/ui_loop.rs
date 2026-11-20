@@ -760,6 +760,10 @@ impl UiLoop {
             activity::on_desk(),
             activity::stirring(),
         ));
+        // The alarm editor's time follows the finger, so the touch task
+        // says where it is as it moves, not only what the touch was once
+        // it's over (see `App::follows_finger`).
+        touch::set_drags(app.follows_finger());
         board.pet_watchdog();
         clock::checkpoint();
         None
@@ -921,7 +925,14 @@ impl UiLoop {
                 app.on_tick(ticked, watching, finger_down)
             }
             Wake::Input(event) => {
-                info!("input: {}", event);
+                // A drag is many inputs, one for each move of the finger
+                // the UI keeps up with: too many for the field log, which
+                // has the touch they were, once it's over.
+                if matches!(event, InputEvent::Touch(touch) if touch.is_drag()) {
+                    debug!("input: {}", event);
+                } else {
+                    info!("input: {}", event);
+                }
                 // What woke the screen, if this does: not every input does
                 // (a single tap, say; see `wake::after`).
                 let wake = match event {

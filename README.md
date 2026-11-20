@@ -228,9 +228,10 @@ change, nor FORCE with schemes of one side only: a tap says why (FAQ
 or two layers), and **BTHOME KEY** (while presses go over BTHome) for
 the key Home Assistant asks for (see
 [Home Assistant](docs/buttons.md#home-assistant)). To set an alarm or
-timer, tap it, then swipe the hours and minutes. **DONE** switches the
-alarm on, unless you switched it off there; the button closes it as it
-is. Alarms set in Gadgetbridge are read-only on the watch; a one-off one switches
+timer, tap it, then drag the hours or the minutes up or down: the time
+follows your finger. **DONE** switches the alarm on, unless you
+switched it off there; the button closes it as it is. Alarms set in
+Gadgetbridge are read-only on the watch; a one-off one switches
 itself off once it has rung, without Gadgetbridge hearing of it, so
 switch it off and on there to set it again. Alarms follow the phone's
 time zone and summer time, from when Gadgetbridge sends the change (at
