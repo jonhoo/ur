@@ -41,6 +41,13 @@
 //! 18 times. (And at the walk's end: the workout runs on for
 //! [`WALK_END_MINUTES`], through the first minutes of recovery.)
 //!
+//! A workout's minutes also reach Gadgetbridge as exercise (see
+//! `activity::Sample::gadgetbridge_kind`).
+//!
+//! TODO: no manual start or stop (user, 2026-11-21: not for now). It
+//! would be the sure way to cover what the effort rule can't tell from
+//! housework; `activity` notes where it would go.
+//!
 //! Like [`crate::sleep`], this knows nothing of hardware or the clock, so
 //! it runs in host tests (`host-tests/workout`), whose binary replays a
 //! field log's minutes through it.

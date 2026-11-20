@@ -39,9 +39,14 @@
 //!   the schedule times its sessions so that the bucket's one reading
 //!   comes in its last minute, within a minute of the timestamp below
 //!   (see [`crate::heart_schedule::in_phase`]).
-//! - **Kind** (activity, or a sleep stage; see
-//!   [`crate::sleep::Kind::gadgetbridge_name`]): the one most of its
-//!   minutes have, ties going to the later minute's. Sleep sessions and
+//! - **Kind** (activity, a sleep stage, or exercise for a workout's
+//!   minutes; see `activity::Sample::gadgetbridge_kind`): the one most of
+//!   its minutes have, ties going to the later minute's. So a bucket a
+//!   workout starts or ends in is exercise if three or more of its five
+//!   minutes were (a walk is found three minutes in, and those three
+//!   count; it ends three minutes after the steps stop, and those count
+//!   too), and plain activity otherwise: a workout's edges are within
+//!   two minutes of the truth, like a sleep's. Sleep sessions and
 //!   stages in Gadgetbridge (and so in Health Connect) are then at 5-minute
 //!   resolution, a little finer than the stages themselves (deep and REM
 //!   bouts last at least 8 minutes, see [`crate::stages::MIN_BOUT`]); a

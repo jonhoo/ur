@@ -586,7 +586,8 @@ pub struct Sample {
     /// Packed into the byte the struct would otherwise pad with (24 hours
     /// of samples cost the same 8.6 KB either way): the minute's
     /// [`sleep::Kind`] (bits 0–3), whether the watch was worn (bits 4–5: 0
-    /// unknown, 1 yes, 2 no), whether the minute was recorded at all
+    /// unknown, 1 yes, 2 no, 3 in a workout, see [`Sample::exercise`]),
+    /// whether the minute was recorded at all
     /// (bit 6), and whether the wrist fidgeted in it (bit 7: see
     /// [`sleep::FIDGET`]).
     flags: u8,
@@ -606,10 +607,66 @@ impl Sample {
 
     fn worn(&self) -> Option<bool> {
         match (self.flags >> 4) & 0x3 {
-            1 => Some(true),
+            // A workout's minute too: nothing but a wrist starts one
+            // (and what reads this only asks whether it was *off* one).
+            1 | 3 => Some(true),
             2 => Some(false),
             _ => None,
         }
+    }
+
+    /// Whether the minute was part of a workout (see [`workout`]), for
+    /// Gadgetbridge (see [`Sample::gadgetbridge_kind`]).
+    ///
+    /// Kept as the fourth value of the two bits that say whether the watch
+    /// was worn, which had three: the byte has no bit to spare (a day of
+    /// samples is 8.6 KB of static RAM, and the `compare` build has ~100
+    /// bytes left), and its low four are the classifier's, which rewrites
+    /// the last hours' every minute. A workout's minute is never off the
+    /// wrist (see [`Sample::set_exercise`]), so nothing is lost by it.
+    pub fn exercise(&self) -> bool {
+        self.seen() && (self.flags >> 4) & 0x3 == 3
+    }
+
+    /// Marks a recorded minute as part of a workout, unless the watch was
+    /// off the wrist in it (steps counted in a bag aren't exercise, and
+    /// "not worn" is what sleep tracking needs to keep).
+    fn set_exercise(&mut self) {
+        if self.seen() && self.worn() != Some(false) {
+            self.flags |= 0x30;
+        }
+    }
+
+    /// What Gadgetbridge is told the minute was: its `ActivityKind`'s
+    /// name, or `None` for plain activity (its default). A sleep stage, or
+    /// not worn, as the classifier has it (see
+    /// [`sleep::Kind::gadgetbridge_name`]); else `EXERCISE` for a
+    /// workout's minute. Sleep wins where both are said, which only a
+    /// sleep dated back over a workout's still last minutes could do.
+    ///
+    /// What Gadgetbridge (2026.11.1, and master at 93d4d79a17) does with
+    /// `EXERCISE` on a sample is very little, and nothing harmful. Its
+    /// sleep sessions, and the Health Connect export's, only ask whether
+    /// a sample's kind is a sleep one (`SleepSessionSegmenter`), so an
+    /// exercise sample ends a session, or doesn't, exactly as a plain one
+    /// does; steps and heart rate are summed and exported whatever the
+    /// kind (`ActivityAnalysis`, `DailyTotals`, the Health Connect
+    /// syncers). Its charts draw every kind that isn't sleep or not-worn
+    /// in the activity colour (`AbstractActivityChartFragment`), and its
+    /// dashboard's exercise segments come from recorded workouts, not
+    /// samples: so the kind is stored, and shows nowhere yet. The one
+    /// thing that changes is its "Stats" chart of step-rate zones
+    /// (`ActivityAnalysis`), which only counts plain activity samples and
+    /// so leaves a workout's steps out.
+    ///
+    /// TODO: a workout Gadgetbridge shows as one, and Health Connect gets
+    /// as an exercise session, takes a recorded workout: the Bangle.js
+    /// Recorder's tracks (`actTrksList`, `actTrk`), which we'd have to
+    /// emulate. Deliberately not done (user, 2026-11-21).
+    pub fn gadgetbridge_kind(&self) -> Option<&'static str> {
+        self.sleep()
+            .gadgetbridge_name()
+            .or(self.exercise().then_some("EXERCISE"))
     }
 
     fn set_seen(&mut self, worn: Option<bool>) {
@@ -758,6 +815,19 @@ impl History {
                 }
             }
             _ => *self.at(minute) = sample,
+        }
+    }
+
+    /// Marks the recorded minutes from `first` to the newest as part of a
+    /// workout (see [`Sample::set_exercise`]), as far as the history holds
+    /// them.
+    fn exercised_since(&mut self, first: i64) {
+        let Some(newest) = self.newest else {
+            return;
+        };
+        let oldest = newest - HISTORY_MINUTES as i64 + 1;
+        for minute in first.max(oldest)..=newest {
+            self.samples[Self::slot(minute)].set_exercise();
         }
     }
 
@@ -1612,6 +1682,12 @@ pub async fn activity_task(i2c: Device) {
             } else {
                 crate::heart::worn()
             });
+            // A workout's minute, for Gadgetbridge. After the above, which
+            // starts each poll's verdict afresh: so the minute a workout
+            // ends in (found at its first poll, below) isn't one.
+            if workout().is_some() {
+                history.at(utc_minute).set_exercise();
+            }
             // And so it was since the desk's spell began: never asleep.
             if let Some(since) = landed {
                 let seconds = i64::from(now.saturating_sub(since));
@@ -1710,6 +1786,28 @@ pub async fn activity_task(i2c: Device) {
                     .iter()
                     .filter(|m| m.movement >= workout::EFFORT_MOVEMENT)
                     .count() as u8;
+                // The minutes that made it one were part of it: three of
+                // walking, or the ten an effort is judged over. (A fetch
+                // may have sent some already, as plain activity; they stay
+                // so on the phone.)
+                //
+                // TODO: a manual start and stop would set `WORKOUT` here
+                // too (a kind of its own, that `detect` leaves alone until
+                // stopped): the rules can't know a strength session from
+                // housework. Not wanted for now (user, 2026-11-21).
+                if was.is_none()
+                    && let Some(kind) = now
+                {
+                    let minutes = match kind {
+                        workout::Kind::Walk => workout::WALK_MINUTES,
+                        workout::Kind::Effort => workout::WINDOW,
+                    };
+                    HISTORY.lock(|history| {
+                        history
+                            .borrow_mut()
+                            .exercised_since(utc_minute - minutes as i64)
+                    });
+                }
                 match (was, now) {
                     (None, Some(kind)) => info!(
                         "workout: started, {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving)",

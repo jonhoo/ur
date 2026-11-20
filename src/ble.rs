@@ -1496,7 +1496,7 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
                     movement: sample.movement,
                     heart_rate: sample.heart_rate,
                     seen: sample.seen(),
-                    kind: sample.sleep().gadgetbridge_name(),
+                    kind: sample.gadgetbridge_kind(),
                 };
                 (utc_minute, minute)
             });
