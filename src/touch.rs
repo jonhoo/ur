@@ -435,13 +435,59 @@ pub async fn touch_task(
     }
 }
 
+/// How long the chip's reset line is held low, as InfiniTime does (the
+/// datasheets, V1.3 and V1.4, give no reset timing at all).
+const RESET_PULSE: Duration = Duration::from_millis(5);
+/// How long after its reset is released the chip takes before it answers
+/// on I2C, again as InfiniTime waits.
+const RESET_BOOT: Duration = Duration::from_millis(50);
+/// How long after the reset is released the bus stays held (see
+/// [`reset_chip`]). The trip's three collisions all point at the release
+/// itself, give or take 3 ms; this allows several times that.
+///
+/// With [`RESET_PULSE`], it's also how long another driver's transfer may
+/// wait for the bus, inside that transfer's own timeout: so it must stay
+/// well under the shortest of those, the heart-rate sensor's 50 ms, or
+/// the hold would cause the failed reads it's there to prevent. That is
+/// why the bus isn't simply held for all of [`RESET_BOOT`].
+const RESET_SETTLE: Duration = Duration::from_millis(20);
+const _: () = assert!(RESET_PULSE.as_millis() + RESET_SETTLE.as_millis() <= 25);
+const _: () = assert!(RESET_SETTLE.as_millis() < RESET_BOOT.as_millis());
+
 /// Resets the chip, which wakes it (even from deep sleep) and leaves it
 /// listening on I2C for a while.
+///
+/// Holds the shared I2C bus while the reset line is low and for
+/// [`RESET_SETTLE`] after, so that no other driver's transfer is under
+/// way then: the chip shares its SDA and SCL with the accelerometer and
+/// the heart-rate sensor, and its reset disturbs them. A field log
+/// (0.11.3-rc.3, four days) had every I2C error away from the minute
+/// tick within 55 ms of one of these resets, three in 674: two reads cut
+/// short ~2 ms after the release, and one that started during the pulse
+/// and left the heart-rate sensor holding SDA. The quiet night resets the
+/// chip some 170 times (see [`crate::desk::touch_sleeps`]), mostly at a
+/// stir, just when the accelerometer is being read.
+///
+/// The rest of the chip's boot is waited out with the bus free; nothing
+/// in that log says it disturbs the bus then.
+/// TODO: if a field log still has errors 25-55 ms before a `touch:
+/// asleep` or `touch: awake`, it does: hold the bus for all of it then,
+/// and raise the heart-rate sensor's timeout to match.
 async fn reset_chip(reset: &mut Output<'static>) {
+    // Waiting for the bus is bounded, as in `i2c::reset_controller`: if
+    // it's held for good (only `system_off` does, on its way out), the
+    // reset goes ahead anyway rather than stopping this task.
+    let bus = crate::i2c::BUS.get().await;
+    let held = with_timeout(Duration::from_secs(1), bus.lock()).await;
+    if held.is_err() {
+        warn!("touch: bus busy for 1 s; resetting regardless");
+    }
     reset.set_low();
-    Timer::after_millis(5).await;
+    Timer::after(RESET_PULSE).await;
     reset.set_high();
-    Timer::after_millis(50).await;
+    Timer::after(RESET_SETTLE).await;
+    drop(held);
+    Timer::after(RESET_BOOT - RESET_SETTLE).await;
 }
 
 /// Puts the chip into deep sleep.
