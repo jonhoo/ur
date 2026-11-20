@@ -392,8 +392,9 @@ pub struct Status<'a> {
     pub bthome: Option<Identity>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, defmt::Format)]
-enum Screen {
+/// Public, with `Debug`, only for [`View`]: what the UI loop logs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, defmt::Format)]
+pub enum Screen {
     Clock,
     Today,
     LastNight,
@@ -427,6 +428,38 @@ enum Screen {
 /// right (the alarms, the phone's, the two settings screens, and info).
 const LONGEST_LINE: usize = if HISTORY > 5 { HISTORY } else { 5 };
 type Screens = heapless::Vec<Screen, LONGEST_LINE>;
+
+/// What has the screen, as [`App::render`] stacks it: for the log, which
+/// says each time it changes (see `ui_loop::UiLoop::log_view`), so that a
+/// field log shows which screens get used, and how they were reached.
+///
+/// Two bytes: the UI loop keeps the last one it logged, in static RAM.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, defmt::Format)]
+pub enum View {
+    /// The screen is off.
+    Off,
+    /// Pairing or an update, as of the last tick (see `App::takeover`).
+    Takeover,
+    Call,
+    /// An alarm or a timer ringing.
+    Ringing,
+    /// "Find my watch".
+    Find,
+    /// The full charge's screen (see [`App::on_charged`]).
+    Charged,
+    /// A glance: the time, dim (and the charge, on the charger).
+    Glance,
+    /// A banner with the screen to itself: a notification that arrived
+    /// with the screen off, mostly (see [`App::quiet_notification`]). The
+    /// history's pages are [`Screen::Notification`].
+    Banner,
+    /// The alarm editor.
+    Editor,
+    /// The charge screen, over the clock face (see
+    /// [`App::woke_on_charger`]).
+    Charge,
+    Screen(Screen),
+}
 
 /// An alarm ringing.
 struct Ringing {
@@ -511,7 +544,7 @@ fn setting(alarms: &mut alarm::Settings, editing: Editing) -> &mut u16 {
 }
 
 /// Which setting the editor is changing.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, defmt::Format)]
 pub enum Editing {
     SmartWeekday,
     SmartWeekend,
@@ -1103,6 +1136,37 @@ impl App {
     /// [`render_game`]).
     pub fn dim(&self) -> bool {
         self.glancing() || self.quiet_notification() || self.night.quiet() || self.showing_game()
+    }
+
+    /// What has the screen now, for the log: [`App::render`]'s order,
+    /// bar pairing and updates, which `Status` says there, and
+    /// `takeover` here, as of the last tick; and a page with nothing to
+    /// show (the music gone, say), which draws the clock face, but is
+    /// still that page here.
+    pub fn view(&self) -> View {
+        if !self.awake {
+            View::Off
+        } else if self.takeover {
+            View::Takeover
+        } else if self.call.is_some() {
+            View::Call
+        } else if self.ringing.is_some() {
+            View::Ringing
+        } else if self.finding.is_some() {
+            View::Find
+        } else if self.showing_charged() {
+            View::Charged
+        } else if self.glancing() {
+            View::Glance
+        } else if self.quiet_notification() {
+            View::Banner
+        } else if self.editing.is_some() {
+            View::Editor
+        } else if self.charge_screen && self.screen == Screen::Clock {
+            View::Charge
+        } else {
+            View::Screen(self.screen)
+        }
     }
 
     /// Whether the clock face is on screen for someone to read: awake, and
@@ -1967,6 +2031,7 @@ impl App {
         if let Some(call) = &mut self.call {
             match event {
                 InputEvent::Button if !call.silenced => {
+                    defmt::info!("call: {}", CallAction::Ignore);
                     call.silenced = true;
                     motor::buzz(Pattern::STOP);
                     send(Outgoing::Call(CallAction::Ignore));
@@ -1980,6 +2045,7 @@ impl App {
                         CallButton::Decline => CallAction::Reject,
                         CallButton::Answer => CallAction::Accept,
                     };
+                    defmt::info!("call: {}", action);
                     send(Outgoing::Call(action));
                     self.call = None;
                     // An alarm beneath it rings on.
@@ -1992,8 +2058,12 @@ impl App {
 
         if self.ringing.is_some() {
             match event {
-                InputEvent::Button => self.stop_ringing(),
+                InputEvent::Button => {
+                    defmt::info!("alarm: stopped");
+                    self.stop_ringing()
+                }
                 InputEvent::Touch(touch) if touch.gesture == Gesture::Tap => {
+                    defmt::info!("alarm: snoozed");
                     self.alarm_state.snooze(now.as_secs() as i64);
                     self.stop_ringing();
                 }
@@ -2056,6 +2126,10 @@ impl App {
                 (Gesture::Tap, Screen::Music)
                     if let Some(command) = self.theme().music_control(touch.x, touch.y) =>
                 {
+                    // As `media` logs the clock face's and the dark's:
+                    // for telling, from a field log, which of the two
+                    // ways to play, pause and skip gets used.
+                    defmt::info!("media: {} on the music screen", command);
                     send(Outgoing::Music(command));
                     if let Some(music) = &mut self.music {
                         match command {
@@ -2413,21 +2487,37 @@ impl App {
 
     /// Switches a row's alarm on or off; for the timer, starts or stops it.
     fn toggle(&mut self, row: Editing, now: Instant) {
-        match row {
-            Editing::SmartWeekday | Editing::SmartWeekend => self.alarms.smart = !self.alarms.smart,
-            Editing::At(i) => self.alarms.at[usize::from(i)] ^= true,
+        let on = match row {
+            Editing::SmartWeekday | Editing::SmartWeekend => {
+                self.alarms.smart = !self.alarms.smart;
+                self.alarms.smart
+            }
+            Editing::At(i) => {
+                let on = &mut self.alarms.at[usize::from(i)];
+                *on ^= true;
+                *on
+            }
             Editing::Timer(i) => {
                 let i = usize::from(i);
                 // A timer counts uptime, not the clock (see `alarm`), so
                 // it runs before the phone has set the time too.
                 match self.alarm_state.timers[i] {
-                    Some(_) => self.alarm_state.stop_timer(i),
-                    None => self
-                        .alarm_state
-                        .start_timer(i, &self.alarms, now.as_secs() as i64),
+                    Some(_) => {
+                        self.alarm_state.stop_timer(i);
+                        false
+                    }
+                    None => {
+                        self.alarm_state
+                            .start_timer(i, &self.alarms, now.as_secs() as i64);
+                        true
+                    }
                 }
             }
-        }
+        };
+        // Which alarms and timers get used, for a field log: a timer
+        // started or stopped, an alarm switched (by a long press on its
+        // row, or the editor's switch).
+        defmt::info!("alarm: {} switched, on: {=bool}", row, on);
     }
 
     /// Whether the screen showing follows a finger as it moves, so that
@@ -3533,8 +3623,8 @@ fn fits(ok: bool) {
 // at a tap, rather than leaving a gap or moving the rows below it up.
 
 /// The settings screens, side by side on the right-hand line.
-#[derive(Clone, Copy, PartialEq, Eq, defmt::Format)]
-enum Page {
+#[derive(Clone, Copy, PartialEq, Eq, Debug, defmt::Format)]
+pub enum Page {
     /// The look's: THEME, FORCE, LIGHT.
     Look,
     /// The button grid's: BUTTONS, GRID, BTHOME KEY.

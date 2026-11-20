@@ -451,6 +451,11 @@ impl Watch {
     /// What every event may have set off: buzzes, and messages for the
     /// phone.
     fn after_event(&mut self) {
+        // The firmware's own lines for what has the screen, which the
+        // field log's analysis goes by.
+        for line in ui_loop::take_screen_log() {
+            self.log(line);
+        }
         while let Some(pattern) = motor::take_request() {
             self.log(format!("buzz: {}", pattern_name(pattern)));
             self.motor = (pattern != Pattern::STOP).then(|| (pattern, Instant::now()));

@@ -42,7 +42,7 @@ use crate::game::Game;
 use crate::heart_reading as heart;
 use crate::system_off::Reason;
 use crate::touch::Touch;
-use crate::ui::{App, Force, Status, ThemeChoice};
+use crate::ui::{App, Force, PhoneEvent, Status, ThemeChoice, View};
 use crate::{
     activity, alarm, aranet, ble, brightness, buttons, clock, debug, dfu, gb, geo, glance, live,
     power, sleep, storage, temperature, themes, touch, ui,
@@ -65,6 +65,76 @@ pub enum InputEvent {
     Glance,
 }
 
+/// What changed what has the screen (see [`UiLoop::log_view`]), as far
+/// as the loop can tell for free: what woke it. A flat list, rather than
+/// the event itself, whose `Format` says where a touch was and how long,
+/// which the `input:` line just before has; this is three bytes of log.
+#[derive(Clone, Copy, Debug, defmt::Format)]
+enum By {
+    Button,
+    Tap,
+    LongPress,
+    SwipeUp,
+    SwipeDown,
+    SwipeLeft,
+    SwipeRight,
+    /// A long press's finger lifting.
+    Release,
+    /// A finger on its way (see `Gesture::Drag`).
+    Drag,
+    /// A turn of the wrist (see [`glance`]).
+    Glance,
+    /// A pairing passkey to show (see [`InputEvent::Attention`]).
+    Attention,
+    /// A notification, or what shows as one (a banner).
+    Notification,
+    /// A call coming in, or over.
+    Call,
+    /// Anything else from the phone ("find my watch", mostly).
+    Phone,
+    /// The once-a-second tick: a time running out (the screen's, a
+    /// glance's, a banner's, a call's), an alarm ringing, pairing or an
+    /// update starting or ending.
+    Tick,
+    /// The loop's timer: on a glance, a deliberate tap's wake (see
+    /// `App::held_wake`).
+    Timer,
+    /// What a pass saw: the charger (set on it, a charge glance, full),
+    /// or the phone or the room sensor gone, and its screen with it. And
+    /// the first frame after boot.
+    State,
+}
+
+impl By {
+    fn input(event: &InputEvent) -> Self {
+        use crate::touch::Gesture;
+        match event {
+            InputEvent::Button => Self::Button,
+            InputEvent::Touch(touch) => match touch.gesture {
+                Gesture::Tap => Self::Tap,
+                Gesture::LongPress => Self::LongPress,
+                Gesture::SwipeUp => Self::SwipeUp,
+                Gesture::SwipeDown => Self::SwipeDown,
+                Gesture::SwipeLeft => Self::SwipeLeft,
+                Gesture::SwipeRight => Self::SwipeRight,
+                Gesture::Release => Self::Release,
+                Gesture::Drag(_) => Self::Drag,
+            },
+            InputEvent::Attention => Self::Attention,
+            InputEvent::Glance => Self::Glance,
+            InputEvent::Phone(PhoneEvent::IncomingCall { .. } | PhoneEvent::CallOver) => Self::Call,
+            InputEvent::Phone(
+                PhoneEvent::Notification { .. }
+                | PhoneEvent::Unpaired(_)
+                | PhoneEvent::TextAsBitmaps
+                | PhoneEvent::IntentsOff
+                | PhoneEvent::UpdateRefused,
+            ) => Self::Notification,
+            InputEvent::Phone(_) => Self::Phone,
+        }
+    }
+}
+
 /// Why the loop woke.
 pub enum Wake {
     /// Once a second.
@@ -73,6 +143,18 @@ pub enum Wake {
     /// The time [`timer_at`] gave: the next frame of scrolling text (which
     /// only redraws), or something the button grid waits for.
     Timer,
+}
+
+/// The simulator's copy of the screen's log lines (see
+/// [`UiLoop::log_view`]), until it takes them.
+#[cfg(not(target_os = "none"))]
+static SCREEN_LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// What [`UiLoop::log_view`] has logged since the last call, for the
+/// simulator to print.
+#[cfg(not(target_os = "none"))]
+pub fn take_screen_log() -> Vec<String> {
+    std::mem::take(&mut *SCREEN_LOG.lock().expect("nothing panics while holding it"))
 }
 
 /// How often the loop ticks.
@@ -297,6 +379,7 @@ pub async fn save_changes(before: Settings, app: &mut App) {
     ] {
         if now != then {
             let id = themes::id(day, now.into());
+            info!("theme: {=u32:08x}, for the day: {=bool}", id, day);
             storage::save(key, &id.to_le_bytes()).await;
         }
     }
@@ -398,6 +481,12 @@ pub struct UiLoop {
     battery_sent: Option<u8>,
     /// Gadgetbridge's live activity, while it asks (see [`live`]).
     live: live::Live,
+    /// What had the screen when the log last said (see
+    /// [`UiLoop::log_view`]), and when the screen came on, in seconds
+    /// since boot, as many as 16 bits hold: two bytes each, which the
+    /// struct had spare (the comparison build has no RAM for more).
+    shown: View,
+    on_since: u16,
 }
 
 impl UiLoop {
@@ -433,8 +522,65 @@ impl UiLoop {
             location_seen: 0,
             battery_sent: None,
             live: live::Live::new(),
+            shown: View::Off,
+            on_since: 0,
         };
         (app, ui)
+    }
+
+    /// Logs what has the screen, if that's changed since it last did, and
+    /// `by` what: which screens get used, how they're reached, and for
+    /// how long the screen is on, are then a field log's to count (see
+    /// CONTRIBUTING's "Field logs").
+    ///
+    /// ```text
+    /// ui: Glance by Glance
+    /// ui: Off by Tick after 3 s
+    /// ui: Clock by Tap
+    /// ui: Music by SwipeUp
+    /// ```
+    ///
+    /// Called after every wake's handling, with what woke the loop, and in
+    /// every pass, for what the pass itself changed. One line a change:
+    /// a look at the wrist is two (on, and off), some 17 bytes each
+    /// (defmt's index and time, and three bytes an enum), which over the
+    /// four days of one field log (512 glances, 213 notifications, ~480
+    /// touches and presses: 2000 lines at most) would have been under 2%
+    /// of what it wrote.
+    ///
+    /// What's on the screens isn't logged: a notification's page says
+    /// which page (0 the newest), never whose or what.
+    fn log_view(&mut self, app: &App, by: By) {
+        let view = app.view();
+        if view == self.shown {
+            return;
+        }
+        // Wrapping, every 18 hours: so is the time the screen was on,
+        // should it ever stay on that long (Home Assistant's key stays
+        // up until tapped away); the lines' own times say then.
+        let now = Instant::now().as_secs() as u16;
+        if self.shown == View::Off {
+            self.on_since = now;
+        }
+        self.shown = view;
+        let on_for = now.wrapping_sub(self.on_since);
+        match view {
+            View::Off => info!("ui: Off by {} after {=u16} s", by, on_for),
+            // The screen's own name, rather than `Screen(Music)`.
+            View::Screen(screen) => info!("ui: {} by {}", screen, by),
+            over => info!("ui: {} by {}", over, by),
+        }
+        // The simulator's log has no defmt (see its `lib.rs`): it prints
+        // these itself.
+        #[cfg(not(target_os = "none"))]
+        SCREEN_LOG
+            .lock()
+            .expect("nothing panics while holding it")
+            .push(match view {
+                View::Off => format!("ui: Off by {by:?} after {on_for} s"),
+                View::Screen(screen) => format!("ui: {screen:?} by {by:?}"),
+                over => format!("ui: {over:?} by {by:?}"),
+            });
     }
 
     /// Whether the panel should be in idle mode (see `Display::set_idle`)
@@ -602,6 +748,7 @@ impl UiLoop {
         // Whatever the last wake did, and the phone or a sensor going
         // just now, the UI is in a state it can draw (and time out of).
         app.check();
+        self.log_view(app, By::State);
         #[cfg(feature = "compare")]
         crate::compare::state(now, connected, air, power_present);
         // Apply screen power changes. Waking renders before the backlight
@@ -888,6 +1035,11 @@ impl UiLoop {
         wake: Wake,
     ) -> impl Future<Output = ()> + 'a {
         let before = Settings::of(app);
+        let by = match &wake {
+            Wake::Tick => By::Tick,
+            Wake::Timer => By::Timer,
+            Wake::Input(event) => By::input(event),
+        };
         match wake {
             Wake::Timer => {
                 // Maybe only a frame; then this does nothing.
@@ -961,6 +1113,7 @@ impl UiLoop {
         // Each wake leaves the UI's state whole (see `App::check`): here,
         // right after the wake that broke it, if one did.
         app.check();
+        self.log_view(app, by);
         let battery = self.battery.percent() as u8;
         // Six buttons' presses leave the battery out (see `bthome`), so
         // Home Assistant hears it on its own: once the reading has had a

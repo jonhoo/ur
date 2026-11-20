@@ -648,6 +648,68 @@ fn a_deliberate_tap_wakes_the_screen_at_once() {
     assert!(ok, "{log}");
 }
 
+/// The log says what has the screen each time that changes, and by
+/// what, for a field log to count which screens get used and how they're
+/// reached (`ui_loop::UiLoop::log_view`): the simulator prints the
+/// firmware's own lines. Never what a notification or a call says.
+#[test]
+fn the_log_says_what_has_the_screen() {
+    let dir = out("screen-log");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "connect\nmusic \"An artist\" \"A track\"\nwait 11s\nglance\nwait 6s\n\
+         button\nup\nwait 1s\ndown\nleft\n\
+         wait 1s\ntap 40,20\nwait 1s\nbutton\nright\n\
+         wait 1s\nbutton\nnotify \"Some app\" \"Someone\"\nwait 8s\nbutton\n\
+         down\nwait 1s\nbutton\ncall \"Someone\"\nwait 2s\n\
+         call over\nwait 12s\nbattery 3900 charging\nwait 3s\ntap 40,40\n\
+         wait 12s\nbattery 4000 unplugged\ntime 2026-11-20 11:58\nalarm 1 12:00 on\nuntil 12:00\n\
+         wait 2s\ntap 40,40\nwait 12s\nfind on\nwait 2s\n\
+         button\nwait 12s\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+    let said: Vec<_> = log
+        .lines()
+        .filter_map(|line| line.find("ui: ").map(|at| &line[at..]))
+        .collect();
+    let expected = [
+        "ui: Clock by State",
+        "ui: Off by Tick after 10 s",
+        "ui: Glance by Glance",
+        "ui: Off by Tick after 6 s",
+        "ui: Clock by Button",
+        "ui: Music by SwipeUp",
+        "ui: Clock by SwipeDown",
+        "ui: Alarms by SwipeLeft",
+        "ui: Editor by Tap",
+        "ui: Alarms by Button",
+        "ui: Clock by SwipeRight",
+        "ui: Off by Button after 7 s",
+        "ui: Banner by Notification",
+        "ui: Off by Tick after 5 s",
+        "ui: Clock by Button",
+        "ui: Notification(0) by SwipeDown",
+        "ui: Clock by Button",
+        "ui: Call by Call",
+        "ui: Clock by Call",
+        "ui: Off by Tick after 14 s",
+        "ui: Charge by State",
+        "ui: Clock by Tap",
+        "ui: Off by Tick after 14 s",
+        "ui: Ringing by Tick",
+        "ui: Clock by Tap",
+        "ui: Off by Tick after 13 s",
+        "ui: Find by Phone",
+        "ui: Clock by Button",
+        "ui: Off by Tick after 13 s",
+    ];
+    assert_eq!(said, expected, "{log}");
+}
+
 /// Home Assistant's key stays on screen, as a QR code and then as text,
 /// for as long as it takes to scan or type it: until a tap takes it away.
 /// Back on the settings, the screen goes off as usual.

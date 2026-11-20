@@ -708,6 +708,62 @@ nothing else; see `scripts/release.sh`.) A hang with interrupts masked
 can't be caught: the watchdog's interrupt never runs, so only the reset
 reason says it happened.
 
+From 0.11.3-rc.4 the log also says what has the screen, each time
+that changes, and what changed it, so which screens and gestures get
+used (and which happen by accident) can be counted from a log alone:
+
+```text
+input: Glance
+ui: Glance by Glance
+ui: Off by Tick after 3 s
+input: Button
+ui: Clock by Button
+input: Touch(Touch { gesture: SwipeUp, … })
+ui: Music by SwipeUp
+input: Touch(Touch { gesture: Tap, … })
+media: PlayPause on the music screen
+```
+
+- **`ui: WHAT by WHY`** (`UiLoop::log_view` in `src/ui_loop.rs`; match
+  it as `ui: \S+ by`, since two older lines also start `ui:`). `WHAT`
+  is a screen (`Clock`, `Today`, `LastNight`, `Alarms`, `PhoneAlarms`,
+  `Notification(N)` for the history's page `N`, `Music`, `Buttons`,
+  `Settings(Look)`, `Settings(Grid)`, `Air`, `Info`, `Storage`, `HaQr`,
+  `HaKey`, `Game`) or what has the screen over it: `Glance`, `Banner` (a
+  notification that arrived with the screen off, or another banner
+  that lit it), `Call`, `Ringing` (an alarm or a timer), `Find`,
+  `Editor` (an alarm's), `Charge` and `Charged` (on the charger),
+  `Takeover` (pairing or an update), and `Off`. `WHY` is what woke the
+  UI loop: `Button`, a touch (`Tap`, `LongPress`, `SwipeUp`,
+  `SwipeDown`, `SwipeLeft`, `SwipeRight`, `Release`), `Glance` (a turn
+  of the wrist), `Notification`, `Call`, `Phone` (anything else from
+  it), `Attention` (a passkey to show), `Tick` (a time running out: the
+  screen's, a glance's, a banner's; or an alarm ringing), `Timer` (a
+  tap on a glance waking the screen 0.3 s later) or `State` (the
+  charger, the phone or the room sensor going with its screen showing,
+  and the first frame after boot). The `input:` line just before has
+  the touch's place and length, and which message the phone sent.
+- **`ui: Off by WHY after N s`**: the screen went off, having been on
+  for `N` seconds (in whole seconds of uptime, so a second either way;
+  it wraps at 18 hours). The line after an `Off` is the screen coming
+  on, and says to what.
+- **What was done on a screen:** `media: CMD on the music screen` (its
+  buttons; the clock face's, the glance's and the dark's gestures log
+  `media: CMD sent`, the last after `media: CMD with the screen off`),
+  `buttons: CODE GESTURE` (the grid), `alarm: ROW switched, on: BOOL`
+  (an alarm switched, or a timer started or stopped, from its row or
+  its editor), `alarm: stopped` and `alarm: snoozed` (one ringing, by
+  the button and by a tap), `call: Accept`, `Reject` or `Ignore`,
+  `find: found`, `2^: opened`, and the settings: `theme: ID, for the
+  day: BOOL` (a scheme's ID, `palette::id` of its name), `force:`,
+  `brightness:`, `buttons:` and `grid:`.
+
+A banner over a screen that's already on isn't a change of screen: its
+`input: Phone(Notification)` line is all there is. Nothing a
+notification or a call says is ever logged, nor its app or sender. A
+look at the wrist is two lines (on and off) of ~17 bytes; the four days
+of 0.11.3-rc.3's log would have had under 2000 of them, 2% more log.
+
 Some host-test crates replay decoded logs, to tune against real wrists:
 
 - `host-tests/sleep`: `cargo run --release -- decoded.log [stages.txt]`
