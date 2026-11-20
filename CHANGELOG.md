@@ -15,6 +15,7 @@ missing below were test builds for the dev kit.
 ### Added
 
 - Take a heart rate from two strongly periodic readings in a row that agree, rather than waiting for a third, as long as the wrist isn't walking (a swinging arm can look like a slow pulse) (5d4d89a)
+- Show a notification again when you turn your wrist to look just after missing it: one that arrived with the screen off, and went dark again untouched, shows once more (without the buzz) in place of the time at a look within 20 seconds, once; a notification you touched, read in the history, or got with the screen on doesn't, nor any in the quiet night (3385e5e)
 
 ### Changed
 
@@ -24,6 +25,7 @@ missing below were test builds for the dev kit.
 - Hold about 2½ days of a worn watch in the logging build's (`ur-logging`) field log, rather than under one (about 20 hours since 0.11.0): it now packs its busiest lines, the accelerometer's every 2 s and the heart-rate sensor's samples, so decode a fetched log with `defmt-print` and then `scripts/expand_log.py`, which writes them back as before (logs from older builds pass through unchanged). Log times are now in milliseconds rather than microseconds. The `ur` build is unchanged (bf66d61, e357323)
 - Hold about 5 days of a worn watch in the logging build's (`ur-logging`) field log, rather than about 3: the log now also uses the part of the watch's storage that InfiniTime kept its files in (745 sectors rather than 512, so fetch it with this version's `scripts/fetch-log.py`, which reads logs of either size; an older copy reads only the first 512), and through a heart rate reading it no longer keeps the accelerometer's samples while the wrist lies still, only a short `accel: still` line saying that it did. A log kept by an earlier version stays as it is across the update (ab3e614, 0dd3aa5, 628930c)
 - Show the Info screen's uptime in its two largest units once the watch has been up a day (`3D 4H`, `2W 3D`, `5MO 1W`, `1Y 2MO`, a month being a twelfth of a year), rather than as hours, minutes and seconds that ran into the thousands of hours; under a day it still reads `HH:MM:SS` (8f7de60)
+- Show a notification that has neither a sender nor a title under its app's name, as large as a name, on a screen of its own (arriving with the screen off, and in the history), rather than the app small in the corner of an otherwise empty screen (b1bb156)
 
 ### Deprecated
 
