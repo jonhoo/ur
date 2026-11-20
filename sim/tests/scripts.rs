@@ -420,6 +420,97 @@ fn a_held_finger_is_a_long_press_while_still_down() {
     assert!(log.contains("long press at (20,40)"), "{log}");
 }
 
+// ==============================================================================
+// The alarm editor
+// ==============================================================================
+
+/// Runs `script` from the alarms screen with ALARM 1's editor open
+/// (07:00, off, as a fresh watch has it), and returns the log, with the
+/// screenshots it took in `name`'s directory.
+fn in_the_editor(name: &str, script: &str) -> (PathBuf, String) {
+    let dir = out(name);
+    let path = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &path,
+        format!("left\nwait 1s\ntap 20,40\nwait 1s\n{script}"),
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(
+        path.to_str().expect("UTF-8"),
+        &["--out", dir.to_str().expect("UTF-8")],
+    );
+    assert!(ok, "{log}");
+    (dir, log)
+}
+
+/// What each `settings` in a script's log said the flash has for the
+/// alarms (up to the smart wake), in order.
+fn stored_alarms(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter_map(|line| line.split_once("] alarms: "))
+        .map(|(_, alarms)| alarms.split(';').next().expect("split yields one"))
+        .collect()
+}
+
+/// DONE switches an alarm on, whether or not its time was changed: the
+/// plain alarms and the smart wake (whose DONE is on its second page).
+#[test]
+fn done_switches_an_alarm_on() {
+    let (_, log) = in_the_editor(
+        "editor-done",
+        "tap 60,70\nwait 1s\nsettings\n\
+         # The smart wake: NEXT, then DONE.\n\
+         tap 20,20\nwait 1s\ntap 60,70\nwait 1s\ntap 60,70\nwait 1s\nsettings\n",
+    );
+    let stored: Vec<&str> = log
+        .lines()
+        .filter_map(|line| line.split_once("] alarms: "))
+        .map(|(_, alarms)| alarms)
+        .collect();
+    assert_eq!(
+        stored,
+        [
+            "07:00 on, 07:30 off; smart wake off (weekdays 07:00, weekends 09:00); \
+             timers 10 min, 3 min",
+            "07:00 on, 07:30 off; smart wake on (weekdays 07:00, weekends 09:00); \
+             timers 10 min, 3 min",
+        ],
+        "{log}"
+    );
+}
+
+/// But not one the wearer switched in the editor: DONE leaves that as
+/// they left it, or there'd be no switching an alarm off there. Nor does
+/// the button, which only closes the editor; nor is a timer's DONE a
+/// START.
+#[test]
+fn done_leaves_a_switch_the_wearer_set() {
+    let (_, log) = in_the_editor(
+        "editor-done-switched",
+        "# On, off, DONE: off.\n\
+         tap 20,70\ntap 20,70\ntap 60,70\nwait 1s\nsettings\n\
+         # Open again, a step up, and the button: still off.\n\
+         tap 20,40\nwait 1s\nup 60,40\nbutton\nwait 1s\nsettings\n\
+         # Open again: this time DONE switches it on.\n\
+         tap 20,40\nwait 1s\ntap 60,70\nwait 1s\nsettings\n\
+         # On, then switched off and DONE: off.\n\
+         tap 20,40\nwait 1s\ntap 20,70\ntap 60,70\nwait 1s\nsettings\n\
+         # TIMER 2 (3 minutes): DONE doesn't start it.\n\
+         tap 60,56\nwait 1s\ntap 60,70\nwait 4m\nexpect not buzzed\n",
+    );
+    assert_eq!(
+        stored_alarms(&log),
+        [
+            "07:00 off, 07:30 off",
+            "07:05 off, 07:30 off",
+            "07:05 on, 07:30 off",
+            "07:05 off, 07:30 off"
+        ],
+        "{log}"
+    );
+}
+
 #[test]
 fn a_deliberate_tap_wakes_the_screen_at_once() {
     let dir = out("tap-wake");

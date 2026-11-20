@@ -173,9 +173,13 @@
 //!   long-press to switch it on or off (or start/stop the timer).
 //! - In the editor: swipe up/down on the left half for hours, the right
 //!   half for minutes; tap the bottom left to switch it on/off, the bottom
-//!   right for the next page or done. The button also means done, as
-//!   does the screen going off: each change takes effect, and is saved,
-//!   as it's made, so there's nothing to keep or throw away.
+//!   right for the next page or done. Done also switches an alarm on, as
+//!   setting its time is most often to have it ring then, unless the
+//!   switch was tapped while the editor was open: then it stays as the
+//!   wearer left it. The button closes the editor too, as does the
+//!   screen going off, with the switch as it is: each change takes
+//!   effect, and is saved, as it's made, so there's nothing to keep or
+//!   throw away.
 //! - The phone's alarms (see [`alarm::Phone`]) have a screen of their own,
 //!   read-only: they're set in Gadgetbridge.
 //! - Ringing takes over the screen: tap to snooze, button to stop. Alarms
@@ -620,6 +624,9 @@ pub struct App {
     finding: Option<Instant>,
     /// The alarm editor, while open.
     editing: Option<Editing>,
+    /// In the editor: its switch was tapped since it opened, so DONE
+    /// leaves the alarm as that left it (see `on_editor_input`).
+    switched: bool,
     /// The local minute, as of the last tick (for edits that need "now").
     local_second: Option<i64>,
     /// While glancing: until when.
@@ -783,6 +790,7 @@ impl App {
             ringing: None,
             finding: None,
             editing: None,
+            switched: false,
             local_second: None,
             glance_until: None,
             last_tap: None,
@@ -1949,6 +1957,7 @@ impl App {
                 (Gesture::Tap, Screen::Alarms) => {
                     if let Some(row) = self.theme().alarm_at(touch.x, touch.y) {
                         self.editing = Some(row);
+                        self.switched = false;
                     }
                 }
                 // A quick switch, without opening the editor.
@@ -2312,10 +2321,11 @@ impl App {
     }
 
     fn on_editor_input(&mut self, editing: Editing, event: InputEvent, now: Instant) {
-        let done = |app: &mut Self| app.editing = None;
         let InputEvent::Touch(touch) = event else {
+            // The button closes the editor as it is: the way out that
+            // leaves an alarm's switch alone.
             if let InputEvent::Button = event {
-                done(self);
+                self.editing = None;
             }
             return;
         };
@@ -2325,11 +2335,32 @@ impl App {
             Gesture::SwipeDown => -1,
             Gesture::Tap => {
                 match theme.editor_button(touch.x, touch.y) {
-                    Some(EditorButton::Switch) => self.toggle(editing, now),
+                    Some(EditorButton::Switch) => {
+                        self.toggle(editing, now);
+                        self.switched = true;
+                    }
                     Some(EditorButton::Next) if editing == Editing::SmartWeekday => {
                         self.editing = Some(Editing::SmartWeekend)
                     }
-                    Some(EditorButton::Next) => done(self),
+                    Some(EditorButton::Next) => {
+                        // DONE: an alarm whose time was just set is most
+                        // often meant to ring then, so it's on from here,
+                        // without a tap on its switch first. Unless the
+                        // wearer tapped that switch here: then it's as
+                        // they left it, or there'd be no switching an
+                        // alarm off from its editor. Not a timer: its
+                        // switch starts it, which DONE mustn't.
+                        if !self.switched {
+                            match editing {
+                                Editing::SmartWeekday | Editing::SmartWeekend => {
+                                    self.alarms.smart = true
+                                }
+                                Editing::At(i) => self.alarms.at[usize::from(i)] = true,
+                                Editing::Timer(_) => {}
+                            }
+                        }
+                        self.editing = None;
+                    }
                     None => {}
                 }
                 return;
