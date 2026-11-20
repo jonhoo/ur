@@ -1919,6 +1919,63 @@ mod tests {
         // Before 1970, too.
         assert!(sleep::noon_between(at(-3, 11, 0), at(-3, 12, 30)));
     }
+
+    /// A record that counts how often it's read.
+    struct Counted<'a> {
+        record: Record<'a>,
+        reads: std::cell::Cell<usize>,
+    }
+
+    impl stages::Record for Counted<'_> {
+        fn minute(&self, minute: i64) -> (Kind, Option<u16>, u8) {
+            self.reads.set(self.reads.get() + 1);
+            self.record.minute(minute)
+        }
+
+        fn newest(&self) -> i64 {
+            self.record.newest()
+        }
+
+        fn set_stage(&mut self, minute: i64, kind: Kind) {
+            self.record.set_stage(minute, kind);
+        }
+    }
+
+    /// The firmware stages the whole night again every minute, with every
+    /// other task waiting (see `activity`), so what a pass costs is what
+    /// the watch stalls for: a handful of reads of the record per minute
+    /// of sleep (they dominate the pass), not the 31 it took when each
+    /// minute read its heart rate windows afresh. Then, an 8-hour night
+    /// took up to 93 ms a minute, and heart rate sessions lost I2C
+    /// transfers to it (0.11.3-rc.3).
+    #[test]
+    fn staging_reads_each_minute_a_few_times() {
+        for seed in 0..3 {
+            let mut rng = Rng::new(seed);
+            let (truth, minutes) = a_night(&mut rng);
+            let heart = heart_rates(seed, &truth);
+            let mut kinds = batch(&minutes);
+            let (start, end, _) = last_sleep(&kinds).expect("a night's sleep");
+            assert!(end - start > 6 * 60, "a night: {start}..{end}");
+            let mut counted = Counted {
+                record: Record {
+                    kinds: &mut kinds,
+                    minutes: &minutes,
+                    heart: &heart,
+                    newest: minutes.len() as i64 - 1,
+                },
+                reads: Default::default(),
+            };
+            stages::stage(&mut counted, start as i64, end as i64);
+            // Setting the windows up reads an hour or so of minutes once.
+            let reads = counted.reads.get();
+            assert!(
+                reads <= 7 * (end - start) + 200,
+                "{reads} reads for {} minutes",
+                end - start
+            );
+        }
+    }
 }
 
 #[cfg(test)]

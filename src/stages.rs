@@ -60,11 +60,16 @@
 //!
 //! [`stage`] runs over a whole sleep, every minute while it's recent, in
 //! place on the per-minute record (`crate::activity`'s history), in one
-//! pass and with ~550 bytes of stack: nothing is copied out. That re-does
-//! the whole night each minute (some fifteen thousand reads of the record
-//! by morning: milliseconds), which keeps it simple: a minute's stage
+//! pass and with ~600 bytes of stack: nothing is copied out. That re-does
+//! the whole night each minute, which keeps it simple: a minute's stage
 //! depends on up to an hour of readings either side, and on bouts that end
-//! later.
+//! later. But the firmware does it with every other task waiting, so the
+//! pass has to be cheap, and what it costs is reads of the record: about
+//! six per minute of sleep, some three thousand by morning, each window
+//! taking in the one minute that's new to it. (They were 31, each minute
+//! reading its windows afresh: up to 93 ms a minute late in a night on
+//! the watch, long enough for a heart rate session's I2C transfers to
+//! time out.)
 //!
 //! The smart alarm (`crate::alarm`) rings early only in light sleep, which
 //! it asks [`light`] about: the stages as they stand now, at the leading
@@ -160,7 +165,7 @@ pub trait Record {
 /// light gap that may yet be filled), written out once they're settled.
 /// Writing behind the pass is safe, as staging reads only whether a minute
 /// is sleep, never which stage.
-#[inline(never)] // its ~550-byte frame only while it runs
+#[inline(never)] // its ~600-byte frame only while it runs
 pub fn stage<R: Record>(record: &mut R, onset: i64, end: i64) {
     let reading = |record: &R, minute: i64| reading(record, onset..end, minute);
 
@@ -171,9 +176,14 @@ pub fn stage<R: Record>(record: &mut R, onset: i64, end: i64) {
             baseline.insert(bpm);
         }
     }
-    let mut stirs = (onset - STIR_SPAN..onset + STIR_SPAN + 1)
-        .filter(|&m| stir(record, m, record.newest()))
-        .count();
+    let mut stirs = Stirs::around(record, onset);
+    // The readings within `SWING` of the minute, oldest first (0 for a
+    // minute without one), slid along with it: read from the record, each
+    // minute's 21 were two thirds of all the pass's reads.
+    let mut near = [0u8; 2 * SWING as usize + 1];
+    for (near, minute) in near.iter_mut().zip(onset - SWING..) {
+        *near = reading(record, minute).unwrap_or(0);
+    }
     // The nearest readings before and after a minute, for when there's
     // none within `LEVEL` of it: the last one passed, and the next one
     // ahead (found by scanning on from `scanned`, so each minute is scanned
@@ -191,12 +201,14 @@ pub fn stage<R: Record>(record: &mut R, onset: i64, end: i64) {
             if let Some(bpm) = reading(record, t + LOCAL) {
                 baseline.insert(bpm);
             }
-            stirs -= usize::from(stir(record, t - 1 - STIR_SPAN, record.newest()));
-            stirs += usize::from(stir(record, t + STIR_SPAN, record.newest()));
+            stirs.slide(record);
+            near.copy_within(1.., 0);
+            near[2 * SWING as usize] = reading(record, t + SWING).unwrap_or(0);
         }
-        if let Some(bpm) = reading(record, t) {
-            before = Some((t, bpm));
+        if near[SWING as usize] > 0 {
+            before = Some((t, near[SWING as usize]));
         }
+        let stirs = stirs.count();
 
         let kind = record.minute(t).0;
         let stage = if kind.is_sleep() {
@@ -209,10 +221,10 @@ pub fn stage<R: Record>(record: &mut R, onset: i64, end: i64) {
             let (mut sum, mut count) = (0i32, 0i32);
             let (mut steps, mut pairs) = (0i32, 0i32);
             let mut last: Option<(i64, u8)> = None;
-            for m in t - SWING..t + SWING + 1 {
-                let Some(bpm) = reading(record, m) else {
+            for (m, &bpm) in (t - SWING..).zip(&near) {
+                if bpm == 0 {
                     continue;
-                };
+                }
                 if (m - t).abs() <= LEVEL {
                     sum += i32::from(bpm);
                     count += 1;
@@ -284,11 +296,19 @@ pub fn stage<R: Record>(record: &mut R, onset: i64, end: i64) {
     // changed under the pass would fail this.)
     debug_assert!(
         end <= onset
-            || stirs
+            || stirs.count()
                 == (end - 1 - STIR_SPAN..end + STIR_SPAN)
                     .filter(|&m| stir(record, m, record.newest()))
                     .count(),
         "the stirs' window lost count"
+    );
+    debug_assert!(
+        end <= onset
+            || near
+                .iter()
+                .copied()
+                .eq((end - 1 - SWING..end + SWING).map(|m| reading(record, m).unwrap_or(0))),
+        "the swing's window lost a reading"
     );
     debug_assert!(
         end <= onset
@@ -353,6 +373,76 @@ fn stir<R: Record>(record: &R, minute: i64, until: i64) -> bool {
         .filter_map(|m| record.minute(m).1)
         .fold((0u32, 0u32), |(s, c), m| (s + u32::from(m), c + 1));
     count > 0 && sum >= u32::from(STIR_LIMIT) * count
+}
+
+/// Which of the minutes within [`STIR_SPAN`] of a minute are stirs (as
+/// [`stir`] says, up to the record's newest minute), slid along a minute
+/// at a time: each slide reads the one movement that's new to it, where
+/// asking [`stir`] about the minute entering and the one leaving read six.
+struct Stirs {
+    /// The window's minutes, oldest in bit 0: set for a stir.
+    window: u32,
+    /// The movements of the last minute taken in and the one after it, as
+    /// [`Stirs::movement`] gives them.
+    last: [Option<u16>; 2],
+    /// The minute after the last one taken in.
+    next: i64,
+    /// The record's newest minute: none after it is a stir, or counts
+    /// towards its neighbour's average.
+    until: i64,
+}
+
+const _: () = assert!(2 * STIR_SPAN < u32::BITS as i64, "a bit a minute");
+
+impl Stirs {
+    /// The window around `minute`.
+    fn around<R: Record>(record: &R, minute: i64) -> Self {
+        let (next, until) = (minute - STIR_SPAN, record.newest());
+        let mut stirs = Self {
+            window: 0,
+            last: [
+                Self::movement(record, next - 1, until),
+                Self::movement(record, next, until),
+            ],
+            next,
+            until,
+        };
+        for _ in 0..2 * STIR_SPAN + 1 {
+            stirs.slide(record);
+        }
+        stirs
+    }
+
+    /// A minute's movement, if the watch saw it, and it's not after
+    /// `until`.
+    fn movement<R: Record>(record: &R, minute: i64, until: i64) -> Option<u16> {
+        if minute > until {
+            return None;
+        }
+        record.minute(minute).1
+    }
+
+    /// Moves the window on a minute: drops its oldest, and takes in the
+    /// next.
+    #[inline(never)]
+    fn slide<R: Record>(&mut self, record: &R) {
+        let after = Self::movement(record, self.next + 1, self.until);
+        // As `stir` has it: the mean of the minute's movement and its
+        // neighbours', those there are.
+        let (sum, count) = [self.last[0], self.last[1], after]
+            .into_iter()
+            .flatten()
+            .fold((0u32, 0u32), |(s, c), m| (s + u32::from(m), c + 1));
+        let stir = self.next <= self.until && count > 0 && sum >= u32::from(STIR_LIMIT) * count;
+        self.window = self.window >> 1 | u32::from(stir) << (2 * STIR_SPAN);
+        self.last = [self.last[1], after];
+        self.next += 1;
+    }
+
+    /// How many of the window's minutes are stirs.
+    fn count(&self) -> usize {
+        self.window.count_ones() as usize
+    }
 }
 
 /// The heart rate readings in the baseline's window, sorted, for its
