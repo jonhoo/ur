@@ -767,18 +767,16 @@ impl History {
             return;
         };
         let start = newest - SPAN as i64 + 1;
-        let (before, before_evidence) = if newest - (start - 1) < HISTORY_MINUTES as i64 {
-            let sample = self.samples[Self::slot(start - 1)];
-            (sample.sleep(), sample.evidence())
-        } else {
-            (sleep::Kind::Unknown, sleep::Minute::default())
-        };
+        // The minutes before the span, which no pass rewrites any more.
+        let before = |ago: usize| self.sample(newest, start - ago as i64);
+        let asleep_ago = sleep::asleep_ago(|ago| before(ago).sleep());
+        let before_evidence = before(1).evidence();
         let mut evidence = [sleep::Minute::default(); SPAN];
         for (i, minute) in evidence.iter_mut().enumerate() {
             *minute = self.samples[Self::slot(start + i as i64)].evidence();
         }
         let mut kinds = [sleep::Kind::Unknown; SPAN];
-        sleep::classify(before, before_evidence, &evidence, &mut kinds);
+        sleep::classify(asleep_ago, before_evidence, &evidence, &mut kinds);
         let rewritten = (self.settled.rewritten(newest) - start) as usize;
         for (i, kind) in kinds.iter().enumerate().skip(rewritten) {
             self.samples[Self::slot(start + i as i64)].set_sleep(*kind);

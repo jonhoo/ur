@@ -178,7 +178,7 @@ fn any_record_stages_as_documented() {
         });
 }
 
-/// Any minutes at all, after any kind of minute, classified at once as
+/// Any minutes at all, any time after the last one asleep, classified at once as
 /// `sleep::classify` does a window: it ends (its loop moves on at every
 /// minute, which it asserts), and each minute's class is one its evidence
 /// allows. A minute the watch didn't see is unknown, and only those are;
@@ -217,9 +217,11 @@ fn any_minutes_classify_as_their_evidence_says() {
                     },
                 })
                 .collect();
-            let before = Kind::from_bits(before % 8);
+            // Last asleep any time before, or never: 1 is the minute just
+            // before these.
+            let asleep_ago = (before % 64).checked_sub(1).map(usize::from);
             let mut kinds = vec![Kind::Unknown; minutes.len()];
-            sleep::classify(before, sleep::Minute::default(), &minutes, &mut kinds);
+            sleep::classify(asleep_ago, sleep::Minute::default(), &minutes, &mut kinds);
 
             let n = minutes.len();
             for (t, (minute, &kind)) in minutes.iter().zip(&kinds).enumerate() {
@@ -238,7 +240,7 @@ fn any_minutes_classify_as_their_evidence_says() {
                     .iter()
                     .rev()
                     .find(|&&kind| kind != Kind::Unknown)
-                    .map_or(before.is_sleep(), |kind| kind.is_sleep());
+                    .map_or(asleep_ago == Some(1), |kind| kind.is_sleep());
                 if kind.is_sleep() && !slept {
                     assert_eq!(minute.steps, 0, "sleep starts at minute {t}, with steps");
                     assert!(t + RESUME <= n, "sleep starts at minute {t} of {n}");

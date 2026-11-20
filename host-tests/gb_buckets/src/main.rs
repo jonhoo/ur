@@ -1774,17 +1774,16 @@ mod tests {
             let window = (now + 1).saturating_sub(sleep::WINDOW);
             let read = window.saturating_sub(sleep::CONTEXT);
             let rewrite = (self.settled.rewritten(utc(now)) - NOON).max(0) as usize;
-            let before = if read == 0 {
-                Class::Unknown
-            } else {
-                self.kinds[read - 1]
-            };
+            let asleep_ago = sleep::asleep_ago(|ago| {
+                read.checked_sub(ago)
+                    .map_or(Class::Unknown, |t| self.kinds[t])
+            });
             let evidence: Vec<_> = (read..=now).map(|t| self.evidence(t)).collect();
             let mut out = vec![Class::Unknown; evidence.len()];
             let before_evidence = read
                 .checked_sub(1)
                 .map_or(sleep::Minute::default(), |t| self.evidence(t));
-            sleep::classify(before, before_evidence, &evidence, &mut out);
+            sleep::classify(asleep_ago, before_evidence, &evidence, &mut out);
             self.kinds[rewrite..=now].copy_from_slice(&out[rewrite - read..]);
 
             let oldest = (now + 1).saturating_sub(DAY as usize);

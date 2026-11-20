@@ -201,16 +201,18 @@ fn parse(path: &str) -> Night {
         }
         let window = (now + 1).saturating_sub(sleep::WINDOW);
         let start = window.saturating_sub(sleep::CONTEXT);
-        let before = if start == 0 {
-            Kind::Unknown
-        } else {
-            kinds[start - 1]
-        };
+        let asleep_ago =
+            sleep::asleep_ago(|ago| start.checked_sub(ago).map_or(Kind::Unknown, |t| kinds[t]));
         let mut out = vec![Kind::Unknown; now + 1 - start];
         let before_evidence = start
             .checked_sub(1)
             .map_or(Default::default(), |t| evidence[t]);
-        sleep::classify(before, before_evidence, &evidence[start..=now], &mut out);
+        sleep::classify(
+            asleep_ago,
+            before_evidence,
+            &evidence[start..=now],
+            &mut out,
+        );
         kinds[window..=now].copy_from_slice(&out[window - start..]);
         let mut record = Record {
             kinds: &mut kinds,

@@ -161,9 +161,17 @@ pub const CONTEXT: usize = 30;
 // Classification
 // ==============================================================================
 
-/// Classifies `minutes` (oldest first) into `out`, given the class of the
-/// minute just before them (final, from an earlier pass), and its evidence
-/// (unseen if there's none).
+/// Classifies `minutes` (oldest first) into `out`, given how long before
+/// them the wearer was last asleep (see [`asleep_ago`]: final, from earlier
+/// passes), and the evidence of the minute just before them (unseen if
+/// there's none).
+///
+/// When the wearer was last asleep, rather than only whether they were in
+/// the minute before: sleep comes back sooner within a night ([`RESUME`]),
+/// and a pass that had forgotten the night, as its minutes started after
+/// the last one asleep, asked the full [`ONSET`] of a stillness that an
+/// earlier pass, which still saw the night, had taken at ten minutes. So
+/// the same minutes fell asleep at one pass and were awake at a later one.
 ///
 /// That minute's evidence is only the oldest's neighbour, for the
 /// smoothing (see [`is_still`]). Without it, the oldest was smoothed over
@@ -172,7 +180,12 @@ pub const CONTEXT: usize = 30;
 /// by a minute just by the window sliding on, enough to pass for sleep,
 /// and the window's oldest minute, after it, turned to sleep once at that
 /// pass and for good, long after it had gone to Gadgetbridge as awake.
-pub fn classify(before: Kind, before_evidence: Minute, minutes: &[Minute], out: &mut [Kind]) {
+pub fn classify(
+    asleep_ago: Option<usize>,
+    before_evidence: Minute,
+    minutes: &[Minute],
+    out: &mut [Kind],
+) {
     assert_eq!(minutes.len(), out.len(), "one class per minute");
     let n = minutes.len();
 
@@ -203,10 +216,10 @@ pub fn classify(before: Kind, before_evidence: Minute, minutes: &[Minute], out: 
         end - t
     };
 
-    let mut asleep = before.is_sleep();
+    let mut asleep = asleep_ago == Some(1);
     // When we were last asleep (as a minute index, -1 being just before
     // `minutes`), for the quicker return to sleep within a night.
-    let mut last_asleep: Option<isize> = asleep.then_some(-1);
+    let mut last_asleep: Option<isize> = asleep_ago.map(|ago| -(ago as isize));
     let mut t = 0;
     while t < n {
         let minute = minutes[t];
@@ -289,6 +302,15 @@ pub fn classify(before: Kind, before_evidence: Minute, minutes: &[Minute], out: 
         out[t..t + moving].fill(kind);
         t += moving;
     }
+}
+
+/// How long before a pass's minutes the wearer was last asleep, for
+/// [`classify`]: 1 if in the minute just before them, and so on, given the
+/// kind of the minute `ago` minutes before the pass's first (`Unknown`
+/// outside the record). `None` if not within [`SAME_NIGHT_GAP`], after
+/// which it no longer matters.
+pub fn asleep_ago(kind: impl Fn(usize) -> Kind) -> Option<usize> {
+    (1..=SAME_NIGHT_GAP).find(|&ago| kind(ago).is_sleep())
 }
 
 /// Whether a minute moved itself: its own movement, unsmoothed, is at
