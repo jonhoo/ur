@@ -1647,15 +1647,22 @@ fn make_room_for_bond(stack: &Stack<'_, Controller, Pool>, conn: &GattConnection
 ///
 /// `notify_raw` takes a buffer per notification and fails with
 /// `OutOfMemory` when there's none, rather than wait for one. The pool's
-/// 16 are shared with everything else the host holds: up to 10 of our own
-/// notifications on their way out (8 queued, one with the host's sender,
-/// one in `notify_raw`), and what the phone wrote that [`serve`] hasn't
-/// read yet (up to 8, which it can't get to while it's sending). So a
-/// fetch of more than a few buckets can find the pool empty while the
-/// phone has something to say too. Twice in a four-day field log (0.11.3)
-/// that failed every remaining message of a fetch within milliseconds,
-/// its end included, and Gadgetbridge showed "fetching activity data"
-/// until its Bluetooth was restarted (see [`send_activity`]).
+/// 16 are shared with everything else the host holds: our own
+/// notifications on their way out (those queued, one with the host's
+/// sender, one in `notify_raw`), and what the phone wrote that [`serve`]
+/// hasn't read yet (up to 8, which it can't get to while it's sending,
+/// and one being reassembled). With the host's outbound queue at its
+/// default of 8, that was up to 10 of ours and 19 in all, so a fetch of
+/// more than a few buckets could find the pool empty while the phone had
+/// something to say too. Twice in a four-day field log (0.11.3) that
+/// failed every remaining message of a fetch within milliseconds, its end
+/// included, and Gadgetbridge showed "fetching activity data" until its
+/// Bluetooth was restarted (see [`send_activity`]).
+///
+/// The queue is 4 now (trouble-host's `l2cap-tx-queue-size-4`, in
+/// Cargo.toml): 6 of ours, 15 in all with one client, so the phone alone
+/// can't empty the pool on us, nor we on it. A second client (an update,
+/// a log fetch) still can, and so this waits.
 ///
 /// The buffers of ours come back as the controller takes the
 /// notifications queued, a few per connection event, so a wait is all it
