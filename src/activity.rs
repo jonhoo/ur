@@ -493,62 +493,69 @@ impl Bma421 {
         let mut length = [0u8; 2];
         self.read(REG_FIFO_LENGTH, &mut length).await?;
         let queued = usize::from(u16::from_le_bytes(length) & 0x3FFF);
-        let mut buffer = [0u8; 252];
-        let take = queued.min(buffer.len());
-        if take == 0 {
-            return Ok(Frames::new());
-        }
-        // Advanced power save off for the read, and the 450 µs the chip
-        // then needs before the next access. With it on, the FIFO stream
-        // came out corrupted (missing frame headers) in most reads of a
-        // still watch on the desk; with it off, none were, over minutes.
-        self.write(REG_POWER_CONF, 0x00).await?;
-        Timer::after_millis(1).await;
-        let read = self.read(REG_FIFO_DATA, &mut buffer[..take]).await;
-        Timer::after_micros(500).await;
-        self.write(REG_POWER_CONF, 0x03).await?;
-        read?;
-
-        // Parse first, deliver after, so a broken batch delivers nothing.
-        let mut frames = Frames::new();
-        let mut i = 0;
-        let broken = loop {
-            let Some(&header) = buffer[..take].get(i) else {
-                break false;
-            };
-            match header & 0xFC {
-                // Accelerometer data.
-                0x84 => {
-                    let Some(data) = buffer[..take].get(i + 1..i + 7) else {
-                        // A frame cut off by the end of our read: it stays
-                        // in the FIFO only if we haven't read it, and we
-                        // have, so this batch's tail is lost; resync.
-                        break true;
-                    };
-                    let axis = |a: usize| i16::from_le_bytes([data[a], data[a + 1]]) >> 4;
-                    let _ = frames.push([axis(0), axis(2), axis(4)]);
-                    i += 7;
-                }
-                // Skip (frames dropped by overflow), configuration change,
-                // or "dropped" frames: one parameter byte.
-                0x40 | 0x48 | 0x50 => i += 2,
-                // Sensor time: three bytes.
-                0x44 => i += 4,
-                // Empty FIFO.
-                0x80 => break false,
-                _ => break true,
+        // In a block of its own, so that neither the bytes read nor the
+        // frames parsed from them are kept (in this future, and so in the
+        // activity task's static RAM) across the flush below: 472 bytes
+        // that were, for a wait that needs none of them.
+        let broken = {
+            let mut buffer = [0u8; 252];
+            let take = queued.min(buffer.len());
+            if take == 0 {
+                return Ok(Frames::new());
             }
+            // Advanced power save off for the read, and the 450 µs the chip
+            // then needs before the next access. With it on, the FIFO stream
+            // came out corrupted (missing frame headers) in most reads of a
+            // still watch on the desk; with it off, none were, over minutes.
+            self.write(REG_POWER_CONF, 0x00).await?;
+            Timer::after_millis(1).await;
+            let read = self.read(REG_FIFO_DATA, &mut buffer[..take]).await;
+            Timer::after_micros(500).await;
+            self.write(REG_POWER_CONF, 0x03).await?;
+            read?;
+
+            // Parse first, deliver after, so a broken batch delivers nothing.
+            let mut frames = Frames::new();
+            let mut i = 0;
+            let broken = loop {
+                let Some(&header) = buffer[..take].get(i) else {
+                    break false;
+                };
+                match header & 0xFC {
+                    // Accelerometer data.
+                    0x84 => {
+                        let Some(data) = buffer[..take].get(i + 1..i + 7) else {
+                            // A frame cut off by the end of our read: it stays
+                            // in the FIFO only if we haven't read it, and we
+                            // have, so this batch's tail is lost; resync.
+                            break true;
+                        };
+                        let axis = |a: usize| i16::from_le_bytes([data[a], data[a + 1]]) >> 4;
+                        let _ = frames.push([axis(0), axis(2), axis(4)]);
+                        i += 7;
+                    }
+                    // Skip (frames dropped by overflow), configuration change,
+                    // or "dropped" frames: one parameter byte.
+                    0x40 | 0x48 | 0x50 => i += 2,
+                    // Sensor time: three bytes.
+                    0x44 => i += 4,
+                    // Empty FIFO.
+                    0x80 => break false,
+                    _ => break true,
+                }
+            };
+            if !broken {
+                return Ok(frames);
+            }
+            (buffer[i.min(take - 1)], i)
         };
-        if broken {
-            warn!(
-                "activity: FIFO out of step (header {=u8:#04x} at {}); flushing",
-                buffer[i.min(take - 1)],
-                i
-            );
-            self.write(REG_CMD, CMD_FIFO_FLUSH).await?;
-            return Ok(Frames::new());
-        }
-        Ok(frames)
+        let (header, at) = broken;
+        warn!(
+            "activity: FIFO out of step (header {=u8:#04x} at {}); flushing",
+            header, at
+        );
+        self.write(REG_CMD, CMD_FIFO_FLUSH).await?;
+        Ok(Frames::new())
     }
 }
 

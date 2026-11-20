@@ -221,12 +221,25 @@ impl SpiFlash {
         }
     }
 
-    /// One command: `command` out, then `response.len()` bytes in, within a
-    /// single chip-select cycle.
+    /// One command: `command` out (four bytes at most), then
+    /// `response.len()` bytes in, within a single chip-select cycle.
+    ///
+    /// The command goes out from a copy in this future, in RAM, where
+    /// the SPIM's DMA can read it (callers pass constants, which live in
+    /// flash): that lets it go straight to the driver, without
+    /// [`spi::write`]'s bounce buffer and the 48 bytes of future that
+    /// come with it. Every flash operation is built on this, and every
+    /// task that uses the flash carries the largest of them in its static
+    /// RAM, whose spare bytes are counted in dozens.
     async fn command(&mut self, command: &[u8], response: &mut [u8]) {
+        let mut header = [0; 4];
+        let header = &mut header[..command.len()];
+        header.copy_from_slice(command);
         let mut bus = spi::BUS.get().await.lock().await;
         self.cs.set_low();
-        spi::write(&mut bus, command).await;
+        bus.write_from_ram(header)
+            .await
+            .expect("the copy is in RAM");
         if !response.is_empty() {
             spi::read(&mut bus, response).await;
         }
