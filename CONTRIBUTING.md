@@ -25,7 +25,8 @@ needs nothing special; LFS stores it.
   `wake`, `gb`, `phone`, `gb_buckets` and `sleep_hold` (the activity as
   Gadgetbridge fetches it), `live`, `link`, `buttons`, `qr`, `font`,
   `mcuboot`, `backoff` (retrying sensor setup), `step_counter` (which
-  of the accelerometer's step counts to believe),
+  of the accelerometer's step counts to believe), `workout` (telling a
+  workout from ordinary activity),
   `on_time` (`power`'s hourly split), `fault` (what a HardFault's
   registers say),
   `minute_ring` (`activity`'s history as the clock moves), `dfu_slot`
@@ -777,6 +778,13 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   them from a decoded log, alongside another watch's heart rate from an
   Android [Health Connect] export (the tuning so far compared against a
   Garmin worn on the other wrist).
+- `host-tests/workout`: `cargo run --release -- decoded.log...` puts the
+  log's minutes (its accelerometer polls, summed as `activity` sums
+  them) through the workout rules as they are now, and prints each
+  workout they find: when, how long, which kinds, its steps and movement
+  a minute, and the heart rate readings the log has inside it. That's
+  how to tune `workout`'s thresholds against a day whose workouts are
+  known, and it needs no build with workouts in it to have made the log.
 
   Logs after 0.10.0-rc.3 have whole sessions on a busy wrist too (a
   background session no longer stops early for movement), the data for
@@ -810,6 +818,34 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   - **When, against the phone's buckets:** asleep, sessions should start
     4 minutes into each UTC-aligned 5 minutes (`heart_schedule::in_phase`);
     the log's `clock:` lines date them.
+
+  And of every workout (0.11.3-rc.5 on; see `workout`, and `heart`'s
+  "Through a workout"):
+
+  - **Detection:** `workout: started, KIND (steps A, B, C; N/10 min
+    moving)` as a minute ends, `KIND` being `Walk` or `Effort`, with what
+    the rules went by: the last three minutes' steps (a walk is three at
+    80 or more), and how many of the last ten moved hard (an effort is
+    eight). `workout: now KIND (…)` when one turns into the other, and
+    `workout: over (…)` when it ends (three minutes under 40 steps, or
+    five without hard movement; `; asleep` if that's what ended it).
+  - **The session through it:** `heart: workout session (KIND)` when the
+    sensor goes on for it (there's no `heart: due` line: the schedule
+    didn't start it), and `heart: workout session over after S s` when
+    it goes off. In between, `heart: N BPM after S s` for its first
+    reading and, at `debug`, `heart: N BPM` for each one after (one
+    every 2 s while the wrist is calm), and each window's verdict as for
+    any session (`heart: window rejected: walking (N BPM)` is one left
+    out as the arm's swing, see `workout::swing`). Its samples are only
+    logged for its first two minutes: `heart: workout session; samples
+    no longer logged` marks where they stop. If it finds no skin, it
+    ends as any session does (`heart: not on a wrist`), and another
+    starts two minutes later.
+
+  So, from a log alone: how many workouts a day and how long; whether a
+  known workout was found, and how late; readings a workout, and where
+  in it they fell (its pauses, its last minutes); and, from the windows'
+  verdicts, what kept the rest from reading.
 
   So, from a log alone: readings an hour by `WHY` and by calm or busy
   start; LED seconds a reading; how many overdue tries read; how many

@@ -142,6 +142,7 @@ mod ui_loop;
 mod unpaired;
 mod version;
 mod wake;
+mod workout;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

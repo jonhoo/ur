@@ -1503,6 +1503,33 @@ mod tests {
         assert_eq!(c.push(72.0, false), Some(71));
     }
 
+    /// A session that stays on (a workout, a long look) forgets its
+    /// accepted windows after a while without one (see
+    /// `heart::AGREE_WITHIN`): old ones don't agree with new, but pairs
+    /// of windows in a row are as before.
+    #[test]
+    fn expired_windows_no_longer_agree() {
+        let mut c = Consensus::new();
+        assert_eq!(c.push(58.0, false), None);
+        assert_eq!(c.push(59.0, false), None);
+        c.expire();
+        // The third would have made a reading of the two before it.
+        assert_eq!(c.push(58.5, false), None);
+        // Three since do.
+        assert_eq!(c.push(59.0, false), None);
+        assert_eq!(c.push(58.0, false), Some(59));
+        // A calm pair spans it: the windows are in a row.
+        let mut c = Consensus::new();
+        assert_eq!(c.push(70.0, true), None);
+        c.expire();
+        assert_eq!(c.push(71.0, true), Some(71));
+        // And so does a faint one's.
+        let mut c = Consensus::new();
+        assert_eq!(c.push_faint(70.0, true, false), None);
+        c.expire();
+        assert_eq!(c.push_faint(71.0, true, false), Some(71));
+    }
+
     /// Two accepted windows in a row make a reading on any wrist if both
     /// are strongly periodic (a quality of 0.75) and agree closely, at
     /// 50 to 120 BPM; anything else between them, and they don't.

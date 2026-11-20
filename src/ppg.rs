@@ -976,6 +976,17 @@ impl Consensus {
             .then(|| libm::roundf((bpm + previous) / 2.0) as u8)
     }
 
+    /// Forgets the accepted estimates kept so far, so that only later ones
+    /// can agree with each other: for a session that has gone long without
+    /// one (see `heart::AGREE_WITHIN`). [`Consensus::push`] keeps its
+    /// latest three however far apart they came, which suits a session of
+    /// eleven windows; over hundreds, three strays would sooner or later
+    /// agree by chance. The pairs (calm, strong) aren't touched: they are
+    /// between windows in a row.
+    pub fn expire(&mut self) {
+        self.len = 0;
+    }
+
     /// Notes a rejected window (or one vetoed for movement), which neither
     /// a calm pair nor a strong one can span.
     pub fn reject(&mut self) {

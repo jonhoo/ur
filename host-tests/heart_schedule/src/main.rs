@@ -1196,6 +1196,62 @@ mod tests {
         assert_eq!(schedule.due(0, false).0, 400 + 2 * 2 * MIN_INTERVAL);
     }
 
+    /// A workout's session (see `heart`'s "Through a workout") is a
+    /// watched one that lasts as long as the workout does. `heart` tells
+    /// the schedule of it as one session's worth of LED, with no stepless
+    /// polls before it, and as a reading only if it read in its last half
+    /// minute. So half an hour's effort without a step neither empties
+    /// the budget nor teaches the resting estimate, and what follows is the
+    /// usual schedule after an elevated reading, to follow the recovery.
+    #[test]
+    fn a_workouts_session_costs_one_sessions_worth_and_is_never_resting() {
+        let mut schedule = Schedule::new();
+        schedule.ended(100, 13, Outcome::Reading(60), true, awake(0));
+        schedule.ended(400, 13, Outcome::Reading(61), true, awake(0));
+        assert_eq!(schedule.resting().0, 61);
+        let budget = schedule.budget(400);
+        // Weights: no steps for half an hour, the wrist busy throughout.
+        let workout = Before {
+            active_polls: u8::MAX,
+            stepless_polls: 0,
+            asleep: false,
+        };
+        let end = 400 + 30 * MINUTE;
+        schedule.ended(end, SESSION_RESERVE, Outcome::Reading(118), false, workout);
+        assert_eq!(schedule.resting().0, 61);
+        assert!(schedule.budget(end) >= budget.min(LED_BUDGET) - SESSION_RESERVE);
+        // Still moving: back within two minutes. Once the wrist rests, at
+        // the elevated interval.
+        assert_eq!(
+            schedule.due(MOVED_POLLS, false),
+            (end + MIN_INTERVAL, Why::Moved)
+        );
+        assert_eq!(
+            schedule.due(0, false),
+            (end + ELEVATED_INTERVAL, Why::Elevated)
+        );
+
+        // One that last read long before it ended (`heart`'s
+        // `Ended::Faded`) is no measurement at all: the schedule carries
+        // on from where it was, a session's LED poorer.
+        let mut schedule = Schedule::new();
+        schedule.ended(100, 13, Outcome::Reading(60), true, awake(0));
+        let before = schedule.due(0, false);
+        schedule.ended(end, SESSION_RESERVE, Outcome::NoReading, false, workout);
+        assert_eq!(schedule.due(0, false), before);
+        // And the night after it is as any other: in step with the
+        // phone's buckets, five minutes apart.
+        let asleep = Before {
+            asleep: true,
+            ..awake(0)
+        };
+        schedule.ended(end + 600, 12, Outcome::Reading(52), true, asleep);
+        let (at, why) = schedule.due_in_phase(0, true, Some(0));
+        assert_eq!(why, Why::Asleep);
+        assert_eq!(at % BUCKET, BUCKET_SLOT);
+        assert!(at - (end + 600) <= ASLEEP_INTERVAL + BUCKET - MIN_INTERVAL);
+    }
+
     #[test]
     fn bright_starts_go_up_two_drives_as_far_as_headroom_and_budget_allow() {
         let plenty = LED_BUDGET;

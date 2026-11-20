@@ -38,7 +38,9 @@ on top:
   or at your time if that doesn't come, and alarms build up from faint
   taps.
 - **Adaptive heart rate:** every 2 to 20 minutes, more often after you
-  move, while you sleep, or while it's high. Each try starts once your
+  move, while you sleep, or while it's high, and continuously through a
+  workout (three minutes of walking or running, or ten of hard work
+  with your arms), since a moving wrist only reads in its pauses. Each try starts once your
   wrist is still, or two minutes on if it never is, and keeps going for
   up to 30 s even if you start typing again, as a moment's calm may
   come; if 19 s of a busy wrist have shown no sign of a pulse, it stops

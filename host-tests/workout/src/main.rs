@@ -1,0 +1,404 @@
+//! Host tests for the firmware's `workout` module (`cargo test`), and a
+//! replay of a decoded field log through it, to tune the rules against
+//! real days:
+//!
+//!     cargo run --release -- decoded.log...
+//!
+//! The log's accelerometer polls (`activity: N samples, movement M, K new
+//! steps`, at `debug`) are gathered into minutes as `activity` gathers
+//! them, and each minute goes through [`workout::detect`]. One line per
+//! workout found: when (UTC), how long, its kinds, its steps and mean
+//! movement a minute, and the heart rate readings the log has inside it
+//! (how many, and their range). A log made by a build with workouts in it
+//! says `workout: … started` itself; this says what the rules as they are
+//! now would have made of the same wrist.
+
+#[path = "../../../src/workout.rs"]
+#[allow(dead_code)]
+mod workout;
+
+use std::collections::BTreeMap;
+
+use workout::{Kind, Minute, WINDOW, detect};
+
+/// What a log says of one minute.
+#[derive(Default, Clone, Copy)]
+struct Logged {
+    steps: u64,
+    /// Movement summed over the polls' samples, and those samples: the
+    /// minute's mean weights each poll by them, as `activity` does.
+    moved: u64,
+    samples: u64,
+    asleep: bool,
+}
+
+fn main() {
+    let paths: Vec<String> = std::env::args().skip(1).collect();
+    if paths.is_empty() {
+        println!("run `cargo test`, or pass decoded field logs to replay");
+        return;
+    }
+    let mut minutes: BTreeMap<i64, Logged> = BTreeMap::new();
+    // Readings by UTC second.
+    let mut readings: BTreeMap<i64, u8> = BTreeMap::new();
+    for path in &paths {
+        let text = std::fs::read(path).expect("a readable log");
+        let text = String::from_utf8_lossy(&text);
+        // (uptime seconds, UTC seconds), from `clock: <utc> UTC = ...`.
+        let mut anchor: Option<(f64, i64)> = None;
+        let mut asleep = false;
+        for line in text.lines() {
+            let Some((uptime, rest)) = line.split_once(' ') else {
+                continue;
+            };
+            let Ok(uptime) = uptime.parse::<f64>() else {
+                continue;
+            };
+            let message = rest.trim_start_matches(|c: char| c.is_ascii_uppercase() || c == ' ');
+            if message.contains("booting") {
+                // Uptime starts over; the classifier starts awake.
+                anchor = None;
+                asleep = false;
+            }
+            if let Some(rest) = message.strip_prefix("clock: ") {
+                if let Some(utc) = rest.split(' ').next().and_then(|u| u.parse::<i64>().ok()) {
+                    anchor = Some((uptime, utc));
+                }
+                continue;
+            }
+            match message {
+                "sleep: asleep now" => asleep = true,
+                "sleep: awake now" => asleep = false,
+                _ => {}
+            }
+            let Some(utc) = anchor.map(|(at, utc)| utc + (uptime - at) as i64) else {
+                continue;
+            };
+            // "heart: 56 BPM after 24 s (...)", or "heart: 56 BPM" for a
+            // watched session's later ones.
+            if let Some(rest) = message.strip_prefix("heart: ")
+                && let Some((bpm, _)) = rest.split_once(" BPM")
+                && let Ok(bpm) = bpm.parse::<u8>()
+            {
+                readings.insert(utc, bpm);
+                continue;
+            }
+            // "activity: 24 samples, movement 1653, 0 new steps (counter 0)".
+            // Only these: the task's warnings carry numbers too.
+            let Some(rest) = message
+                .strip_prefix("activity: ")
+                .filter(|rest| rest.contains(" samples, movement "))
+            else {
+                continue;
+            };
+            let numbers: Vec<u64> = rest
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            let [samples, movement, steps, ..] = numbers[..] else {
+                continue;
+            };
+            let minute = minutes.entry(utc.div_euclid(60)).or_default();
+            minute.steps += steps;
+            minute.moved += movement * samples;
+            minute.samples += samples;
+            // As of the minute's last poll: the firmware asks at the next
+            // minute's first, a moment later.
+            minute.asleep = asleep;
+        }
+    }
+
+    let (Some((&first, _)), Some((&last, _))) =
+        (minutes.first_key_value(), minutes.last_key_value())
+    else {
+        println!("no accelerometer polls in the log (is `ur::activity` at debug?)");
+        return;
+    };
+    let mut recent = [Minute::default(); WINDOW];
+    let mut current = None;
+    // The workout under way: the minute it was found in, and every kind
+    // it has been.
+    let mut under_way = None::<(i64, Vec<Kind>)>;
+    let (mut workouts, mut total) = (0, 0);
+    // A minute the log doesn't have is an empty one, as in `activity`'s
+    // history (the watch was off, or the log has a hole).
+    for minute in first..=last + 1 {
+        let logged = minutes.get(&minute).copied().unwrap_or_default();
+        recent.rotate_left(1);
+        recent[WINDOW - 1] = Minute {
+            steps: logged.steps.min(u64::from(u16::MAX)) as u16,
+            movement: (logged.moved / logged.samples.max(1)).min(u64::from(u16::MAX)) as u16,
+        };
+        let now = if minute > last {
+            None
+        } else {
+            detect(current, &recent, logged.asleep)
+        };
+        match (&mut under_way, now) {
+            (None, Some(kind)) => under_way = Some((minute, vec![kind])),
+            (Some((_, kinds)), Some(kind)) => {
+                if kinds.last() != Some(&kind) {
+                    kinds.push(kind);
+                }
+            }
+            (Some((since, kinds)), None) => {
+                // Found at the end of minute `since`, ended at the end of
+                // this one.
+                let span = *since + 1..=minute;
+                let length = minute - *since;
+                let (steps, moved, samples) = minutes.range(span.clone()).fold(
+                    (0, 0, 0),
+                    |(steps, moved, samples), (_, m)| {
+                        (steps + m.steps, moved + m.moved, samples + m.samples)
+                    },
+                );
+                let read: Vec<u8> = readings
+                    .range((*since + 1) * 60..(minute + 1) * 60)
+                    .map(|(_, &bpm)| bpm)
+                    .collect();
+                println!(
+                    "{} UTC, {length:3} min, {kinds:?}: {} steps/min, movement {}; {} readings{}",
+                    utc(*since + 1),
+                    steps / length.max(1) as u64,
+                    moved / samples.max(1),
+                    read.len(),
+                    match (read.iter().min(), read.iter().max()) {
+                        (Some(low), Some(high)) => format!(", {low}-{high} BPM"),
+                        _ => String::new(),
+                    }
+                );
+                workouts += 1;
+                total += length;
+                under_way = None;
+            }
+            (None, None) => {}
+        }
+        current = now;
+    }
+    let days = minutes.len() as f64 / 1440.0;
+    println!(
+        "{workouts} workouts, {total} minutes, in {days:.1} days of logged minutes ({:.1} and {:.0} a day)",
+        f64::from(workouts) / days,
+        total as f64 / days
+    );
+}
+
+/// A UTC minute as `MM-DD HH:MM` (the year is the log's business).
+fn utc(minute: i64) -> String {
+    // Days since 1970 to a civil date (Howard Hinnant's algorithm).
+    let days = minute.div_euclid(1440);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let _ = era;
+    let of_day = minute.rem_euclid(1440);
+    format!("{month:02}-{day:02} {:02}:{:02}", of_day / 60, of_day % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workout::*;
+
+    const STILL: Minute = Minute {
+        steps: 0,
+        movement: 30,
+    };
+    const DESK: Minute = Minute {
+        steps: 0,
+        movement: 600,
+    };
+    const POTTERING: Minute = Minute {
+        steps: 30,
+        movement: 1400,
+    };
+    const WALKING: Minute = Minute {
+        steps: 110,
+        movement: 3800,
+    };
+    const LIFTING: Minute = Minute {
+        steps: 12,
+        movement: 2600,
+    };
+
+    /// Runs `minutes` through [`detect`] from no workout, after a still
+    /// window; what it said after each.
+    fn run(minutes: &[Minute]) -> Vec<Option<Kind>> {
+        run_asleep(minutes, |_| false)
+    }
+
+    fn run_asleep(minutes: &[Minute], asleep: impl Fn(usize) -> bool) -> Vec<Option<Kind>> {
+        let mut recent = [STILL; WINDOW];
+        let mut current = None;
+        minutes
+            .iter()
+            .enumerate()
+            .map(|(i, &minute)| {
+                recent.rotate_left(1);
+                recent[WINDOW - 1] = minute;
+                current = detect(current, &recent, asleep(i));
+                current
+            })
+            .collect()
+    }
+
+    fn repeat(minute: Minute, times: usize) -> Vec<Minute> {
+        vec![minute; times]
+    }
+
+    #[test]
+    fn a_walk_starts_after_three_minutes_and_ends_three_after_it_stops() {
+        let day = [repeat(DESK, 5), repeat(WALKING, 20), repeat(DESK, 10)].concat();
+        let said = run(&day);
+        // Not yet at the walk's second minute; from its third.
+        assert_eq!(said[6], None);
+        assert_eq!(said[7], Some(Kind::Walk));
+        // Through the walk, and two minutes of the desk after it: the
+        // recovery.
+        assert!(said[7..27].iter().all(|&kind| kind == Some(Kind::Walk)));
+        assert_eq!(said[27], None);
+        assert!(said[27..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_red_light_does_not_end_a_walk() {
+        let slow = Minute {
+            steps: 20,
+            movement: 900,
+        };
+        let day = [
+            repeat(WALKING, 6),
+            repeat(slow, 2),
+            repeat(WALKING, 6),
+            repeat(DESK, 3),
+        ]
+        .concat();
+        let said = run(&day);
+        assert!(said[2..16].iter().all(|&kind| kind == Some(Kind::Walk)));
+        assert_eq!(said[16], None);
+    }
+
+    #[test]
+    fn pottering_and_a_desk_are_no_workout() {
+        let day = [
+            repeat(DESK, 60),
+            repeat(POTTERING, 60),
+            // A few steps across a room at walking pace, never three
+            // minutes of it.
+            [WALKING, WALKING, DESK].repeat(10),
+        ]
+        .concat();
+        assert!(run(&day).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn hard_work_without_steps_starts_at_eight_minutes_of_ten() {
+        let day = [repeat(DESK, 5), repeat(LIFTING, 20), repeat(STILL, 10)].concat();
+        let said = run(&day);
+        assert_eq!(said[11], None);
+        assert_eq!(said[12], Some(Kind::Effort));
+        // A rest between sets doesn't end it; five still minutes do.
+        assert!(said[12..29].iter().all(|&kind| kind == Some(Kind::Effort)));
+        assert_eq!(said[29], None);
+    }
+
+    #[test]
+    fn rests_between_sets_keep_an_effort_going() {
+        let mut day = repeat(LIFTING, 10);
+        for _ in 0..5 {
+            day.extend(repeat(STILL, 3));
+            day.push(LIFTING);
+        }
+        day.extend(repeat(STILL, 5));
+        let said = run(&day);
+        assert!(said[7..30].iter().all(|&kind| kind == Some(Kind::Effort)));
+        assert_eq!(said.last(), Some(&None));
+    }
+
+    #[test]
+    fn a_walk_takes_over_from_an_effort_and_hands_back() {
+        // Working, then a walk, then working on: one workout throughout.
+        let day = [
+            repeat(LIFTING, 10),
+            repeat(WALKING, 10),
+            repeat(LIFTING, 10),
+        ]
+        .concat();
+        let said = run(&day);
+        assert_eq!(said[9], Some(Kind::Effort));
+        assert_eq!(said[12], Some(Kind::Walk));
+        // The walk's steps stop, but the wrist is still at it (the walk's
+        // own minutes moved enough to count).
+        assert_eq!(said[22], Some(Kind::Effort));
+        assert!(said[7..].iter().all(Option::is_some));
+    }
+
+    #[test]
+    fn asleep_is_never_a_workout_and_ends_one() {
+        let day = repeat(WALKING, 10);
+        let said = run_asleep(&day, |i| i >= 6);
+        assert_eq!(said[5], Some(Kind::Walk));
+        assert!(said[6..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_workout_always_ends_once_the_wrist_is_still() {
+        // From any kind, a window of still minutes says none: nothing in
+        // the past holds a workout open.
+        for current in [None, Some(Kind::Walk), Some(Kind::Effort)] {
+            assert_eq!(detect(current, &[STILL; WINDOW], false), None);
+        }
+        // Every pattern of walking, lifting and still minutes over two
+        // windows, from every kind: once followed by a still window, no
+        // workout. (3^8 patterns of the first eight minutes are plenty:
+        // the rules look at runs of at most ten.)
+        for pattern in 0..3usize.pow(8) {
+            for start in [None, Some(Kind::Walk), Some(Kind::Effort)] {
+                let mut recent = [STILL; WINDOW];
+                let mut current = start;
+                let mut digits = pattern;
+                for _ in 0..8 {
+                    recent.rotate_left(1);
+                    recent[WINDOW - 1] = [STILL, WALKING, LIFTING][digits % 3];
+                    digits /= 3;
+                    current = detect(current, &recent, false);
+                }
+                for _ in 0..WINDOW {
+                    recent.rotate_left(1);
+                    recent[WINDOW - 1] = STILL;
+                    current = detect(current, &recent, false);
+                }
+                assert_eq!(current, None, "pattern {pattern} from {start:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn kinds_survive_a_byte() {
+        for kind in [None, Some(Kind::Walk), Some(Kind::Effort)] {
+            assert_eq!(Kind::from_bits(Kind::bits(kind)), kind);
+        }
+        assert_eq!(Kind::from_bits(200), None);
+    }
+
+    #[test]
+    fn the_arms_swing_is_only_rejected_while_walking() {
+        const LIMIT: u8 = 15;
+        // Stepping in a walk: a resting rate is the arm.
+        assert!(swing(58.0, Some(Kind::Walk), 0, LIMIT));
+        assert!(swing(69.9, Some(Kind::Walk), 14, LIMIT));
+        // A walking heart rate is taken.
+        assert!(!swing(70.0, Some(Kind::Walk), 0, LIMIT));
+        assert!(!swing(118.0, Some(Kind::Walk), 0, LIMIT));
+        // Stopped for half a minute: recovery may read anything.
+        assert!(!swing(58.0, Some(Kind::Walk), 15, LIMIT));
+        // Not walking: a calm wrist between sets may well be at 60.
+        assert!(!swing(58.0, Some(Kind::Effort), 0, LIMIT));
+        assert!(!swing(58.0, None, 0, LIMIT));
+    }
+}

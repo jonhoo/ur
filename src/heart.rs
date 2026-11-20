@@ -21,7 +21,10 @@
 //!   since then someone is looking at the number, and
 //! - while Gadgetbridge's live activity asks for it (see [`crate::live`]
 //!   and [`crate::heart_reading::set_live`]), continuously too, for as long
-//!   as it asks;
+//!   as it asks, and
+//! - through a workout (see [`crate::workout`], and "Through a workout"
+//!   below), continuously as well: a moving wrist reads in its pauses,
+//!   and only a sensor that's already on catches those;
 //!
 //! but never on the charger (see `heart_schedule`'s "The charger"): no
 //! session starts while its power is present, and one under way stops
@@ -48,7 +51,7 @@ use embedded_hal_async::i2c::I2c;
 use crate::activity;
 // What the rest of the firmware reads and sets lives there, free of
 // hardware, so the simulator runs it too.
-use crate::heart_reading::{WAKE, on_charger, publish, watching};
+use crate::heart_reading::{WAKE, on_charger, publish};
 pub use crate::heart_reading::{wake, worn};
 use crate::heart_schedule::{self, Arm, Before, Charger, Outcome, Schedule, Start};
 use crate::i2c::Device;
@@ -57,6 +60,93 @@ use crate::ppg::{Consensus, Conversions, Ppg, Rejection};
 // ==============================================================================
 // Scheduling
 // ==============================================================================
+
+/// Whether to measure continuously, rather than when the schedule says:
+/// someone's waiting for a reading (looking at the clock face, or at
+/// Gadgetbridge's live chart), or a workout is under way.
+fn watching() -> bool {
+    crate::heart_reading::watching() || held()
+}
+
+/// Whether a workout, and nothing else, keeps the sensor on.
+fn held() -> bool {
+    !crate::heart_reading::watching() && activity::workout().is_some()
+}
+
+// ==============================================================================
+// Through a workout
+// ==============================================================================
+//
+// The schedule is built for a wrist at rest: it waits for calm, and backs
+// off when a session fails. Exercise is neither calm nor short, so on the
+// sealed watch (2026-11-07 to 20) sessions during walks read 4 times in
+// 36, and nothing at 110 BPM or more ever reached the phone (see
+// `workout`'s docs for the numbers that follow).
+//
+// A moving wrist can't be read (walking swings the light level by 30-700
+// counts against a pulse of ~5, at rhythms the pulse shares), but it
+// pauses: at a crossing, between sets, when the walk ends. A reading
+// takes ~14 s of calm with the sensor already on (two windows on a calm
+// wrist, see `ppg::Consensus`), and ~18 s from a session that must first
+// see three calm polls, then warm up. The logs' walks held 18 calm
+// stretches of 14 s and their efforts 90; 8 and 57 of those lasted 18 s.
+// So through a workout the sensor simply stays on, as it does while
+// someone looks at the clock face, and takes every pause there is, the
+// first minutes of recovery included (a workout only ends some minutes
+// after the wrist lets up).
+//
+// What it costs is LED time: ~68 minutes a day on those logs (117 on the
+// days of a trip, 280 on the busiest), ~3.2 mAh at the ~2.8 mA a session
+// draws, some 2% of the battery, which the user would rather spend than
+// lose the readings (see docs/power-plan.md).
+// It isn't charged to the schedule's budget beyond one session's worth
+// (`heart_schedule::SESSION_RESERVE`): the budget is there to bound what
+// a day of failing tries can cost, and a workout bounds itself (it needs
+// steps or hard movement to go on). A watch that isn't on a wrist (in a
+// bag, on a walk) ends its session within seconds for want of skin, and
+// looks again every [`WORKOUT_RETRY`].
+//
+// Two things keep hundreds of windows on a moving wrist from making a
+// wrong reading where a 30 s session's eleven didn't: the windows that
+// agree must be recent ([`AGREE_WITHIN`]), and one at the arm's swing is
+// left out ([`crate::workout::swing`]).
+//
+// In the logging build, such a session's samples are logged for its first
+// [`WORKOUT_TRACE_CHECKS`] seconds only: an hour of them would be ~330 KB
+// of a ~3 MB log that holds four or five days. Each window's verdict (at `debug`)
+// and every reading are logged throughout.
+
+/// How long after a workout's session found no skin (or lost the sensor)
+/// to look again, while the workout lasts. A watch really off the wrist
+/// costs a few seconds of LED each time; one that only shifted (the
+/// sealed watch said "not on a wrist" twice mid-walk, 2026-11-20) is
+/// measured again for the rest of its workout.
+const WORKOUT_RETRY: u8 = 120;
+
+/// Level checks (seconds) of a workout's session whose samples the
+/// logging build logs (see "Through a workout" above).
+///
+/// TODO: with a reference worn alongside (a chest strap, or the Garmin
+/// again), whole walks of samples would be what a motion-tolerant
+/// estimator is developed on; log them all then.
+const WORKOUT_TRACE_CHECKS: u8 = 120;
+
+/// Windows (one every ~2 s) without an accepted one after which the
+/// accepted ones so far are forgotten, for agreeing with later ones (see
+/// `ppg::Consensus::push`, which keeps its three latest however old).
+///
+/// A session's length of them: the rule that three accepted windows which
+/// agree make a reading was tuned on sessions of 30 s, where it reads a
+/// moving wrist to within a mean 4 BPM. A session that stays on for a
+/// workout, or a long look at the clock face, sees hundreds of windows,
+/// and three stray ones minutes apart agreeing by chance (within 6 BPM,
+/// of a band 160 wide) is no longer rare.
+const AGREE_WITHIN: u8 = (SESSION_LIMIT.as_secs() / 2) as u8;
+
+/// Level checks (seconds) since a session's last reading after which it
+/// no longer ends as having read (see [`Ended::Faded`]): a session's
+/// length.
+const FRESH_CHECKS: u8 = SESSION_LIMIT.as_secs() as u8;
 
 /// How long a background session may try before giving up. A clean
 /// signal on a calm wrist gives a reading after ~10.5 s (half a second
@@ -665,10 +755,22 @@ pub async fn heart_task(i2c: Device) {
                 (schedule.since_reading(uptime()) / 60).min(u32::from(u16::MAX)) as u16
             );
         }
+        // A workout's session (or one looked at during a workout): said
+        // here, as it has no `due` line, and ends on a line of its own.
+        let workout = activity::workout();
+        if let Some(kind) = workout {
+            info!("heart: workout session ({})", kind);
+        }
         // Movement from here on counts towards the next session.
         let before = Before {
             active_polls: activity::take_active_polls(),
-            stepless_polls: activity::stepless_polls(),
+            // A workout's reading is never a resting one, steps or none
+            // (see `heart_schedule::RESTING_STEPLESS_POLLS`).
+            stepless_polls: if workout.is_some() {
+                0
+            } else {
+                activity::stepless_polls()
+            },
             asleep,
         };
 
@@ -701,7 +803,10 @@ pub async fn heart_task(i2c: Device) {
         if !asleep {
             ACCEL.store(ACCEL_TAIL, Ordering::Relaxed);
         }
-        if matches!(outcome, Ok(Ended::Measured(_) | Ended::Charger(Some(_)))) {
+        if matches!(
+            outcome,
+            Ok(Ended::Measured(_) | Ended::Faded | Ended::Charger(Some(_)))
+        ) {
             good_level = level;
         }
         // (Not the light on a cradle, or in the hand that put it there.)
@@ -724,8 +829,14 @@ pub async fn heart_task(i2c: Device) {
         }
         // Rounded up: the budget should err on the side of caution.
         let led_seconds = started.elapsed().as_millis().div_ceil(1000) as u32;
+        // A session that a workout was part of, at its start or its end:
+        // its length says how long the sensor was on for it.
+        let workout = workout.is_some() || activity::workout().is_some();
+        if workout {
+            info!("heart: workout session over after {} s", led_seconds);
+        }
         match outcome {
-            Ok(Ended::Measured(_)) => {}
+            Ok(Ended::Measured(_) | Ended::Faded) => {}
             // A clear line, for field-log analyses to leave it out (see
             // `scripts/ppg_sessions.py`).
             Ok(Ended::Charger(_)) => {
@@ -756,12 +867,27 @@ pub async fn heart_task(i2c: Device) {
         // At the lowest drive, `spent` is `led_seconds`, short of the
         // moments around the LED's switching on and off.
         let spent = spent.max(led_seconds);
+        // A workout's session costs the budget one session's worth,
+        // however long it ran (see "Through a workout").
+        let spent = if workout {
+            spent.min(heart_schedule::SESSION_RESERVE)
+        } else {
+            spent
+        };
+        // A session that read, though not lately, is no failure of the
+        // schedule's either, should the schedule have started it (and a
+        // look at the clock face, or a workout, then kept it going).
+        let background = background && !matches!(outcome, Ok(Ended::Faded));
         let (worn, outcome) = match outcome {
             // What it read before the charger came stands.
             Ok(Ended::Measured(bpm) | Ended::Charger(Some(bpm))) => {
                 (Some(true), Outcome::Reading(bpm))
             }
             Ok(Ended::NoContact | Ended::TooBright) => (Some(false), Outcome::OffWrist),
+            // Skin, as a pulse was read; but no reading to tell the
+            // schedule of now (not as a background session's, see above,
+            // so this counts as neither a measurement nor a failure).
+            Ok(Ended::Faded) => (Some(true), Outcome::NoReading),
             Ok(Ended::TimedOut { calm: true }) => (None, Outcome::CalmNoReading),
             Ok(Ended::TimedOut { calm: false } | Ended::Hopeless { .. }) | Err(()) => {
                 (None, Outcome::NoReading)
@@ -787,10 +913,19 @@ pub async fn heart_task(i2c: Device) {
         // what's wanted, and reopening the chart tries again.
         //
         // On the charger, the wait below looks after it instead.
+        //
+        // A workout does look again, every `WORKOUT_RETRY`, for as long as
+        // nobody's watching: nobody is there to look away, and a watch
+        // that shifted on the wrist mid-walk is worth another try.
+        let mut waited = 0u8;
         while watching() && !on_charger() {
             Timer::after_secs(1).await;
             if maybe_lit {
                 maybe_lit = !retry_off(&mut hrs).await;
+            }
+            waited = waited.saturating_add(1);
+            if held() && waited >= WORKOUT_RETRY {
+                break;
             }
         }
     }
@@ -872,6 +1007,12 @@ enum Ended {
     /// We have a reading (and nobody's watching for more): the last, in
     /// BPM.
     Measured(u8),
+    /// A session that was watched ended more than [`FRESH_CHECKS`] after
+    /// its last reading: it read (so there's skin), but what it read is no
+    /// longer the heart rate now. The readings themselves were published
+    /// as they came; this only keeps the schedule from taking a workout's
+    /// reading of twenty minutes ago for one made as the session ends.
+    Faded,
     /// No reading within [`SESSION_LIMIT`]; `calm`
     /// if the wrist was calm through most of it (see
     /// [`heart_schedule::calm_throughout`]).
@@ -921,8 +1062,17 @@ async fn measure(
     let mut ppg = Ppg::new();
     let mut consensus = Consensus::new();
     let started = Instant::now();
-    // The latest reading, once there is one.
+    // The latest reading, once there is one, and how many level checks
+    // (seconds) ago it came; saturating.
     let mut measured = None;
+    let mut since_read = 0u8;
+    // Windows since the last accepted one; saturating (see `AGREE_WITHIN`).
+    let mut unaccepted = 0u8;
+    // Whether a second's samples go in the log: not late in a workout's
+    // session (see `WORKOUT_TRACE_CHECKS`), unless someone looks at the
+    // clock face, which brings them back for as long as they look. (Asked
+    // afresh each time rather than kept: this task's state is static RAM.)
+    let traced = |checks: u8| !(held() && checks >= WORKOUT_TRACE_CHECKS);
     // For judging whether the wrist was calm through the session: the level
     // checks so far, and how many found it busy.
     let (mut checks, mut busy) = (0u8, 0u8);
@@ -951,13 +1101,19 @@ async fn measure(
         // UI loop looks at the charger at least once a second). The last
         // part-second goes into the log, as for any end.
         if on_charger() {
-            trace_samples(&second);
+            if traced(checks) {
+                trace_samples(&second);
+            }
             return Ok(Ended::Charger(measured));
         }
         let ended = if watching() {
             None
         } else if let Some(bpm) = measured {
-            Some(Ended::Measured(bpm))
+            Some(if since_read < FRESH_CHECKS {
+                Ended::Measured(bpm)
+            } else {
+                Ended::Faded
+            })
         } else if elapsed >= SESSION_LIMIT {
             // Out of time, and that's the end of it. (Up to 0.11.3-rc.2 a
             // session on a calm wrist with a faint pulse went on here for
@@ -972,7 +1128,9 @@ async fn measure(
         if let Some(ended) = ended {
             // The last part-second too, which holds the end of the last
             // window: without it, a replay is a window short.
-            trace_samples(&second);
+            if traced(checks) {
+                trace_samples(&second);
+            }
             return Ok(ended);
         }
 
@@ -996,8 +1154,27 @@ async fn measure(
             let moved = activity::movement();
             movement.write(moved);
             checks = checks.saturating_add(1);
+            since_read = since_read.saturating_add(1);
             if moved > CALM {
                 busy = busy.saturating_add(1);
+            }
+            // A workout's session stops logging its samples after a
+            // while (and the accelerometer's with them, in the logging
+            // build), and says so once, so that what reads the log knows
+            // the session went on. (`checks` stops counting at 255, so it
+            // passes the limit once.)
+            let traced = traced(checks);
+            if checks == WORKOUT_TRACE_CHECKS && !traced {
+                info!("heart: workout session; samples no longer logged");
+            }
+            // A workout is awake, so its session's accelerometer samples
+            // were wanted (see `heart_task`).
+            #[cfg(feature = "field-log")]
+            if activity::workout().is_some() {
+                ACCEL.store(
+                    if traced { ACCEL_SESSION } else { ACCEL_IDLE },
+                    Ordering::Relaxed,
+                );
             }
             let mean = sum / count;
             // A dev kit can be told that its desk is skin (see
@@ -1014,7 +1191,7 @@ async fn measure(
                 mean
             };
             #[cfg(not(feature = "field-log"))]
-            {
+            if traced {
                 debug!(
                     "heart: level {}, mean {}, peak {}, ambient {}, period {} µs",
                     at(*level, drive),
@@ -1026,7 +1203,9 @@ async fn measure(
                 trace_samples(&second);
             }
             #[cfg(feature = "field-log")]
-            trace_level_samples(at(*level, drive), ambient, conversions.period_us(), &second);
+            if traced {
+                trace_level_samples(at(*level, drive), ambient, conversions.period_us(), &second);
+            }
             second.clear();
             let before = (*level, drive);
             if peak >= SATURATED {
@@ -1089,6 +1268,15 @@ async fn measure(
         let Some(verdict) = verdict else {
             continue;
         };
+        // Accepted windows only agree with recent ones (see
+        // `AGREE_WITHIN`): after a session's length without one, start
+        // over. (Counted here, before this window is judged; an accepted
+        // one resets it below.)
+        unaccepted = unaccepted.saturating_add(1);
+        if unaccepted > AGREE_WITHIN {
+            consensus.expire();
+            unaccepted = 0;
+        }
         // A faint window (see `Rejection::Faint`) only counts on a calm
         // wrist, alongside the next; the movement vetoes below can't apply
         // to one, as calm is stricter than either.
@@ -1111,6 +1299,7 @@ async fn measure(
             );
             if let Some(bpm) = consensus.push_faint(bpm, calm, activity::asleep()) {
                 measured = Some(read(bpm, measured, started, at(*level, drive), conversions));
+                since_read = 0;
             }
             continue;
         }
@@ -1134,7 +1323,19 @@ async fn measure(
             consensus.reject();
             continue;
         }
+        // Nor one at the arm's swing, on a walk (see `workout::swing`).
+        if crate::workout::swing(
+            bpm,
+            activity::workout(),
+            activity::stepless_polls(),
+            STRONG_STEPLESS_POLLS,
+        ) {
+            debug!("heart: window rejected: walking ({} BPM)", bpm);
+            consensus.reject();
+            continue;
+        }
         hopeful = true;
+        unaccepted = 0;
         debug!(
             "heart: window {} BPM (quality {}, drift {})",
             bpm, estimate.quality, estimate.drift
@@ -1152,6 +1353,7 @@ async fn measure(
         }
         if let Some(bpm) = usual.or(strong) {
             measured = Some(read(bpm, measured, started, at(*level, drive), conversions));
+            since_read = 0;
         }
     }
 }

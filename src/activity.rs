@@ -55,7 +55,7 @@ use embedded_hal_async::i2c::I2c;
 
 use crate::i2c::Device;
 use crate::step_counter::{Read, StepCounter};
-use crate::{clock, desk, minute_ring, sleep, sleep_hold, stages};
+use crate::{clock, desk, minute_ring, sleep, sleep_hold, stages, workout};
 
 // ==============================================================================
 // The BMA421
@@ -1046,6 +1046,17 @@ pub fn stepless_polls() -> u8 {
 
 static STEPLESS_POLLS: AtomicU8 = AtomicU8::new(0);
 
+/// The workout under way, if the last minutes look like one (see
+/// [`workout::detect`], which this task asks as each minute ends):
+/// [`crate::heart`] measures continuously through it.
+pub fn workout() -> Option<workout::Kind> {
+    workout::Kind::from_bits(WORKOUT.load(Ordering::Relaxed))
+}
+
+/// [`workout()`], as [`workout::Kind::bits`]. One byte, and all the
+/// state detection has: the minutes it judges by are the history's own.
+static WORKOUT: AtomicU8 = AtomicU8::new(0);
+
 /// Set once the accelerometer is configured; nothing else may talk to it
 /// before (setup soft-resets it and uploads its program).
 static READY: AtomicBool = AtomicBool::new(false);
@@ -1670,6 +1681,59 @@ pub async fn activity_task(i2c: Device) {
                 );
             }
             LAST_SLEEP.lock(|s| s.set(summary));
+
+            // And whether the minutes just finished make a workout (see
+            // `workout`), which the heart rate is measured through. After
+            // the sleep revision, as asleep is never one. The minute under
+            // way isn't looked at: it has seen one poll.
+            let recent = HISTORY.lock(|history| {
+                let history = history.borrow();
+                let mut recent = [workout::Minute::default(); workout::WINDOW];
+                for (ago, minute) in recent.iter_mut().rev().enumerate() {
+                    let sample = history.sample(utc_minute, utc_minute - 1 - ago as i64);
+                    *minute = workout::Minute {
+                        steps: sample.steps,
+                        movement: sample.movement,
+                    };
+                }
+                recent
+            });
+            let was = workout();
+            let now = workout::detect(was, &recent, asleep);
+            if now != was {
+                WORKOUT.store(workout::Kind::bits(now), Ordering::Relaxed);
+                // What the rules went by, so a field log shows why: the
+                // last three minutes' steps (a walk's rule), and how many
+                // of the ten moved hard (an effort's).
+                let [.., a, b, c] = recent;
+                let working = recent
+                    .iter()
+                    .filter(|m| m.movement >= workout::EFFORT_MOVEMENT)
+                    .count() as u8;
+                match (was, now) {
+                    (None, Some(kind)) => info!(
+                        "workout: started, {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving)",
+                        kind, a.steps, b.steps, c.steps, working
+                    ),
+                    // A walk within an effort, or the effort a walk ends
+                    // in: the same workout.
+                    (Some(_), Some(kind)) => info!(
+                        "workout: now {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving)",
+                        kind, a.steps, b.steps, c.steps, working
+                    ),
+                    (_, None) => info!(
+                        "workout: over (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving{=str})",
+                        a.steps,
+                        b.steps,
+                        c.steps,
+                        working,
+                        if asleep { "; asleep" } else { "" }
+                    ),
+                }
+                // Starts the heart rate's continuous session, or lets the
+                // one under way end, without waiting out its timer.
+                crate::heart::wake();
+            }
             // Every couple of minutes, what the phone hasn't fetched goes
             // to the SPI flash too, for a crash to lose no more than those
             // minutes (see `snapshot`): at the next poll, from `serve`.

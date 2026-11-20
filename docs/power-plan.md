@@ -373,6 +373,28 @@ Asleep, sessions are timed to the phone's 5-minute buckets
 minutes after the last made ~11.6, ~3% more of the night's LED
 (~0.03 mAh a night).
 
+### Through a workout
+
+From 0.11.3-rc.5 the sensor stays on through a workout (`workout`;
+`heart`'s "Through a workout"): three minutes at a walking pace, or
+eight minutes of ten with the wrist moving hard, until the wrist has let
+up for three or five minutes. A moving wrist only reads in its pauses,
+and a sensor that's already on catches a pause of ~14 s where a session
+needs ~18 s; the sealed watch's logs of 2026-11-07 to 20 held 18 such
+pauses in walks and 90 in efforts, where sessions read 4 and 18 times.
+
+Replayed over those logs (`host-tests/workout`), the rules find 38
+workouts in 11.9 days, 809 minutes: **68 minutes of LED a day** (117 on
+the four days of a trip, 280 on its busiest, most of that an evening of
+busy hands that was no workout). At the ~2.8 mA a session draws (E,
+never measured), that's ~3.2 mAh a day, ~2% of the battery (~5.5 mAh on
+a trip's days, ~13 on that busiest one), on top of the schedule's own,
+and outside its budget: a workout's session is charged to `LED_BUDGET` as one
+session, however long it runs. Nothing caps a workout's length but the
+wrist: it needs steps or hard movement to go on. The level control can
+raise the drive (30 mA at level 2, which the sealed watch's wrist is
+sometimes at), and then the LED's share is up to 2.4× that.
+
 The logging build's longer sessions (0.11.0 to 0.11.3-rc.2, ~2 mAh a
 day) are gone; it still logs the accelerometer's samples through every
 awake session, ~0.05 mAh a day of writing to the SPI flash.

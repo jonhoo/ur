@@ -53,6 +53,15 @@
 //! looking, so `heart` measures right away), but their readings count as
 //! measurements, and their LED time comes out of the budget.
 //!
+//! Nor is a workout's session (see [`crate::workout`], and `heart`'s
+//! "Through a workout"): the sensor stays on through it, as for the clock
+//! face, because what this schedule waits for (a calm wrist) and does
+//! about failure (back off) both lose exercise altogether. The schedule
+//! hears of it as a watched session that cost one session's LED
+//! ([`SESSION_RESERVE`]), whose reading, if it had one in its last half
+//! minute, is never a resting one; and it carries on from there, most
+//! often at [`ELEVATED_INTERVAL`], which follows the recovery.
+//!
 //! **Never on the charger** (see [`Schedule::charger`]): no session starts
 //! while its power is present, scheduled or watched, and one under way
 //! stops, counting for nothing but its LED time. Taken off, the watch
@@ -377,9 +386,13 @@ pub const CALM_WAIT: u32 = 2 * 60;
 /// against 400-1600 s without steps). Counting either kept the resting
 /// estimate empty all afternoon, as every reading followed some movement.
 ///
-/// TODO: exercise without steps (cycling, weights) counts as rest this way;
+/// Exercise without steps (cycling, weights) would count as rest this
+/// way, so `heart` passes no stepless polls for a session during a
+/// workout (see [`crate::workout`]).
+///
+/// TODO: effort that the workout rules don't catch still counts as rest;
 /// its readings only nudge the estimate up a beat each (see
-/// `track_resting`), but a long session could.
+/// `track_resting`), but a long spell of them could.
 pub const RESTING_STEPLESS_POLLS: u8 = 90;
 
 /// How far apart (BPM) the first two resting readings may be for the
