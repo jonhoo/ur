@@ -16,6 +16,7 @@ missing below were test builds for the dev kit.
 
 - Take a heart rate from two strongly periodic readings in a row that agree, rather than waiting for a third, as long as the wrist isn't walking (a swinging arm can look like a slow pulse) (5d4d89a)
 - Show a notification again when you turn your wrist to look just after missing it: one that arrived with the screen off, and went dark again untouched, shows once more (without the buzz) in place of the time at a look within 20 seconds, once; a notification you touched, read in the history, or got with the screen on doesn't, nor any in the quiet night (c4d9d5f)
+- Log which screen shows whenever that changes, and what changed it (`ui: Music by SwipeUp`, `ui: Glance by Glance`), and the screen going off with how long it was on (`ui: Off by Tick after 3 s`), so a field log can show which screens and gestures get used; also the music screen's buttons, a call answered or declined, an alarm stopped, snoozed or switched, a timer started, and a theme chosen. Never what a notification or a call says, nor who or which app it's from. CONTRIBUTING's "Field logs" lists the lines (3a328a7)
 
 ### Changed
 
