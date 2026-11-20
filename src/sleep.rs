@@ -7,10 +7,13 @@
 //! rate sensor last saw skin:
 //!
 //! - **Falling asleep** is [`ONSET`] minutes of stillness, give or take
-//!   stirs of up to [`STIR`] minutes; the sleep is dated from the start of
-//!   the stillness, not the moment it qualified.
+//!   stirs of up to [`STIR`] minutes, that are a sleeper's and a wrist's
+//!   (see "Lying awake" below): in at least [`CALM_MINUTES`] of them the
+//!   wrist didn't so much as fidget, and one has a heart rate reading, or
+//!   a stir. The sleep is dated from the start of those minutes, not the
+//!   moment they qualified.
 //!   Within a night (after a wake of up to [`SAME_NIGHT_GAP`] minutes),
-//!   [`RESUME`] minutes are enough.
+//!   [`RESUME`] minutes of stillness are enough, fidgeting or not.
 //! - **Waking** is [`WAKE_RUN`] minutes of movement, [`MOVED`] of which
 //!   moved themselves (the smoothing spreads one twitch over three), or
 //!   walking (at least [`WAKE_STEPS`] steps in a minute). It's dated from
@@ -32,6 +35,64 @@
 //! minute, revising its recent past. Minutes older than the window are
 //! final, as far as sleep and waking go (their stage can still change for a
 //! while: see [`crate::sleep_hold`]).
+//!
+//! # Lying awake
+//!
+//! Stillness alone took lying awake in bed for sleep: on three of four
+//! evenings of a trip (2026-11-16 to 19), a wearer lying still, awake,
+//! "fell asleep" up to three hours early (32 and 44 minutes of it went to
+//! Health Connect as light sleep), and the quiet night that started with
+//! it ignored their taps. A minute's mean movement doesn't tell the two
+//! apart (lying awake, 40 to 150; asleep, 30 to 50, and into the hundreds
+//! at a twitch), but its polls do. Asleep, the wrist lies dead still for
+//! minutes on end, every 2-second poll at the sensor's floor (25 to 80,
+//! with breathing and the pulse), and then twitches or turns in one go.
+//! Awake, it fidgets: a poll of 100 to 400 in most minutes, while the
+//! minute's mean stays low. So each minute keeps whether any of its polls
+//! moved [`FIDGET`] or more ([`Minute::fidgeted`]), and falling asleep
+//! takes [`CALM_MINUTES`] of the stillness's first [`ONSET`] without one.
+//!
+//! In the field logs (13 nights, 2026-11-08 to 20, nine of them with a
+//! Garmin alongside), the stretches of lying awake that passed for sleep
+//! had at most 7 such minutes in any 20, but for one of 12 (lying down
+//! for twenty minutes before getting up again, 2026-11-19 at 23:57); of
+//! the 20-minute spans within real sleep, 99% had 8 or more, and 70% the
+//! 14 asked for. Asking 14 removed all four stretches of false sleep in
+//! those logs (124 minutes, three in the evening and one in an
+//! afternoon), and every quiet night that started early (198 minutes of
+//! quiet before the night's sleep), and moved 5 of the 13 onsets, 2 to 7
+//! minutes later: to after the last settling movement, which is where the
+//! Garmin has them (its onsets came 5.4 minutes from ours on average
+//! before, and 4.4 after; one, 2026-11-16, went from 1 minute late to 7).
+//! From any minute of those nights' sleep, the 20 minutes from it pass 7
+//! times in 10; the wait for ones that do is at most 18 minutes for 9 in
+//! 10, and 38 for 99 in 100. So a restless start to a night delays
+//! its onset, and its quiet, by that much at worst. (Sleep in a moving
+//! vehicle wouldn't pass at all. TODO: revisit should that matter.)
+//!
+//! A watch lying somewhere is as calm as a sleeper, and then some. The
+//! heart rate sensor often can't say it's off the wrist (see
+//! [`crate::desk`], which finds one lying level; on 2026-11-18 one lay
+//! tilted while its wearer showered, and "fell asleep" after 20 minutes).
+//! So those [`ONSET`] minutes must also show a wrist: a heart rate
+//! reading in one of them (a pulse means skin; the watch tries every few
+//! minutes at rest, and asleep 19 in 20 tries read), or failing that a
+//! stir, which a nightstand doesn't make. The stir is for a night when
+//! the sensor reads nothing (it has happened: 2026-11-08): sleep is then
+//! found from its first stir on, rather than not at all.
+//!
+//! The heart rate's *level* plays no part. It was looked at: asking that
+//! the readings in the stillness be 6 to 8 BPM under the median of the
+//! six hours before also kept those evenings awake, with onsets at most
+//! 3 minutes late. But it needs hours of readings from before the
+//! stillness, which no pass's minutes hold (and a level taken while
+//! already lying in bed leaves no drop to find: such a night would never
+//! start), the margins were a beat or two (lying awake at 64 to 69 BPM;
+//! asleep on a night after drinking, 67 for the first ten minutes), and
+//! the drop comes after the onset, not before: by a Garmin's year of
+//! nights, the rate is still 3.6 BPM over the resting rate ten minutes in.
+//! TODO: as a second opinion, should fidgeting alone let lying awake
+//! through: against a resting rate kept over several nights.
 //!
 //! The thresholds are first guesses in our movement units (Bangle.js'
 //! 8192-per-g; ~25 lying on a desk, hundreds when handled), to be tuned from
@@ -110,6 +171,11 @@ pub struct Minute {
     pub steps: u16,
     /// Whether the heart rate sensor last saw skin, if it has looked.
     pub worn: Option<bool>,
+    /// Whether the wrist fidgeted: one of the minute's polls moved
+    /// [`FIDGET`] or more.
+    pub fidgeted: bool,
+    /// Whether the heart rate was read in this minute: a pulse, so skin.
+    pub pulse: bool,
 }
 
 // ==============================================================================
@@ -122,6 +188,17 @@ pub const STILL_LIMIT: u16 = 120;
 /// Minutes of stillness that make sleep. Long enough that sitting still
 /// through a TV episode with the odd fidget doesn't count.
 pub const ONSET: usize = 20;
+/// A poll's movement (as [`Minute::movement`], over 2 seconds rather than
+/// a minute) from which the wrist fidgeted. A sleeping wrist's polls stay
+/// under 80 or so between its stirs; a wrist lying awake has one of 100
+/// to 400 in most minutes. (Anywhere from 100 to 150 told the field logs'
+/// evenings from their nights.)
+pub const FIDGET: u16 = 120;
+/// How many of the [`ONSET`] minutes that make sleep must be without a
+/// fidget. The field logs' lying awake had at most 7, and 12 once; 13 to
+/// 16 all kept it out, 16 at up to 14 minutes' delay to a real onset,
+/// and 14 at up to 7 (see the module docs).
+pub const CALM_MINUTES: usize = 14;
 /// Minutes of stillness that make sleep again soon after waking (within
 /// [`SAME_NIGHT_GAP`]): falling back asleep in the night is quicker, and a
 /// false wake (a cluster of stirs) shouldn't cost 20 minutes of sleep.
@@ -241,7 +318,14 @@ pub fn classify(
             let length = if still(t) { stillness(t) } else { 0 };
             let same_night =
                 last_asleep.is_some_and(|last| t as isize - last <= SAME_NIGHT_GAP as isize);
-            if length >= if same_night { RESUME } else { ONSET } {
+            // The stillness is at least as long as the minutes asked
+            // about, so they're all here.
+            let falls_asleep = if same_night {
+                length >= RESUME
+            } else {
+                length >= ONSET && sleeper(&minutes[t..t + ONSET])
+            };
+            if falls_asleep {
                 asleep = true;
                 // Stirs inside are sorted out below, as within any sleep.
                 out[t] = Kind::Light;
@@ -304,6 +388,21 @@ pub fn classify(
     }
 }
 
+/// Whether a stillness's first minutes (the [`ONSET`] that would make it
+/// sleep) are a sleeper's, rather than someone's lying awake, or a watch
+/// lying somewhere (see the module docs): at least [`CALM_MINUTES`] of
+/// them without a fidget, and one of them with a pulse, or else a stir.
+///
+/// Of just those minutes, whatever came before or comes after: so every
+/// pass that holds them decides the same, and a stillness that's
+/// [`ONSET`] minutes old has been decided (as `crate::sleep_hold` takes
+/// for granted, in what it holds back). A later start within the same
+/// stillness may still pass: its minutes are others.
+fn sleeper(minutes: &[Minute]) -> bool {
+    let calm = minutes.iter().filter(|minute| !minute.fidgeted).count();
+    calm >= CALM_MINUTES && minutes.iter().any(|minute| minute.pulse || moved(*minute))
+}
+
 /// How long before a pass's minutes the wearer was last asleep, for
 /// [`classify`]: 1 if in the minute just before them, and so on, given the
 /// kind of the minute `ago` minutes before the pass's first (`Unknown`
@@ -360,7 +459,10 @@ pub fn still_among(before: Option<Minute>, minute: Minute, after: Option<Minute>
 /// [`ONSET`] minutes long is sleep already, so one that may yet become
 /// sleep is shorter, and followed by at most a stir of up to [`STIR`]
 /// minutes and the minute under way; with a minute to spare, and the
-/// oldest only as its newer neighbour's (for the smoothing).
+/// oldest only as its newer neighbour's (for the smoothing). (A longer
+/// one that isn't sleep, as its first minutes weren't a sleeper's, may
+/// yet be from a later minute: one less than [`ONSET`] minutes old, so
+/// among these too.)
 pub const ONSET_SPAN: usize = ONSET + STIR + 2 + 1;
 
 /// Where, among the newest of `minutes` (oldest first; the newest still
@@ -539,7 +641,7 @@ pub fn last_sleep(minutes: usize, kind: impl Fn(usize) -> Kind) -> Option<(usize
 ///
 /// Nothing here survives a reset. That fails safe: after one, the night is
 /// over, and starts again once the classifier (whose history is lost too)
-/// sees [`ONSET`] minutes of stillness. So a reset at night costs ~20
+/// sees [`ONSET`] minutes of sleep. So a reset at night costs ~20
 /// minutes of the screen lighting up for notifications, and a reset can't
 /// leave the watch quiet through the day.
 ///

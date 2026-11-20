@@ -827,6 +827,8 @@ fn activity_fetch(watch: &mut Watch, since_ms: i64) {
                 movement: if steps > 0 { 1000 } else { 0 },
                 steps,
                 worn: Some(true),
+                fidgeted: steps > 0,
+                pulse: false,
             }
         };
         // What the watch would have settled by now, checking every

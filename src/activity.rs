@@ -586,13 +586,15 @@ pub struct Sample {
     /// Packed into the byte the struct would otherwise pad with (24 hours
     /// of samples cost the same 8.6 KB either way): the minute's
     /// [`sleep::Kind`] (bits 0–3), whether the watch was worn (bits 4–5: 0
-    /// unknown, 1 yes, 2 no), and whether the minute was recorded at all
-    /// (bit 6).
+    /// unknown, 1 yes, 2 no), whether the minute was recorded at all
+    /// (bit 6), and whether the wrist fidgeted in it (bit 7: see
+    /// [`sleep::FIDGET`]).
     flags: u8,
 }
 
 impl Sample {
     const SEEN: u8 = 0x40;
+    const FIDGETED: u8 = 0x80;
 
     pub fn seen(&self) -> bool {
         self.flags & Self::SEEN != 0
@@ -616,7 +618,12 @@ impl Sample {
             Some(true) => 1,
             Some(false) => 2,
         };
-        self.flags = (self.flags & 0x0F) | Self::SEEN | (worn << 4);
+        self.flags = (self.flags & (0x0F | Self::FIDGETED)) | Self::SEEN | (worn << 4);
+    }
+
+    /// Marks the minute as one the wrist fidgeted in.
+    fn set_fidgeted(&mut self) {
+        self.flags |= Self::FIDGETED;
     }
 
     /// Marks a recorded minute off the wrist, as found on a desk after
@@ -654,6 +661,8 @@ impl Sample {
             movement: self.movement,
             steps: self.steps,
             worn: self.worn(),
+            fidgeted: self.flags & Self::FIDGETED != 0,
+            pulse: self.heart_rate > 0,
         }
     }
 }
@@ -889,8 +898,8 @@ static LAST_SLEEP: Mutex<CriticalSectionRawMutex, Cell<Option<Sleep>>> =
     Mutex::new(Cell::new(None));
 
 /// Whether the wearer is asleep, as of the last minute's classification.
-/// Falling asleep is recognised once [`sleep::ONSET`] minutes of stillness
-/// have passed, waking after [`sleep::WAKE_RUN`] minutes of movement (or
+/// Falling asleep is recognised once [`sleep::ONSET`] minutes of a
+/// sleeper's stillness have passed (see [`sleep`]), waking after [`sleep::WAKE_RUN`] minutes of movement (or
 /// at once on getting up and walking), so this lags both by that much.
 /// (Or a dev kit was told the wearer is: see `debug::asleep_forced`.)
 pub fn asleep() -> bool {
@@ -1573,6 +1582,11 @@ pub async fn activity_task(i2c: Device) {
                 .steps
                 .saturating_add(new_steps.min(u32::from(u16::MAX)) as u16);
             sample.movement = movement;
+            // What tells lying awake from sleep (see `sleep`): the
+            // minute's mean hides a poll like this one.
+            if recent >= sleep::FIDGET {
+                sample.set_fidgeted();
+            }
             // Off the wrist on a desk, whatever the heart rate sensor
             // last made of it (often nothing: a desk reflects its LED).
             sample.set_seen(if lying.on() {

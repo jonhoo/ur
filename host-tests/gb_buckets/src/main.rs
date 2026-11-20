@@ -1192,12 +1192,17 @@ mod tests {
         movement: 800,
         steps: 30,
         worn: Some(true),
+        fidgeted: true,
+        pulse: false,
     };
     const STILL: sleep::Minute = sleep::Minute {
         seen: true,
         movement: 30,
         steps: 0,
         worn: Some(true),
+        // A sleeper's stillness: no fidgeting, and a pulse.
+        fidgeted: false,
+        pulse: true,
     };
     /// How long after a sleep's end it's settled.
     const SETTLED: i64 = (sleep::WINDOW + sleep::SAME_NIGHT_GAP) as i64;
@@ -1332,6 +1337,8 @@ mod tests {
         movement: 800,
         steps: sleep::WAKE_STEPS,
         worn: Some(true),
+        fidgeted: true,
+        pulse: false,
     };
     /// Up, but not walking: moving about without steps.
     const FIDGETING: sleep::Minute = sleep::Minute {
@@ -1707,12 +1714,26 @@ mod tests {
                         Truth::OffWrist | Truth::Off => 0,
                     };
                     let measured = rng.chance(20);
+                    // Whether a poll moved (`sleep::FIDGET`), from the
+                    // minute's own numbers, so that the nights stay as
+                    // they were: awake, always; asleep, at a stir or a
+                    // twitch; and lounging, in every other minute, so
+                    // that dozing on the sofa still falls asleep and
+                    // takes it back, which is what tries the hold.
+                    let fidgeted = match truth {
+                        Truth::Active | Truth::Up => true,
+                        Truth::Lounging => movement % 2 == 0,
+                        Truth::Asleep | Truth::Rem | Truth::DeepAsleep => movement >= sleep::FIDGET,
+                        Truth::OffWrist | Truth::Off => false,
+                    };
                     minutes.push((
                         sleep::Minute {
                             seen: truth != Truth::Off,
                             movement,
                             steps,
                             worn: Some(truth != Truth::OffWrist),
+                            fidgeted,
+                            pulse: measured && bpm > 0,
                         },
                         if measured { bpm as u8 } else { 0 },
                     ));

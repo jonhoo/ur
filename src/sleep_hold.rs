@@ -162,11 +162,13 @@
 //!   few restless minutes at the window's end, which become awake).
 //! - the stillness the newest minutes are in, which may yet become sleep
 //!   (see [`sleep::unsettled_onset`]): at most [`sleep::ONSET_SPAN`]
-//!   minutes, as one any longer is sleep already. This is what a false
-//!   start of sleep holds back: a still wearer who gets up before it
-//!   becomes sleep. (Its first minutes would otherwise reach Gadgetbridge
-//!   as awake, the sleep that follows starting up to 20 minutes late
-//!   there.)
+//!   minutes, as one any longer is sleep already, or won't be from
+//!   before those (its first minutes weren't a sleeper's: only a start
+//!   less than [`sleep::ONSET`] minutes old is still open). This is
+//!   what a false start of sleep holds back: a still wearer who gets up
+//!   before it becomes sleep. (Its first minutes would otherwise reach
+//!   Gadgetbridge as awake, the sleep that follows starting up to 20
+//!   minutes late there.)
 //!
 //! By day, with no sleep in the last 2¼ hours, that's nothing, or the
 //! couple of dozen minutes of a wearer sitting still, which are stepless

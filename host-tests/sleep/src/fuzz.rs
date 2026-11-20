@@ -215,6 +215,11 @@ fn any_minutes_classify_as_their_evidence_says() {
                         1 => None,
                         _ => Some(true),
                     },
+                    // From the movement's own bits: mostly calm minutes
+                    // with a pulse now and then, as a night's are, and
+                    // every other mix.
+                    fidgeted: movement % 8 == 0,
+                    pulse: movement % 3 == 0,
                 })
                 .collect();
             // Last asleep any time before, or never: 1 is the minute just

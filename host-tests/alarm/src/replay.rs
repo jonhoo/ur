@@ -88,6 +88,8 @@ fn parse(path: &str) -> Night {
     let mut rang = Vec::new();
     let mut minutes: BTreeMap<i64, Sums> = BTreeMap::new();
     let mut heart: BTreeMap<i64, u8> = BTreeMap::new();
+    // The minutes with a poll that moved `sleep::FIDGET` or more.
+    let mut fidgets = std::collections::BTreeSet::new();
     let mut worn = None;
     for line in text.lines() {
         let Some((uptime, rest)) = line.split_once(' ') else {
@@ -154,6 +156,9 @@ fn parse(path: &str) -> Night {
         let movement = movement.min(u64::from(u16::MAX)) as u16;
         let steps = steps.min(u64::from(u16::MAX)) as u16;
         polls.push(Poll { utc, movement });
+        if movement >= sleep::FIDGET {
+            fidgets.insert(minute);
+        }
         let entry = minutes
             .entry(minute)
             .or_insert((0, 0, 0, None, (movement, steps)));
@@ -173,6 +178,8 @@ fn parse(path: &str) -> Night {
                 movement: (weighted / samples.max(1)).min(u64::from(u16::MAX)) as u16,
                 steps,
                 worn,
+                fidgeted: fidgets.contains(&m),
+                pulse: heart.contains_key(&m),
             },
             None => Minute::default(),
         })
@@ -194,6 +201,8 @@ fn parse(path: &str) -> Night {
                 movement,
                 steps,
                 worn,
+                fidgeted: movement >= sleep::FIDGET,
+                pulse: false,
             };
         }
         if now > 0 {

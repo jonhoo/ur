@@ -60,6 +60,10 @@ enum Truth {
     Sitting,
     /// Watching TV: still-ish, with fidgets.
     Lounging,
+    /// Lying in bed awake: as still as sleep by the minute, but fidgeting.
+    /// (Only in the tests: `a_night` goes straight to sleep.)
+    #[cfg_attr(not(test), allow(dead_code))]
+    LyingAwake,
     /// Light sleep.
     Asleep,
     /// A long, very still stretch of sleep.
@@ -110,15 +114,30 @@ fn minute(rng: &mut Rng, truth: Truth) -> Minute {
             },
             0,
         ),
+        // By the minute, light sleep without its stirs.
+        Truth::LyingAwake => (rng.range(40, 110), 0),
         Truth::DeepAsleep => (rng.range(15, 45), 0),
         Truth::Up => (rng.range(400, 1500), rng.range(10, 40)),
         Truth::OffWrist => (rng.range(18, 30), 0),
+    };
+    // Whether one of the minute's polls moved: awake, in most minutes,
+    // even lying still (the field logs' lying awake had one in 13 to 16
+    // minutes of 20; from the minute's own numbers, so that no night
+    // changes for it); asleep, only at a stir or a twitch.
+    let fidgeted = match truth {
+        Truth::Active | Truth::Sitting | Truth::Lounging | Truth::Up => true,
+        Truth::LyingAwake => movement % 5 != 0,
+        Truth::Asleep | Truth::Rem | Truth::DeepAsleep => movement >= sleep::FIDGET,
+        Truth::OffWrist => false,
     };
     Minute {
         seen: true,
         movement,
         steps,
         worn: Some(truth != Truth::OffWrist),
+        fidgeted,
+        // The readings are `build`'s to place.
+        pulse: false,
     }
 }
 
@@ -128,8 +147,14 @@ fn build(rng: &mut Rng, spans: &[(Truth, usize)]) -> (Vec<Truth>, Vec<Minute>) {
     let mut minutes = Vec::new();
     for &(kind, length) in spans {
         for _ in 0..length {
+            // A heart rate reading every 5 minutes, as `heart_rates`
+            // gives them, while the watch is worn.
+            let pulse = truth.len() % 5 == 0 && kind != Truth::OffWrist;
             truth.push(kind);
-            minutes.push(minute(rng, kind));
+            minutes.push(Minute {
+                pulse,
+                ..minute(rng, kind)
+            });
         }
     }
     (truth, minutes)
@@ -174,7 +199,7 @@ fn heart_rates(seed: u64, truth: &[Truth]) -> Vec<u8> {
             let base = 56 - (t.saturating_sub(300).min(480) / 80) as u16;
             let bpm = match truth {
                 Truth::Active | Truth::Up => rng.range(75, 95),
-                Truth::Sitting | Truth::Lounging => rng.range(62, 72),
+                Truth::Sitting | Truth::Lounging | Truth::LyingAwake => rng.range(62, 72),
                 Truth::Asleep => base + rng.range(1, 4),
                 Truth::DeepAsleep => base + rng.range(0, 2) - 1,
                 Truth::Rem => base + rng.range(9, 13),
@@ -397,6 +422,8 @@ fn replay(path: &str, reference: Option<&str>) {
     let mut anchor: Option<(f64, i64)> = None;
     let mut minutes: std::collections::BTreeMap<i64, (u64, u64, u16, Option<bool>)> =
         Default::default();
+    // The minutes with a poll that moved `sleep::FIDGET` or more.
+    let mut fidgets: std::collections::BTreeSet<i64> = Default::default();
     let mut heart: std::collections::BTreeMap<i64, u8> = Default::default();
     let mut worn: Option<bool> = None;
     let desks = std::env::var("UR_DESK").as_deref() != Ok("off");
@@ -481,6 +508,9 @@ fn replay(path: &str, reference: Option<&str>) {
                 entry.3 = Some(false);
             }
         }
+        if poll >= sleep::FIDGET {
+            fidgets.insert(minute);
+        }
         let entry = minutes.entry(minute).or_insert((0, 0, 0, None));
         entry.0 += movement * samples;
         entry.1 += samples;
@@ -501,6 +531,8 @@ fn replay(path: &str, reference: Option<&str>) {
                 movement: (weighted / samples.max(1)).min(u64::from(u16::MAX)) as u16,
                 steps,
                 worn,
+                fidgeted: fidgets.contains(&m),
+                pulse: heart.contains_key(&m),
             },
             None => Minute::default(),
         })
@@ -508,9 +540,11 @@ fn replay(path: &str, reference: Option<&str>) {
     let heart: Vec<u8> = (first..=last)
         .map(|m| heart.get(&m).copied().unwrap_or(0))
         .collect();
-    let (kinds, _, settles) = settling(&evidence, &heart);
+    let (kinds, asleep, settles) = settling(&evidence, &heart);
     // For analysis outside (see tmp/fleet-1116/sleep): each minute's
-    // evidence and class, one line per UTC minute.
+    // evidence and class, one line per UTC minute; then whether the wrist
+    // fidgeted in it, and whether the watch said "asleep" during it (the
+    // leading edge, which the quiet night goes by).
     if let Ok(path) = std::env::var("UR_DUMP") {
         use std::fmt::Write as _;
         let mut dump = String::new();
@@ -522,14 +556,16 @@ fn replay(path: &str, reference: Option<&str>) {
             };
             writeln!(
                 dump,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{:?}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{:?}\t{}\t{}",
                 first + t as i64,
                 u8::from(minute.seen),
                 minute.movement,
                 minute.steps,
                 worn,
                 heart[t],
-                kind
+                kind,
+                u8::from(minute.fidgeted),
+                u8::from(asleep[t])
             )
             .expect("writing to a string");
         }
@@ -901,6 +937,8 @@ mod tests {
             movement: 30,
             steps: 0,
             worn: Some(true),
+            fidgeted: false,
+            pulse: true,
         };
         let up = Minute {
             movement: 800,
@@ -937,6 +975,8 @@ mod tests {
                 movement: 30,
                 steps: 0,
                 worn: Some(true),
+                fidgeted: false,
+                pulse: true,
             };
             minutes
         ];
@@ -1213,6 +1253,7 @@ mod tests {
         let still = Minute {
             seen: true,
             movement: 35,
+            pulse: true,
             ..Minute::default()
         };
         let twitch = Minute {
@@ -1263,6 +1304,8 @@ mod tests {
             movement: 30,
             steps: 0,
             worn: Some(true),
+            fidgeted: false,
+            pulse: true,
         };
         let walk = Minute {
             movement: 1500,
@@ -1379,6 +1422,8 @@ mod tests {
             movement,
             steps: 0,
             worn: Some(true),
+            fidgeted: false,
+            pulse: true,
         };
         let mut minutes = vec![worn(30); 15];
         // Taking it off: a stir, as far as stillness goes.
@@ -1401,18 +1446,146 @@ mod tests {
         );
     }
 
-    /// Without the heart rate sensor's verdict (it hasn't looked yet), a
-    /// motionless watch reads as sleep: a known limitation, pinned here so
-    /// a change is noticed. (A level one, face up, is found by `desk`.)
+    /// Without the heart rate sensor's verdict (its sessions end without
+    /// one on many a surface), a motionless watch is still not a sleeper:
+    /// no reading says skin, and nothing stirs. (As on 2026-11-18, lying
+    /// tilted, so not `desk`'s to find, while its wearer showered: it used
+    /// to fall asleep after 20 minutes.)
     #[test]
-    fn off_the_wrist_without_heart_rate_looks_like_sleep() {
+    fn off_the_wrist_without_a_verdict_is_not_sleep() {
         let mut rng = Rng::new(1);
-        let (_, mut minutes) = build(&mut rng, &[(Truth::OffWrist, 120)]);
+        let (_, mut minutes) = build(
+            &mut rng,
+            &[
+                (Truth::Active, 30),
+                (Truth::OffWrist, 240),
+                (Truth::Active, 30),
+            ],
+        );
         for m in &mut minutes {
             m.worn = None;
         }
-        let kinds = incremental(&minutes);
-        assert!(kinds.iter().any(|k| k.is_sleep()));
+        let (kinds, asleep) = firmware(&minutes, &[]);
+        assert!(!kinds.iter().any(|k| k.is_sleep()), "{}", timeline(&kinds));
+        assert!(!asleep.iter().any(|&a| a));
+    }
+
+    /// Lying in bed awake, for hours, as still as sleep by the minute and
+    /// with the heart rate where it was all evening, isn't sleep, and
+    /// starts no quiet night; the sleep that follows starts where it does.
+    #[test]
+    fn lying_awake_is_not_sleep() {
+        for seed in 0..20 {
+            let mut rng = Rng::new(seed);
+            let (truth, minutes) = build(
+                &mut rng,
+                &[
+                    (Truth::Active, 120),
+                    (Truth::LyingAwake, 180),
+                    (Truth::DeepAsleep, 90),
+                    (Truth::Asleep, 240),
+                    (Truth::Active, 60),
+                ],
+            );
+            let heart = heart_rates(seed, &truth);
+            let (kinds, asleep) = firmware(&minutes, &heart);
+            let quiet = nights(&asleep, None);
+            // (But for the last of it: sleep may start with a few
+            // fidgets, and the odd minute lying awake has none.)
+            assert!(
+                !kinds[..300 - sleep::CALM_MINUTES]
+                    .iter()
+                    .any(|k| k.is_sleep()),
+                "seed {seed}:\n{}",
+                timeline(&kinds)
+            );
+            assert!(!quiet[..300].contains(&true), "seed {seed}");
+            // The sleep, from its first minutes, and declared as soon as
+            // ever: `ONSET` minutes in.
+            assert!(
+                kinds[302..620].iter().filter(|k| k.is_sleep()).count() >= 300,
+                "seed {seed}:\n{}",
+                timeline(&kinds)
+            );
+            let declared = asleep.iter().position(|&a| a).expect("asleep");
+            assert!((300..=322).contains(&declared), "seed {seed}: {declared}");
+        }
+    }
+
+    /// Falling asleep after a restless quarter of an hour in bed is dated
+    /// from where the wrist came to rest, give or take the few fidgets
+    /// sleep may start with, and declared `ONSET` minutes after.
+    #[test]
+    fn sleep_starts_where_the_wrist_comes_to_rest() {
+        for seed in 0..20 {
+            let mut rng = Rng::new(seed);
+            let (_, mut minutes) = build(
+                &mut rng,
+                &[
+                    (Truth::Active, 60),
+                    (Truth::LyingAwake, 15),
+                    (Truth::DeepAsleep, 200),
+                ],
+            );
+            // Fidgeting in every minute of it, to know where rest begins.
+            for minute in &mut minutes[60..75] {
+                minute.fidgeted = true;
+            }
+            let (kinds, asleep) = firmware(&minutes, &[]);
+            let onset = kinds.iter().position(|k| k.is_sleep()).expect("sleep");
+            // At most `ONSET - CALM_MINUTES` fidgeting minutes belong.
+            let early = sleep::ONSET - sleep::CALM_MINUTES;
+            assert!(
+                (75 - early..=76).contains(&onset),
+                "seed {seed}: from {onset}\n{}",
+                timeline(&kinds)
+            );
+            let declared = asleep.iter().position(|&a| a).expect("asleep");
+            assert!(declared <= onset + sleep::ONSET, "seed {seed}: {declared}");
+        }
+    }
+
+    /// A night on which the heart rate sensor reads nothing at all is
+    /// still a night: with no pulse to say it's a wrist, a stir does, so
+    /// sleep is found from (up to `ONSET` minutes before) its first stir.
+    /// And a night with a reading only every quarter of an hour is as
+    /// one with all of them.
+    #[test]
+    fn a_night_without_heart_rate_readings_is_found() {
+        for seed in 0..20 {
+            let mut rng = Rng::new(seed);
+            let (_, minutes) = a_night(&mut rng);
+            let with = incremental(&minutes);
+
+            let sparse: Vec<Minute> = minutes
+                .iter()
+                .enumerate()
+                .map(|(t, &m)| Minute {
+                    pulse: m.pulse && t % 15 == 0,
+                    ..m
+                })
+                .collect();
+            assert_eq!(incremental(&sparse), with, "seed {seed}");
+
+            let none: Vec<Minute> = minutes
+                .iter()
+                .map(|&m| Minute { pulse: false, ..m })
+                .collect();
+            let without = incremental(&none);
+            // 23:00 to 07:00 is 300..780. Light sleep stirs in 1 minute
+            // of 25, but the deep sleep from 00:00 to 01:10 not at all:
+            // a night whose first hour had no stir starts after that.
+            let (first, onset) = (
+                with.iter().position(|k| k.is_sleep()).expect("sleep"),
+                without.iter().position(|k| k.is_sleep()).expect("sleep"),
+            );
+            assert!(
+                (first..first + 150).contains(&onset),
+                "seed {seed}: from {onset}, with readings {first}\n{}",
+                timeline(&without)
+            );
+            assert_eq!(without[onset + 20..], with[onset + 20..], "seed {seed}");
+        }
     }
 
     /// Minutes the watch didn't see stay unknown, and don't count.
@@ -1497,9 +1670,8 @@ mod tests {
         }
     }
 
-    /// A watch the classifier thinks is asleep all day (still, off the
-    /// wrist, before the heart rate sensor's verdict) is quiet until noon,
-    /// and then not again.
+    /// A watch the classifier thinks is asleep all day (still, and with
+    /// what passes for a pulse) is quiet until noon, and then not again.
     #[test]
     fn noon_ends_a_night_that_never_wakes() {
         let mut rng = Rng::new(1);
@@ -1507,8 +1679,11 @@ mod tests {
             &mut rng,
             &[(Truth::Active, 240), (Truth::OffWrist, 24 * 60 - 240)],
         );
-        for m in &mut minutes {
+        // The sensor without a verdict, but for readings it takes there
+        // (a surface that pulses? whatever keeps the classifier asleep).
+        for (t, m) in minutes.iter_mut().enumerate() {
             m.worn = None;
+            m.pulse = t % 5 == 0;
         }
         let asleep = leading_edge(&minutes);
         assert!(asleep[1080..].iter().all(|&a| a), "asleep all morning");
@@ -1777,6 +1952,8 @@ mod proofs {
             movement: kani::any(),
             steps: kani::any(),
             worn: kani::any(),
+            fidgeted: kani::any(),
+            pulse: kani::any(),
         }
     }
 
