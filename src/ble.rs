@@ -1454,7 +1454,9 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
     if now.is_some_and(|now| since_ms > now * 1000) {
         info!("ble: fetch from the phone's future");
     }
-    send(server, conn, Outgoing::ActivityFetch { done: false }).await;
+    // Once Gadgetbridge hears the start, it's busy until it hears the end
+    // (see below).
+    let started = send(server, conn, Outgoing::ActivityFetch { done: false }).await;
     // From where the watch last stopped sending, which is before what the
     // phone asks for when a fetch held something back, or else from after
     // all the phone may have: never over samples it already has, which
@@ -1508,7 +1510,13 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
             heart_rate: bucket.heart_rate,
             kind: bucket.kind,
         };
-        complete &= send(server, conn, message).await;
+        // A bucket that didn't go out leaves a hole the next fetch fills
+        // (it resends from where this one started): the ones after it
+        // would only keep the phone waiting for the end.
+        if !send(server, conn, message).await {
+            complete = false;
+            break;
+        }
         sent += 1;
     }
     // The end, and the empty track list that gets Gadgetbridge to pass
@@ -1517,7 +1525,22 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
     // Only the end counts towards `complete`: without the list, the phone
     // still has every sample.
     let [end, no_tracks] = gb::FETCH_END;
-    complete &= send(server, conn, end).await;
+    let ended = send(server, conn, end).await;
+    complete &= ended;
+    if started && !ended {
+        // Gadgetbridge marks the watch busy at the start and only unmarks
+        // it at the end (`gb::FETCH_END`), with no timeout: until then it
+        // shows "fetching activity data" and fetches nothing more. What
+        // does unmark it is the connection going (`GBDevice.setState`
+        // drops the busy task for any state up to connected), which is
+        // what the wearer had to do by hand, by restarting the phone's
+        // Bluetooth. So do that from here: Gadgetbridge reconnects in
+        // seconds, and its next fetch has what this one didn't send. A
+        // link that takes nothing for its whole supervision timeout (see
+        // `send`) was about to drop anyway.
+        warn!("ble: the fetch's end didn't go out; disconnecting to free Gadgetbridge");
+        conn.raw().disconnect();
+    }
     let held_sleep = hold.is_some_and(|hold| hold.sleep);
     let released = complete && !held_sleep && SLEEP_HELD.load(Ordering::Relaxed);
     if complete {
@@ -1619,7 +1642,34 @@ fn make_room_for_bond(stack: &Stack<'_, Controller, Pool>, conn: &GattConnection
     }
 }
 
-/// Sends one message, split into notifications that fit the MTU.
+/// How often [`send`] looks for a packet buffer while the host's pool
+/// (see [`crate::packet_pool`]) has none.
+///
+/// `notify_raw` takes a buffer per notification and fails with
+/// `OutOfMemory` when there's none, rather than wait for one. The pool's
+/// 16 are shared with everything else the host holds: up to 10 of our own
+/// notifications on their way out (8 queued, one with the host's sender,
+/// one in `notify_raw`), and what the phone wrote that [`serve`] hasn't
+/// read yet (up to 8, which it can't get to while it's sending). So a
+/// fetch of more than a few buckets can find the pool empty while the
+/// phone has something to say too. Twice in a four-day field log (0.11.3)
+/// that failed every remaining message of a fetch within milliseconds,
+/// its end included, and Gadgetbridge showed "fetching activity data"
+/// until its Bluetooth was restarted (see [`send_activity`]).
+///
+/// The buffers of ours come back as the controller takes the
+/// notifications queued, a few per connection event, so a wait is all it
+/// takes; a connection event is at least 7.5 ms.
+///
+/// TODO: a fetch still keeps [`serve`] from the phone's writes until it's
+/// done, so more than 8 of those in that time are dropped by the host
+/// (it logs `no memory for packets`, or an error processing ACL data).
+/// Sending the buckets from `serve`'s loop, between events, would fix
+/// that.
+const PACKET_POLL: Duration = Duration::from_millis(10);
+
+/// Sends one message, split into notifications that fit the MTU, waiting
+/// for a packet buffer where there's none (see [`PACKET_POLL`]).
 /// Returns whether it went out (failures are logged).
 ///
 /// Not if the client hasn't subscribed to the UART: `notify_raw` would
@@ -1636,9 +1686,35 @@ async fn send(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>, message:
     // them copied into the characteristic's type (a 244-byte `Vec`) first,
     // which then sat in every future that sends.
     for piece in line.as_bytes().chunks(chunk) {
-        if let Err(e) = server.uart.tx.notify_raw(conn, piece, false).await {
-            warn!("ble: send failed: {}", e);
-            return false;
+        // The pool's buffers come back as the link takes what's queued
+        // (see `PACKET_POLL`), so a piece that finds none waits for one,
+        // for as long as a link that's still there could take: past its
+        // supervision timeout, a link that sent nothing would be gone.
+        let began = Instant::now();
+        let give_up = began + Duration::from_millis(supervision_timeout_ms(conn));
+        let mut waited = false;
+        loop {
+            match server.uart.tx.notify_raw(conn, piece, false).await {
+                Ok(()) => break,
+                Err(Error::OutOfMemory)
+                    if conn.raw().is_connected() && Instant::now() < give_up =>
+                {
+                    waited = true;
+                    Timer::after(PACKET_POLL).await;
+                }
+                Err(e) => {
+                    warn!("ble: send failed: {}", e);
+                    return false;
+                }
+            }
+        }
+        if waited {
+            // Worth a line in a field log: each of these lost the rest of
+            // an activity fetch before (see `PACKET_POLL`).
+            info!(
+                "ble: waited {} ms for a packet buffer",
+                began.elapsed().as_millis()
+            );
         }
     }
     true
