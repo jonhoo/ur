@@ -259,15 +259,162 @@ mod tests {
     }
 
     /// What makes a touch a pair's second, wherever the screen is: a tap
-    /// away from the edge, or a hold in the middle.
+    /// well inside the screen (a fifth of it from every edge), or a hold
+    /// in the middle.
     #[test]
-    fn a_pair_s_second_touch_is_a_tap_inside_or_a_hold_in_the_middle() {
+    fn a_pair_s_second_touch_is_a_tap_well_inside_or_a_hold_in_the_middle() {
         assert_eq!(second(Kind::Tap, 40, 40), Some(Action::PlayPause));
-        assert_eq!(second(Kind::Tap, 15, 70), Some(Action::PlayPause));
+        assert_eq!(second(Kind::Tap, 16, 63), Some(Action::PlayPause));
+        assert_eq!(second(Kind::Tap, 15, 63), None);
+        assert_eq!(second(Kind::Tap, 16, 64), None);
+        // Away from a lone tap's edge isn't enough.
+        assert!(inside(15, 70));
+        assert_eq!(second(Kind::Tap, 15, 70), None);
         assert_eq!(second(Kind::Tap, 40, 4), None);
         assert_eq!(second(Kind::LongPress, 40, 40), Some(Action::Next));
         assert_eq!(second(Kind::LongPress, 40, 12), None);
+        // Well inside, but not in the middle.
+        assert!(clear(40, 17));
+        assert_eq!(second(Kind::LongPress, 40, 17), None);
         assert_eq!(second(Kind::Swipe, 40, 40), None);
+    }
+
+    /// A pair's two touches start close together: within 13 canvas
+    /// pixels, as the crow flies, and both well inside the screen.
+    #[test]
+    fn a_pair_is_two_touches_close_together_well_inside() {
+        assert_eq!((PAIR_MARGIN, PAIR_RADIUS), (16, 13));
+        assert!(paired(MID, 40, 40));
+        // 13 apart, along an axis and across (5, 12, 13).
+        assert!(paired(MID, 53, 40));
+        assert!(paired(MID, 40, 27));
+        assert!(paired(MID, 45, 52));
+        assert!(!paired(MID, 54, 40));
+        assert!(!paired(MID, 40, 26));
+        assert!(!paired(MID, 50, 50));
+        // Either at the edge spoils it, however close the other.
+        assert!(paired((16, 16), 17, 17));
+        assert!(!paired((15, 16), 17, 17));
+        assert!(!paired((17, 17), 16, 15));
+        assert!(!paired((63, 64), 63, 63));
+        assert!(!paired((63, 63), 64, 63));
+    }
+
+    /// A touch soon enough after a tap is its pair's second only if
+    /// placed as one; the timing's other answers stand.
+    #[test]
+    fn a_pair_by_its_timing_is_one_only_if_placed_as_one() {
+        assert_eq!(After::Pair.placed(MID, 42, 41), After::Pair);
+        assert_eq!(After::Pair.placed(MID, 60, 20), After::Apart);
+        assert_eq!(After::Pair.placed((40, 9), 41, 8), After::Apart);
+        for after in [After::Nothing, After::Retry, After::Apart] {
+            assert_eq!(after.placed(MID, 42, 41), after);
+            assert_eq!(after.placed((40, 9), 70, 70), after);
+        }
+    }
+
+    /// The media commands of 0.11.3-rc.3's field log (four days on the
+    /// wrist; the first 15) and of the three days' before it: each pair's
+    /// first tap and second touch (a hold, for the one skip), where they
+    /// started, and whether the two are a pair now. All were then, being
+    /// 40–274 ms from lift to start. Three still are: the ones that look
+    /// like the wearer's, firm taps mid-screen on one spot. The rest were
+    /// at the top or right edge (a cuff's), or far apart, or both; the
+    /// two turned away for their distance alone (19.8 and 19.1) may have
+    /// been meant, though the first was followed 1.3 s later by the pair
+    /// 2.2 apart.
+    #[test]
+    fn the_field_logs_accidental_pairs_are_no_longer_pairs() {
+        let pairs = [
+            ((51, 2), (50, 2), false),
+            ((79, 70), (79, 72), false),
+            ((53, 46), (55, 46), true),
+            ((45, 15), (26, 69), false),
+            ((71, 30), (71, 46), false),
+            ((20, 44), (61, 11), false),
+            ((35, 67), (51, 12), false),
+            ((19, 55), (59, 11), false),
+            ((48, 32), (33, 19), false),
+            ((39, 36), (41, 35), true),
+            ((68, 21), (79, 15), false),
+            ((37, 44), (42, 67), false),
+            ((30, 14), (30, 31), false),
+            ((59, 13), (41, 51), false),
+            ((34, 51), (54, 9), false),
+            ((55, 37), (53, 56), false),
+            ((37, 71), (58, 13), false),
+            ((63, 48), (55, 11), false),
+            ((43, 9), (50, 13), false),
+            ((34, 14), (55, 12), false),
+            ((42, 13), (47, 25), false),
+            ((41, 9), (41, 8), false),
+            ((50, 7), (53, 7), false),
+            ((53, 48), (61, 47), true),
+            ((25, 67), (31, 33), false),
+            ((53, 7), (54, 6), false),
+            ((55, 11), (49, 52), false),
+        ];
+        for (first, (x, y), meant) in pairs {
+            assert_eq!(paired(first, x, y), meant, "{first:?}, then {:?}", (x, y));
+        }
+        assert_eq!(pairs.iter().filter(|pair| pair.2).count(), 3);
+        // The skip's hold, and the two double taps' seconds, as a glance
+        // or the dark takes them.
+        let pair = After::Pair.placed((53, 46), 55, 46);
+        assert_eq!(
+            super::wake::glance(Kind::LongPress, 55, 46, 600, pair, false),
+            Action::Next
+        );
+        let pair = After::Pair.placed((39, 36), 41, 35);
+        assert_eq!(
+            super::wake::screen_off(Kind::Tap, 41, 35, 47, pair, true, false),
+            Action::PlayPause
+        );
+    }
+
+    /// A touch soon after a tap, but not placed as its pair, is taken on
+    /// its own: with a phone, never a media gesture (a light tap may be
+    /// the first of the next pair, a firm one wakes the screen); without
+    /// one, still the double tap that wakes the screen.
+    #[test]
+    fn two_quick_taps_apart_do_no_more_than_the_second_alone() {
+        use super::wake::{glance, screen_off};
+        let apart = After::Pair.placed((20, 44), 61, 30);
+        assert_eq!(apart, After::Apart);
+        assert_eq!(
+            screen_off(Kind::Tap, 61, 30, 28, apart, true, false),
+            Action::FirstTap
+        );
+        assert_eq!(
+            screen_off(Kind::Tap, 61, 30, 86, apart, true, false),
+            Action::Wake { first_tap: true }
+        );
+        assert_eq!(
+            screen_off(Kind::LongPress, 40, 40, 600, apart, true, false),
+            Action::Ignore
+        );
+        assert_eq!(
+            screen_off(Kind::Tap, 61, 30, 28, apart, false, false),
+            Action::Wake { first_tap: false }
+        );
+        assert_eq!(
+            screen_off(Kind::Tap, 61, 30, 28, apart, true, true),
+            Action::Ignore
+        );
+        assert_eq!(
+            glance(Kind::Tap, 61, 30, 28, apart, false),
+            Action::FirstTap
+        );
+        assert_eq!(
+            glance(Kind::LongPress, 40, 40, 600, apart, false),
+            Action::Ignore
+        );
+        // After a tap whose wake waited, it wakes the glance, as anything
+        // but a pair's second does.
+        assert_eq!(
+            glance(Kind::Tap, 61, 30, 28, apart, true),
+            Action::Wake { first_tap: false }
+        );
     }
 
     /// The sealed watch's field log (0.9.0-m3.1): the wearer's double taps
@@ -344,7 +491,15 @@ mod tests {
                 off(Kind::Tap, at, 86, false, true),
                 Action::Wake { first_tap: true }
             );
-            assert_eq!(off(Kind::Tap, at, 20, true, true), Action::PlayPause);
+            // A double tap's second only well inside the screen, which
+            // the middle's top and bottom (a quarter in) are, and its
+            // sides (a fifth in, as far as a pair's margin) aren't.
+            let second = if clear(at.0, at.1) {
+                Action::PlayPause
+            } else {
+                Action::FirstTap
+            };
+            assert_eq!(off(Kind::Tap, at, 20, true, true), second, "{at:?}");
         }
     }
 
@@ -490,15 +645,21 @@ mod tests {
         assert_eq!(second(Kind::LongPress, 34, 3), None);
     }
 
-    /// What still gets through: in the same log, two light taps the arm
-    /// made 9–10 pixels from the bottom edge, 117 ms apart, with the screen
-    /// off. Inside a tap's margin, so a double tap: they skipped then, and
-    /// would play or pause now. (See the TODO in `wake`'s docs.)
+    /// In the same log, two light taps the arm made 9–10 pixels from the
+    /// bottom edge, 117 ms apart, with the screen off. Inside a lone
+    /// tap's margin: they skipped then, and played or paused as a double
+    /// tap until a pair's touches had to be well inside the screen.
     #[test]
-    fn the_field_logs_folded_arm_double_tap_plays_or_pauses() {
+    fn the_field_logs_folded_arm_double_tap_does_nothing() {
         assert_eq!(off(Kind::Tap, (15, 71), 18, false, true), Action::FirstTap);
         assert!(follows(Kind::Tap, 149, 32));
-        assert_eq!(off(Kind::Tap, (15, 70), 32, true, true), Action::PlayPause);
+        assert_eq!(After::Pair.placed((15, 71), 15, 70), After::Apart);
+        assert_eq!(
+            super::wake::screen_off(Kind::Tap, 15, 70, 32, After::Apart, true, false),
+            Action::FirstTap
+        );
+        // Nor would it as a pair by someone's mistake.
+        assert_eq!(off(Kind::Tap, (15, 70), 32, true, true), Action::FirstTap);
     }
 
     /// On the awake clock face, a tap-and-hold's hold anywhere: something
@@ -822,9 +983,10 @@ mod proofs {
     }
 
     fn any_after() -> After {
-        match kani::any::<u8>() % 3 {
+        match kani::any::<u8>() % 4 {
             0 => After::Nothing,
             1 => After::Pair,
+            2 => After::Apart,
             _ => After::Retry,
         }
     }
@@ -846,6 +1008,14 @@ mod proofs {
             (16..=63).contains(&x) && (20..=59).contains(&y)
         );
         assert!(!centred(x, y) || inside(x, y));
+        // A pair's touches start 16 in from every edge: further in than
+        // a lone tap need be, and the middle is further in still.
+        assert_eq!(
+            clear(x, y),
+            (16..=63).contains(&x) && (16..=63).contains(&y)
+        );
+        assert!(!clear(x, y) || inside(x, y));
+        assert!(!centred(x, y) || clear(x, y));
         // On the clock face, a hold must be in the middle only just after
         // a touch woke the screen.
         assert!(awake_long_press(x, y, false));
@@ -873,7 +1043,8 @@ mod proofs {
         let rank = |after: After| match after {
             After::Nothing => 0,
             After::Retry => 1,
-            After::Pair => 2,
+            // (Never the timing's own answer: see `After::placed`.)
+            After::Pair | After::Apart => 2,
         };
         let sooner = kani::any();
         kani::assume(sooner <= since);
@@ -918,15 +1089,33 @@ mod proofs {
             };
             assert_eq!(action, expected);
         }
+        // Soon after a tap, but not placed as its pair: as on its own,
+        // bar without a phone, where it's still the double tap that
+        // wakes the screen.
+        if after == After::Apart {
+            let alone = screen_off(kind, x, y, held, After::Nothing, phone, quiet);
+            if !phone && kind == Kind::Tap && !quiet && inside(x, y) {
+                assert_eq!(action, Action::Wake { first_tap: false });
+            } else {
+                assert_eq!(action, alone);
+            }
+        }
         if media(action) {
             assert!(after == After::Pair && phone);
         }
         match action {
-            Action::PlayPause => assert!(kind == Kind::Tap),
+            Action::PlayPause => assert!(kind == Kind::Tap && clear(x, y)),
             Action::Next => assert!(kind == Kind::LongPress && centred(x, y)),
             Action::Wake { first_tap } => assert!(kind == Kind::Tap && (phone || !first_tap)),
+            // A light tap on its own, or, with a phone, one that isn't
+            // its pair's second for where it (or the tap before) landed.
             Action::FirstTap => {
-                assert!(kind == Kind::Tap && held < DELIBERATE_TAP_MS && after == After::Nothing)
+                assert!(kind == Kind::Tap && held < DELIBERATE_TAP_MS);
+                assert!(
+                    after == After::Nothing
+                        || (phone
+                            && (after == After::Apart || (after == After::Pair && !clear(x, y))))
+                );
             }
             Action::WakeLater => unreachable!("only a glance waits to wake"),
             Action::Ignore => {}
@@ -955,6 +1144,10 @@ mod proofs {
         let off = screen_off(kind, x, y, held, after, true, false);
 
         assert!(!media(action) || after == After::Pair);
+        // Soon after a tap, but not placed as its pair: as on its own.
+        if after == After::Apart {
+            assert_eq!(action, glance(kind, x, y, held, After::Nothing, waking));
+        }
         assert_eq!(media(action), media(off));
         assert!(!media(action) || action == off);
         if waking {
@@ -1011,21 +1204,41 @@ mod proofs {
     }
 
     /// For every touch: the second of a pair makes a media gesture only
-    /// from inside the margin, a tap playing or pausing and a hold in the
-    /// middle skipping; a swipe never does.
+    /// from well inside the screen, a tap playing or pausing and a hold
+    /// in the middle skipping; a swipe never does.
     #[kani::proof]
     fn a_media_gesture_starts_away_from_the_edge() {
         let kind = any_kind();
         let (x, y): (i32, i32) = kani::any();
         match second(kind, x, y) {
-            Some(Action::PlayPause) => assert!(kind == Kind::Tap && inside(x, y)),
+            Some(Action::PlayPause) => assert!(kind == Kind::Tap && clear(x, y)),
             Some(Action::Next) => assert!(kind == Kind::LongPress && centred(x, y)),
             Some(_) => unreachable!("a pair only plays, pauses or skips"),
             None => assert!(match kind {
-                Kind::Tap => !inside(x, y),
+                Kind::Tap => !clear(x, y),
                 Kind::LongPress => !centred(x, y),
                 Kind::Swipe => true,
             }),
         }
+    }
+
+    /// For every two touches on the canvas (as the UI keeps a tap's
+    /// place, in a byte each way): they're placed as a pair only if both
+    /// start well inside the screen, within 13 canvas pixels each way
+    /// (and so without overflow), and only a pair by its timing is ever
+    /// one once placed.
+    #[kani::proof]
+    fn a_pair_is_close_together_and_well_inside() {
+        let (fx, fy, x, y): (u8, u8, u8, u8) = kani::any();
+        let first = (i32::from(fx), i32::from(fy));
+        let (x, y) = (i32::from(x), i32::from(y));
+        if paired(first, x, y) {
+            assert!(clear(first.0, first.1) && clear(x, y));
+            assert!((x - first.0).abs() <= 13 && (y - first.1).abs() <= 13);
+        }
+        let after = any_after();
+        let placed = after.placed(first, x, y);
+        assert!(placed != After::Pair || (after == After::Pair && paired(first, x, y)));
+        assert!(placed == after || (after == After::Pair && placed == After::Apart));
     }
 }

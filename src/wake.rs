@@ -101,20 +101,31 @@
 //!   presses landed up to 15 canvas pixels in from the top or bottom.
 //! - A hold must stay put (the touch task's [`SWIPE_DISTANCE`]
 //!   tolerance), or it's a swipe, which does nothing here.
+//! - A pair's two touches must both start well inside the screen
+//!   ([`PAIR_MARGIN`], twice a lone tap's margin), and close together
+//!   ([`PAIR_RADIUS`]): one finger, tapping one spot twice. On the awake
+//!   clock face too, which used to take a pair anywhere. See [`paired`]
+//!   for the field log behind both: a cuff and a folded arm make pairs
+//!   quick enough, but at the edge, or of two spots far apart.
 //! - In the quiet night (see [`crate::sleep::Night`]), nothing: bedding
 //!   and pillows press and tap all night, and the touch controller sleeps
 //!   anyway. (A nap's quiet isn't the night's here: see `ui`.)
 //!
-//! What still gets through: a pair of light taps the arm made 9–10 canvas
-//! pixels from the bottom edge, 117 ms apart, which skipped with the
-//! screen off in 0.10.0-rc.1's field log, would now play or pause. A
-//! wider margin at the top and bottom for taps too would stop it, but
-//! double taps that look like the wearer's have landed 14 from the top,
-//! and 60 down.
+//! (A pair of light taps the arm made 9–10 canvas pixels from the bottom
+//! edge, 117 ms apart, skipped with the screen off in 0.10.0-rc.1's field
+//! log, and would have played or paused until a pair needed
+//! [`PAIR_MARGIN`].)
 //!
-//! TODO: decide whether a double tap's taps need a wider margin at the
-//! top and bottom (12, say), once a field log shows whether the folded
-//! arm's double taps keep playing or pausing.
+//! Not guarded against: the button pressed just after a pair. Three of
+//! 0.11.3-rc.3's 15 commands had the button pressed 1.6–2.0 s after
+//! them, and two of those weren't meant; but the third was the wearer's
+//! own skip, and holding every command back 2 s to see would make the
+//! gestures feel broken (the buzz is what says one took).
+//!
+//! TODO: a pair's time window ([`DOUBLE_TAP_MS`]) could be tighter (200
+//! ms, say; the wearer's slowest second touch started 166 ms after the
+//! first's lift), but every accidental pair in the field logs that
+//! narrowing it would turn away, [`paired`] already does.
 //!
 //! Hardware-free, so it runs in host tests (`host-tests/wake`).
 //!
@@ -173,6 +184,13 @@ pub const RETRY_TAP_MS: u32 = 1500;
 /// Canvas pixels (24 panel pixels) at the screen's edge where touches,
 /// with the screen off, do nothing.
 pub const TAP_MARGIN: i32 = 8;
+/// Canvas pixels (48 panel pixels, a fifth of the screen) at each of the
+/// screen's edges where neither touch of a media gesture's pair may
+/// start: see [`paired`].
+pub const PAIR_MARGIN: i32 = 2 * TAP_MARGIN;
+/// How far apart, in canvas pixels (39 panel pixels), the two touches of
+/// a media gesture's pair may start: see [`paired`].
+pub const PAIR_RADIUS: i32 = 13;
 /// Canvas pixels (48 panel pixels, a fifth of the screen) at the screen's
 /// left and right edges where a hold doesn't skip with the screen off or
 /// on a glance (nor on the clock face just after a touch woke it): see
@@ -242,6 +260,56 @@ pub fn centred(x: i32, y: i32) -> bool {
     within(x, LONG_PRESS_MARGIN_X) && within(y, LONG_PRESS_MARGIN_Y)
 }
 
+/// Whether a touch starting at (`x`, `y`), in canvas pixels, starts well
+/// inside the screen: further than [`PAIR_MARGIN`] from every edge (so
+/// 16..=63 each way), as both touches of a media gesture's pair must
+/// (see [`paired`]).
+pub fn clear(x: i32, y: i32) -> bool {
+    within(x, PAIR_MARGIN) && within(y, PAIR_MARGIN)
+}
+
+/// Whether a tap that started at `first`, and a touch after it starting
+/// at (`x`, `y`), all in canvas pixels, are placed as a media gesture's
+/// pair: both well inside the screen ([`clear`]), and within
+/// [`PAIR_RADIUS`] of each other. (Whether they're close enough in time
+/// is [`after`]'s to say.)
+///
+/// From 0.11.3-rc.3's field log, four days on the wrist, likely under a
+/// cuff, and the three days' before it. Of their 27 media commands (26
+/// double taps, one tap-and-hold), three look meant: firm taps
+/// mid-screen, 2.0, 2.2, and 8.1 canvas pixels apart, and 18 or more
+/// from every edge. Until then, a pair's taps only had to be away from
+/// the very edge ([`TAP_MARGIN`]) with the screen off or on a glance, and
+/// could be anywhere on the awake clock face. What sent the rest, all
+/// quick enough to be pairs (40–274 ms from lift to start):
+///
+/// - Taps at the edge: nine pairs with both taps within 16 of an edge
+///   (0–14 from it, all at the top or right), 1–21 apart, on the awake
+///   clock face or a glance. A cuff, sliding over the glass.
+/// - Taps far apart: ten pairs whose taps started 34–62 from each other,
+///   each with a tap 8–15 from an edge. Two things touching at once (a
+///   cuff's hem, a folded arm), rather than a finger crossing half the
+///   screen in a tenth of a second.
+/// - Three more, 13–24 apart, with one tap 12–14 from an edge.
+/// - Two that may have been meant, both taps mid-screen, but 19.1 and
+///   19.8 apart; the second was followed 1.3 s later by the one 2.2
+///   apart, so likely wasn't.
+///
+/// So a fifth of the screen at each edge, which takes in the cuff's taps
+/// (up to 15 in), spares the wearer's (18), and is the sides' margin for
+/// a hold already ([`LONG_PRESS_MARGIN_X`]); and a radius of 13 (the 40
+/// panel pixels the wearer suggested), between the 8.1 and the 19.1.
+/// Together they turn away 24 of the 27. The margin alone turns away 22
+/// (all but the last two above), and the radius alone 16: the cuff's
+/// pairs at the edge are as close together as a finger's.
+///
+/// The controller reports where each touch started, which is what's
+/// compared.
+pub fn paired(first: (i32, i32), x: i32, y: i32) -> bool {
+    let (dx, dy) = (x - first.0, y - first.1);
+    clear(first.0, first.1) && clear(x, y) && dx * dx + dy * dy <= PAIR_RADIUS * PAIR_RADIUS
+}
+
 /// How a touch comes after a tap that may be the first of a pair (one
 /// [`Action::FirstTap`] said may; see [`after`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -251,15 +319,33 @@ pub enum After {
     /// Soon enough to be the pair's second: a double tap's, or a
     /// tap-and-hold's hold.
     Pair,
+    /// Soon enough to be the pair's second, but not placed as one (see
+    /// [`paired`]): never a media gesture, though without a phone, still
+    /// a double tap that wakes the screen.
+    Apart,
     /// A tap too late for that, but soon enough to be the wearer tapping
     /// again, as the first did nothing they could see.
     Retry,
 }
 
+impl After {
+    /// This, for a touch starting at (`x`, `y`) after a tap that started
+    /// at `first`, in canvas pixels: a [`After::Pair`] by its timing (as
+    /// [`after`] says) is one only if the two are placed as a pair too
+    /// ([`paired`]), and otherwise [`After::Apart`].
+    pub fn placed(self, first: (i32, i32), x: i32, y: i32) -> Self {
+        match self {
+            Self::Pair if !paired(first, x, y) => Self::Apart,
+            other => other,
+        }
+    }
+}
+
 /// How a touch of `kind`, reported `since_ms` after a tap lifted, and
 /// down for `held_ms` by then, comes after it: the pair's second if it
 /// started within [`DOUBLE_TAP_MS`] of the lift, and, if a tap that
-/// started later, but within [`RETRY_TAP_MS`], a retry.
+/// started later, but within [`RETRY_TAP_MS`], a retry. By its timing
+/// alone: [`After::placed`] then asks where the two started.
 ///
 /// Counted from the first tap's lift to the second touch's start, so the
 /// second's own length doesn't matter. A tap's is short, but a hold is
@@ -309,20 +395,24 @@ pub fn after(kind: Kind, since_ms: u32, held_ms: u16) -> After {
 }
 
 /// The media gesture a touch of `kind`, starting at (`x`, `y`) in canvas
-/// pixels, makes as the second of a pair (see [`after`]), with the
-/// screen off, on a glance, or on the clock face its first tap woke: a tap
-/// plays or pauses (a double tap), and a hold, in the middle
-/// ([`centred`]), skips to the next track (a tap-and-hold). `None` for
-/// anything else, which isn't a media gesture, and is taken on its own.
-/// Both must start away from the edge ([`inside`]); the first tap's place
-/// is for whoever remembered it to check.
+/// pixels, makes as the second of a pair ([`After::Pair`]: soon enough
+/// after its first tap, and placed as its pair), with the screen off, on
+/// a glance, or on the clock face its first tap woke: a tap plays or
+/// pauses (a double tap), and a hold, in the middle ([`centred`]), skips
+/// to the next track (a tap-and-hold). `None` for anything else, which
+/// isn't a media gesture, and is taken on its own. Both touches must
+/// start well inside the screen ([`PAIR_MARGIN`]); that, and how close
+/// the first tap was, [`After::placed`] has checked for a pair, and the
+/// margin is checked here again for this touch, so that none at the edge
+/// gets through whoever asks.
 ///
 /// Play or pause is the double tap, the quicker and likelier of the two,
 /// and skipping the hold: as the wearer asked, so that neither is a lone
 /// long press, which an arm folded over the watch made.
 pub fn second(kind: Kind, x: i32, y: i32) -> Option<Action> {
     match kind {
-        Kind::Tap if inside(x, y) => Some(Action::PlayPause),
+        Kind::Tap if clear(x, y) => Some(Action::PlayPause),
+        // (The middle is well inside: `centred` asks more than `clear`.)
         Kind::LongPress if centred(x, y) => Some(Action::Next),
         _ => None,
     }
@@ -334,7 +424,9 @@ pub fn second(kind: Kind, x: i32, y: i32) -> Option<Action> {
 /// own, it does nothing). `touch_woke`: a touch woke the screen (from
 /// off, or a glance) under [`CENTRE_AFTER_TOUCH_WAKE_MS`] ago.
 ///
-/// Anywhere, normally: something woke the screen to get there, so it's
+/// Anywhere a pair's touch may be ([`clear`], which whoever calls this
+/// has checked; this used to be anywhere at all), normally: something
+/// woke the screen to get there, so it's
 /// likelier meant than with the screen off. But a folded arm's touch can
 /// be what woke it. In the field log of [`centred`], a 254 ms tap at the
 /// top edge of a glance (where a tap counts, the wearer being taken to be
@@ -399,11 +491,16 @@ pub fn screen_off(
     match (after, kind) {
         // With a phone, a media gesture's second touch; without one, a
         // double tap is a way to wake the screen.
-        (After::Pair, _) => match (phone, second(kind, x, y)) {
-            (true, Some(action)) => return action,
-            (false, _) if kind == Kind::Tap => return Action::Wake { first_tap: false },
-            _ => {}
-        },
+        // (Wherever its two taps landed: there's no media to start by
+        // mistake.)
+        (After::Pair, _) if phone => {
+            if let Some(action) = second(kind, x, y) {
+                return action;
+            }
+        }
+        (After::Pair | After::Apart, Kind::Tap) if !phone => {
+            return Action::Wake { first_tap: false };
+        }
         (After::Retry, Kind::Tap) => return Action::Wake { first_tap: phone },
         _ => {}
     }

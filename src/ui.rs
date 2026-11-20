@@ -45,9 +45,11 @@
 //!   or pauses, and a tap, then a hold (a tap-and-hold, its hold starting
 //!   as soon after the tap; see [`wake::after`]), is the next track. A
 //!   slower second tap does nothing, nor does a long press on its own.
-//!   Both anywhere, bar the hold for
-//!   [`wake::CENTRE_AFTER_TOUCH_WAKE_MS`] after a touch woke the screen,
-//!   when it must be in the middle ([`wake::centred`]). Each buzzes, and
+//!   Both touches must start well inside the screen, and close together
+//!   ([`wake::paired`]), as with the screen off: one finger, tapping one
+//!   spot. For [`wake::CENTRE_AFTER_TOUCH_WAKE_MS`] after a touch woke
+//!   the screen, the hold must be in the middle too
+//!   ([`wake::centred`]). Each buzzes, and
 //!   shows what it did for a moment where a note shows while media plays,
 //!   at the status bar's left end. The phone needn't have said it has
 //!   media (see `App::media`). Without a phone, neither does anything. A
@@ -115,8 +117,9 @@
 //!   screen: a double tap (its second tap starting within
 //!   [`wake::DOUBLE_TAP_MS`] of the first's lift) plays or pauses, and a
 //!   tap, then a hold in the middle (see [`wake::second`]), is the next
-//!   track. A long press on its own does nothing. Each buzzes, and that's
-//!   all: the screen stays dark. A deliberate tap still wakes the screen
+//!   track, the two touches well inside the screen and close together
+//!   ([`wake::paired`]). A long press on its own does nothing. Each
+//!   buzzes, and that's all: the screen stays dark. A deliberate tap still wakes the screen
 //!   at once, so only a gesture whose first tap is light stays dark;
 //!   after a deliberate one, the second touch does the same on the clock
 //!   face it woke to. See [`crate::wake`] for the guards against brushes,
@@ -754,6 +757,11 @@ pub struct App {
     /// connected: that one may be the first of a media gesture finished
     /// on the clock face it woke to; see `woke_tap`.)
     last_tap: Option<Instant>,
+    /// Where the last tap started, in canvas pixels: `last_tap`'s place,
+    /// while that's set, for whether the touch after it is placed as its
+    /// pair (see [`wake::paired`]). Two bytes, rather than in `last_tap`'s
+    /// `Option`, which they'd grow by eight.
+    tap_at: (u8, u8),
     /// Whether `last_tap` is the tap that woke the screen, from off or a
     /// glance: the touch after it is then taken as with the screen off,
     /// with its guards against brushes, rather than as the clock face's
@@ -908,6 +916,7 @@ impl App {
             local_second: None,
             glance_until: None,
             last_tap: None,
+            tap_at: (0, 0),
             woke_tap: false,
             glance_wake: false,
             last_press: Instant::from_ticks(0),
@@ -1822,6 +1831,23 @@ impl App {
         // when bedding presses on a wrist that turned in sleep could
         // otherwise start the music; there any touch only wakes the screen
         // at once, as before. (A nap's quiet is as by day.)
+        //
+        // First, for every branch below: how a touch comes after the tap
+        // before it, if that may be the first of a pair, by when and
+        // where both started (see `wake::after`). Asked here, once,
+        // before this touch's own place replaces the tap's: nothing from
+        // here to where it's used changes `last_tap` without also being
+        // done with the event.
+        let follows = match event {
+            InputEvent::Touch(touch) => {
+                let follows = after(self.last_tap, self.tap_at, touch, now);
+                if touch.gesture == Gesture::Tap {
+                    self.tap_at = (touch.x as u8, touch.y as u8);
+                }
+                follows
+            }
+            _ => wake::After::Nothing,
+        };
         if let Some(until) = self.glance_until {
             let media = self.connected && !self.bedding();
             let waking = core::mem::take(&mut self.glance_wake);
@@ -1836,7 +1862,7 @@ impl App {
                     touch.x,
                     touch.y,
                     touch.held_ms,
-                    after(self.last_tap, touch, now),
+                    follows,
                     waking,
                 ),
                 _ => Action::Wake { first_tap: false },
@@ -1908,7 +1934,7 @@ impl App {
             && let InputEvent::Touch(touch) = event
         {
             let kind = wake_kind(touch.gesture);
-            let after = after(self.last_tap, touch, now);
+            let after = follows;
             let quiet = self.bedding();
             self.last_tap = None;
             let command = match wake::screen_off(
@@ -1953,11 +1979,14 @@ impl App {
         // The first of a pair, if this may be its second. (Never a tap
         // from before the screen woke: waking only keeps the tap that woke
         // it, below and on a glance, for the next one.)
-        let first_tap = self.last_tap.take().filter(|&tap| {
-            self.awake
-                && matches!(event, InputEvent::Touch(touch)
-                    if after(Some(tap), touch, now) == wake::After::Pair)
-        });
+        // `Some(true)` if the two are placed as a media gesture's pair
+        // too (see `wake::paired`); the hidden puzzle's double tap doesn't
+        // mind where its taps land.
+        let first_tap = match (self.last_tap.take(), follows) {
+            (Some(_), wake::After::Pair) if self.awake => Some(true),
+            (Some(_), wake::After::Apart) if self.awake => Some(false),
+            _ => None,
+        };
         // After a tap that woke the screen, from off or a glance, the
         // touch that follows it is taken as with the screen off: a media
         // gesture's second (see `wake::second`). The clock face's own
@@ -1970,6 +1999,7 @@ impl App {
         let (woken, first_tap) = match event {
             InputEvent::Touch(touch) if woke_tap => {
                 let second = first_tap
+                    .filter(|&paired| paired)
                     .and_then(|_| wake::second(wake_kind(touch.gesture), touch.x, touch.y));
                 let command = match second {
                     Some(Action::PlayPause) => Some(MusicCommand::PlayPause),
@@ -2195,21 +2225,28 @@ impl App {
                 // nothing, so it needn't wait to see whether a second
                 // follows; nor does a long press on its own.
                 //
-                // Unlike with the screen off or on a glance, both anywhere:
-                // something woke the screen to get here, so they're
-                // likelier meant. Bar the hold just after a touch woke it,
-                // which may have been a folded arm, still resting there:
-                // then only in the middle, as on the glance (see
-                // `wake::awake_long_press`).
+                // As with the screen off or on a glance, both touches
+                // well inside the screen, and close together (see
+                // `wake::paired`): they used to count anywhere here, as
+                // something woke the screen to get here, but a cuff over
+                // the lit screen played and paused with pairs at its edge
+                // (0.11.3-rc.3's field log). The hold needn't be quite as
+                // far from the top and bottom as there, bar just after a
+                // touch woke the screen, which may have been a folded
+                // arm, still resting there (see `wake::awake_long_press`).
                 (Gesture::LongPress, Screen::Clock) if !notification_shown => {
                     let touch_woke = now < self.centre_until;
-                    if first_tap.is_some() && wake::awake_long_press(touch.x, touch.y, touch_woke) {
+                    if first_tap == Some(true)
+                        && wake::awake_long_press(touch.x, touch.y, touch_woke)
+                    {
                         self.media(MusicCommand::Next)
                     }
                 }
+                // A tap that isn't a pair's second may be the first of
+                // the next.
                 (Gesture::Tap, Screen::Clock) if !notification_shown => match first_tap {
-                    Some(_) => self.media(MusicCommand::PlayPause),
-                    None => self.last_tap = Some(ended(touch, now)),
+                    Some(true) => self.media(MusicCommand::PlayPause),
+                    _ => self.last_tap = Some(ended(touch, now)),
                 },
                 _ => {}
             },
@@ -3432,15 +3469,25 @@ fn send(message: Outgoing) {
 }
 
 /// How `touch`, handled `now`, comes after a tap that lifted at `tap`,
-/// if one may be the first of a pair (see [`wake::after`]): as its
-/// second, a retry, or neither. Both as the touch task timed them (see
+/// having started at `tap_at`, if one may be the first of a pair (see
+/// [`wake::after`], and [`wake::After::placed`]): as its second, a
+/// retry, or neither. Both as the touch task timed them (see
 /// [`ended`]).
-fn after(tap: Option<Instant>, touch: crate::touch::Touch, now: Instant) -> wake::After {
+fn after(
+    tap: Option<Instant>,
+    tap_at: (u8, u8),
+    touch: crate::touch::Touch,
+    now: Instant,
+) -> wake::After {
     let Some(since) = tap.and_then(|tap| ended(touch, now).checked_duration_since(tap)) else {
         return wake::After::Nothing;
     };
     let since_ms = u32::try_from(since.as_millis()).unwrap_or(u32::MAX);
-    wake::after(wake_kind(touch.gesture), since_ms, touch.held_ms)
+    wake::after(wake_kind(touch.gesture), since_ms, touch.held_ms).placed(
+        (tap_at.0.into(), tap_at.1.into()),
+        touch.x,
+        touch.y,
+    )
 }
 
 /// When `touch` ended (see [`crate::touch::Touch::end_ms`]), as the touch

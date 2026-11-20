@@ -201,12 +201,13 @@ bar on an edge means there's more that way.
 - **Media:** double-tap quickly to play or pause, and tap, then tap and
   hold (until the buzz, 0.6 s), for the next track, the second touch
   within 0.3 s of the first tap's lift; a slower second tap wakes a
-  dark screen instead. A long press alone does nothing. On the clock face,
-  anywhere (for 3 s after a touch woke it, the hold only in the middle:
-  a quarter of the screen away from the top and bottom, a fifth from the
-  sides, clear of a folded arm). With the screen off or on a glance, the
-  hold always in the middle, nothing at the edge, and nothing in a quiet
-  night; tap lightly first to leave the screen off: a firm first tap
+  dark screen instead. A long press alone does nothing. Both touches on
+  the same spot (within a sixth of the screen's width of each other),
+  and in the middle of the screen, a fifth of it away from every edge:
+  a sleeve's or a folded arm's taps land at the edge, or far apart. With
+  the screen off or on a glance (and on the clock face for 3 s after a
+  touch woke it), the hold a quarter of the screen away from the top
+  and bottom, and nothing in a quiet night; tap lightly first to leave the screen off: a firm first tap
   wakes it, and the second touch then does the same. On a glance, only
   a heavy first tap (75 ms or more) wakes it at once; a lighter firm tap
   waits 0.3 s for a second touch, and wakes it if none comes.
