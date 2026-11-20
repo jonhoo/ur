@@ -1692,6 +1692,102 @@ fn passes(name: &str, script: &str) -> (PathBuf, String) {
     (dir, log)
 }
 
+/// A notification that came with the screen off shows for 4 s, to nobody
+/// if the wrist was busy. Turning the wrist to look just after it went
+/// dark shows it again: the same screen, for as long, without a second
+/// buzz. Once: the look after that is a glance, with the time.
+#[test]
+fn a_look_just_after_a_notification_shows_it_again() {
+    let (dir, log) = passes(
+        "missed-notification",
+        "connect\nwait 11s\nexpect not screen-on\n\
+         notify Signal \"Nora Lindqvist\"\nwait 1s\n\
+         expect dim\nexpect notification\nshot first.png\n\
+         wait 5s\nexpect not screen-on\n\
+         glance\nwait 1s\n\
+         expect dim\nexpect notification\nshot again.png\n\
+         wait 2s\nexpect screen-on\nwait 3s\nexpect not screen-on\n\
+         glance\nwait 1s\nexpect dim\nexpect glance\n",
+    );
+    assert_eq!(log.matches("buzz: notify").count(), 1, "{log}");
+    let shot = |name| std::fs::read(dir.join(name)).expect("the script took it");
+    assert!(shot("first.png") == shot("again.png"), "{log}");
+}
+
+/// Later than that (20 s after it went dark), a look is for the time, as
+/// ever: the notification is in the history, with the clock face's handle
+/// to say so.
+#[test]
+fn a_later_look_after_a_notification_is_a_glance() {
+    // 23 s after it arrived (so 19 after it went dark), still; 25 s, not.
+    for (wait, again) in [(22, true), (24, false)] {
+        passes(
+            "missed-notification-late",
+            &format!(
+                "connect\nwait 11s\nexpect not screen-on\n\
+                 notify Signal \"Nora Lindqvist\"\nwait 1s\nexpect notification\n\
+                 wait {wait}s\nexpect not screen-on\n\
+                 glance\nwait 1s\nexpect dim\nexpect {}\n",
+                if again { "notification" } else { "glance" }
+            ),
+        );
+    }
+}
+
+/// Nor does a notification show again that the wearer was there for: one
+/// they touched as it showed (which wakes the clock face under its
+/// banner), one that came with the screen already on, or one they've
+/// since woken the screen after.
+#[test]
+fn a_notification_the_wearer_saw_doesnt_show_again() {
+    for (name, seen) in [
+        // Tapped as it showed.
+        ("touched", "notify Signal Kari\nwait 1s\ntap\nwait 12s\n"),
+        // A banner over the clock face they were looking at.
+        ("banner", "button\nwait 1s\nnotify Signal Kari\nwait 12s\n"),
+        // Missed, but then the button: the clock face says there's one.
+        (
+            "woken",
+            "notify Signal Kari\nwait 6s\nexpect not screen-on\nbutton\nwait 1s\nbutton\nwait 1s\n",
+        ),
+        // Read in the history.
+        (
+            "read",
+            "notify Signal Kari\nwait 6s\nbutton\nwait 1s\ndown\nwait 1s\nbutton\nwait 1s\nbutton\nwait 1s\n",
+        ),
+    ] {
+        passes(
+            &format!("missed-notification-{name}"),
+            &format!(
+                "connect\nwait 11s\nexpect not screen-on\n{seen}\
+                 expect not screen-on\nglance\nwait 1s\nexpect dim\nexpect glance\n"
+            ),
+        );
+    }
+}
+
+/// Of several in a row, the look shows the newest, as its own wake did:
+/// here the second arrives while the first still shows, and a third after
+/// both went dark.
+#[test]
+fn a_look_after_several_notifications_shows_the_newest() {
+    let (dir, log) = passes(
+        "missed-notification-newest",
+        "connect\nwait 11s\nexpect not screen-on\n\
+         notify Signal \"Nora Lindqvist\"\nwait 2s\n\
+         notify Parcelly \"Emil Dahl\"\nwait 1s\nshot second.png\n\
+         wait 5s\nexpect not screen-on\n\
+         notify Signal \"Team Ur\"\nwait 1s\nshot third.png\n\
+         wait 5s\nexpect not screen-on\n\
+         glance\nwait 1s\nexpect notification\nshot again.png\n\
+         wait 5s\nexpect not screen-on\n\
+         glance\nwait 1s\nexpect glance\n",
+    );
+    let shot = |name| std::fs::read(dir.join(name)).expect("the script took it");
+    assert!(shot("third.png") == shot("again.png"), "{log}");
+    assert!(shot("second.png") != shot("again.png"), "{log}");
+}
+
 /// A notification from nobody (no sender, and no title: only its body,
 /// which never shows) has its app where the name would be, as big, on a
 /// screen of its own, rather than small in the corner of an empty one;

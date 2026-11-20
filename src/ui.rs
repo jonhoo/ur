@@ -189,7 +189,9 @@
 //!   who it's from) for [`BANNER_TIME`] and a short buzz. If the screen was
 //!   off, the notification gets the whole (dim) screen instead, like a
 //!   glance, as a history page shows it (see [`Theme::notification`]), and the
-//!   screen sleeps again after. Either way, it's kept in
+//!   screen sleeps again after; turning the wrist to look within
+//!   [`MISSED_TIME`] of that, with the watch untouched since, shows it
+//!   once more instead of a glance, without the buzz. Either way, it's kept in
 //!   the history above the clock; one arriving while that's showing goes
 //!   straight to its first page instead of a banner. One from nobody (no
 //!   sender, nor a title) has its app where who it's from goes on a screen
@@ -317,6 +319,18 @@ const CENTRE_AFTER_TOUCH_WAKE: Duration =
 const DOUBLE_PRESS: Duration = Duration::from_millis(500);
 /// How long a notification banner shows.
 const BANNER_TIME: Duration = Duration::from_secs(4);
+/// How long after a notification that had the screen to itself went dark
+/// again, untouched, turning the wrist to look shows it once more rather
+/// than the time (see [`App::missed_until`]): a look that soon after the
+/// buzz is most likely for it, a moment too late.
+///
+/// A guess, to be tuned from use: the buzz finds the hands busy, and the
+/// wrist comes up once they're free, so it has to be several times the 4 s
+/// the notification showed for; but every look for the time within it
+/// gets the notification instead (which shows no time: a tap then does),
+/// so it mustn't reach the next look at the clock either. 20 s makes it
+/// 24 s from the buzz, less up to a second (it's kept in whole seconds).
+const MISSED_TIME: Duration = Duration::from_secs(20);
 /// A banner's `until` while it waits to be seen: a notification that came
 /// in the quiet night. Its time starts once it's on screen (see
 /// [`App::on_tick`]).
@@ -572,6 +586,24 @@ pub struct App {
     banner: Option<Banner>,
     /// The screen woke only to show a notification; sleep again after it.
     brief_wake: bool,
+    /// Until when a turn of the wrist shows the newest notification again
+    /// instead of a glance: it had the screen to itself (it arrived with
+    /// the screen off) for [`BANNER_TIME`], and then [`MISSED_TIME`] more
+    /// passes. Only while nothing says the wearer saw it, or anything
+    /// newer: any press or touch ends it (the notification showing, they
+    /// were looking; later, they've woken the screen, with the handle
+    /// that says there's one unseen), as does whatever shows a banner
+    /// next, and the look that uses it, so it shows again once.
+    ///
+    /// Left to run out rather than cleared in time: only a turn of the
+    /// wrist reads it, against the time then.
+    ///
+    /// In whole seconds since boot, for the RAM, of which the simulator's
+    /// comparison build has a few dozen bytes left: an `Option<Instant>`
+    /// is 16 bytes, and this 4, in a gap the struct already had. A
+    /// second either way is nothing to a time that's a guess; and 0 is
+    /// never it (it's always in the future when set), so `None` is free.
+    missed_until: Option<NonZeroU32>,
     call: Option<Call>,
     /// What the phone is playing, since it last told us.
     music: Option<Music>,
@@ -740,6 +772,7 @@ impl App {
             notifications: Notifications::default(),
             banner: None,
             brief_wake: false,
+            missed_until: None,
             call: None,
             music: None,
             air: false,
@@ -900,6 +933,12 @@ impl App {
         // The history never shrinks, so once there's a notification to
         // have a banner (or not to have been seen), there always is.
         let none = self.notifications.list.is_empty();
+        // And a notification to show again at a turn of the wrist is one
+        // nobody has seen: opening the history ends that (see `go_to`).
+        debug_assert!(
+            self.missed_until.is_none() || self.notifications.unseen,
+            "a seen notification to show again"
+        );
         debug_assert!(!(none && self.banner_newest()), "a banner for nothing");
         debug_assert!(!(none && self.notifications.unseen));
         debug_assert!(self.call.as_ref().is_none_or(|c| c.since <= c.until));
@@ -960,8 +999,9 @@ impl App {
     }
 
     /// Whether a notification has the screen to itself, because it arrived
-    /// with the screen off.
-    fn quiet_notification(&self) -> bool {
+    /// with the screen off (or shows again at a turn of the wrist; see
+    /// `missed_until`). Public for the simulator's `expect`.
+    pub fn quiet_notification(&self) -> bool {
         self.brief_wake && self.banner.is_some()
     }
 
@@ -1249,6 +1289,7 @@ impl App {
         // the newest would only cover it.
         if let Screen::Notification(_) = screen {
             self.notifications.unseen = false;
+            self.missed_until = None;
             if self.banner_newest() {
                 self.banner = None;
             }
@@ -1497,8 +1538,35 @@ impl App {
             // Only while the screen is off; it's not a user input as such
             // (an arm swing can look the same), so it doesn't hold the
             // screen on.
+            //
+            // Soon after a notification showed to nobody (see
+            // `missed_until`), the look is most likely for it, too late:
+            // it shows again, as it first did (the whole screen, dim, for
+            // as long, a touch waking the clock under its banner), bar
+            // the buzz, which is for calling the wearer, who's here. Once:
+            // this look has seen it, and the next is for the time. Not in
+            // the quiet night, should it have started since, where
+            // notifications wait for a proper wake (and it then waits as
+            // those do, in the history); nor for a glance the watch
+            // starts itself (on the charger, at a turn), which nobody
+            // asked for.
             InputEvent::Glance => {
-                self.glance(now, GLANCE_TIME);
+                let missed = self
+                    .missed_until
+                    .take()
+                    .is_some_and(|until| now.as_secs() < u64::from(until.get()));
+                if missed && !self.awake && !self.night.quiet() {
+                    defmt::info!("glance: the notification again");
+                    self.awake = true;
+                    self.brief_wake = true;
+                    self.screen = Screen::Clock;
+                    self.banner = Some(Banner {
+                        shows: Shows::Newest,
+                        until: now + BANNER_TIME,
+                    });
+                } else {
+                    self.glance(now, GLANCE_TIME);
+                }
                 return;
             }
             // A long press's finger lifting: only a button grid hold's
@@ -1741,6 +1809,9 @@ impl App {
         let notification_shown = self.quiet_notification();
         self.last_input = now;
         self.brief_wake = false;
+        // Nor is there a notification to show again at the next turn of
+        // the wrist: the wearer is here (see `missed_until`).
+        self.missed_until = None;
         if !self.awake {
             self.awake = true;
             self.screen = Screen::Clock;
@@ -2528,6 +2599,9 @@ impl App {
 
     /// Shows a banner (or keeps it for later, in the quiet night).
     fn show_banner(&mut self, shows: Shows, now: Instant) {
+        // Whatever shows now, an earlier notification isn't the one to
+        // show again at a turn of the wrist (see `missed_until`).
+        self.missed_until = None;
         // Reading the history: a new notification goes straight to its
         // first page, whole, rather than in a banner over an older one
         // (which it has just moved along a page).
@@ -2577,6 +2651,18 @@ impl App {
             self.awake = true;
             self.brief_wake = true;
             self.screen = Screen::Clock;
+        }
+        // A notification with the screen to itself (this one's own wake,
+        // or the one whose it took over): a turn of the wrist just after
+        // it's gone shows it again (see `missed_until`). Only a
+        // notification: the rest say what the Info screen or the README
+        // also does, and nobody turns a wrist to look for those.
+        if self.brief_wake && shows == Shows::Newest {
+            // (136 years of seconds fit; a watch up for longer shows
+            // no notification twice.)
+            self.missed_until = u32::try_from((now + BANNER_TIME + MISSED_TIME).as_secs())
+                .ok()
+                .and_then(NonZeroU32::new);
         }
     }
 

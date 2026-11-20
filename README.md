@@ -176,6 +176,9 @@ caller's name or what's playing). One that comes with
 the screen on shows along the bottom for 4 seconds; with the
 screen off, it gets the whole screen, dimly, the name centred, and large
 if it's short (the app's name, for one with neither sender nor title).
+If you turn your wrist to look within 20 seconds of that screen going
+dark again, without having touched the watch, it shows once more, rather
+than the time, without the buzz.
 
 **Screens:** swipe right for Today (steps and heart rate by the hour),
 then Last night; left for Alarms, the alarms set in Gadgetbridge,

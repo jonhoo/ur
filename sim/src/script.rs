@@ -121,6 +121,10 @@ Output:
                              buzzing, buzzed (asked to buzz at all since
                              the last check of it), off (switched off),
                              clock (the clock face, for someone to read),
+                             glance (a glance: the time, dimly, from a
+                             turn of the wrist or on the charger),
+                             notification (one with the whole screen: it
+                             arrived with the screen off),
                              charging (the charge screen, woken on the
                              charger), charged (the full charge's
                              screen), game (the hidden puzzle, 2^),
@@ -630,6 +634,8 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
                 "buzzed" => std::mem::take(&mut watch.buzzed),
                 "off" => watch.off.is_some(),
                 "clock" => watch.app.showing_clock(),
+                "glance" => watch.app.glancing(),
+                "notification" => watch.app.quiet_notification(),
                 "charged" => watch.app.showing_charged(),
                 "charging" => watch.app.showing_charge(),
                 "game" => watch.app.showing_game(),

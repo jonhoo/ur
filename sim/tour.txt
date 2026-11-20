@@ -563,3 +563,35 @@ glance
 wait 1s
 expect dim
 shot 25-timers-glance.png
+
+# ==============================================================================
+# A notification missed, and one from nobody
+# ==============================================================================
+
+# With the screen off, a notification gets the whole screen, dimly, for
+# 4 seconds. This one has no sender, nor a title, only a body (which
+# never shows), so its app is where the name would be. Nobody looked;
+# turning the wrist just after it went dark shows it again, without the
+# buzz, once: the look after that is a glance. (Last too, for its `gb`
+# line's odd milliseconds.)
+wait 6s
+expect not screen-on
+gb GB({"t":"notify","id":1794170026,"src":"Parcelly","title":"","subject":"","body":"Your parcel is ready for pickup","sender":"","tel":""})
+expect buzzed
+wait 1s
+expect dim
+expect notification
+shot 26-notification-app.png
+wait 5s
+expect not screen-on
+glance
+expect not buzzed
+wait 1s
+expect dim
+expect notification
+shot 27-notification-again.png
+wait 5s
+expect not screen-on
+glance
+wait 1s
+expect glance
