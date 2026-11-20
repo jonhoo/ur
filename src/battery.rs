@@ -53,38 +53,57 @@ const IMPLAUSIBLE_MV: u32 = 2500;
 // ==============================================================================
 //
 // At rest, a LiPo cell's voltage says how full it is, though not linearly:
-// most of the charge is on the plateau, where 50 mV is a quarter of the
-// cell. The curve is InfiniTime's for the PineTime
-// (`src/components/battery/BatteryController.cpp`: 3.5 V 0%, 3.616 V 3%,
-// 3.723 V 22%, 3.776 V 48%, 3.979 V 79%, 4.18 V 100%), checked against our
-// own logs and changed at both ends:
+// most of the charge is on the plateau, where 20 mV is a tenth of the
+// cell. The percentage should fall in a straight line in time at the
+// wearer's usual load, so the curve is fitted to that: charge used, as
+// time weighted by the hour's metered load (the `power:` lines), against
+// the voltage at rest (the median of the 10-minute `battery:` lines
+// within 25 minutes, which drops the sag of a lit screen or LED), over
+// the sealed watch's six discharges of 2026-11-07 to 11-20, aligned by
+// voltage on the longest, the trip of 11-16 to 11-20 (101 hours, from a
+// full charge to 3754 mV). They agree within ~3 hours of each other, and
+// the fit's residual is 1.2 points. (`tmp/rc4/battery-curve` has the
+// scripts.)
 //
-// - Plateau and knee: the dev kit's run down to flat on 2026-11-10 (its
-//   clock-face percentage, read off the fuzzer's screenshots, 3.78 V to
-//   3.55 V over 7.3 hours at a steady load) falls in a straight line in
-//   time on this curve, within ±2 points, and the line reaches 0% within
-//   minutes of when the dev kit died.
-// - Full: the sealed watch, after each of its three top-ups on 2026-11-09
-//   and the dev kit after a full charge on 2026-11-10, settled at
-//   4.14–4.15 V within the hour. That's this cell's (and load's) full at
-//   rest, so 100% is at 4.15 V rather than InfiniTime's 4.18 V, which would
-//   have a fully charged watch read 96%.
-// - Empty: 0% is at `CRITICAL_MV`, where the watch saves and switches off,
-//   rather than 3.5 V, where hours are left at the watch's usual load:
+// - Full: the watch settles at 4.14–4.15 V within hours of a full charge
+//   (4.18 V as it comes off), so 100% is at 4.15 V.
+// - 4.15 V to 3.756 V is measured: 86 hours at the mean load. The cell
+//   flattens from ~3.83 V, and is still getting flatter where the data
+//   ends (0.15 h/mV at the top, 0.3 at 3.81 V, 0.6 at 3.76 V). The curve
+//   this replaces (InfiniTime's, 3.776 V 48%, 3.979 V 79%) had the
+//   plateau start 50 mV lower, so the percentage stalled through
+//   3.83–3.78 V (55% to 42% in 31 hours) and then made up for it.
+// - **Below 3.756 V is extrapolated**: no discharge of this watch has
+//   gone lower. What's left there is taken to be 40 hours at the mean
+//   load (so a charge lasts ~127, 5.3 days, and 3.756 V is 31%), where
+//   the evidence spans ~28 to ~56 hours: InfiniTime's curve says 38% is
+//   left at 3.756 V at rest; the same curve read 30 mV higher (it fits
+//   the dev kit's run to flat of 2026-11-10 under a steady load, which
+//   sags the voltage about that much) says 23%; a generic LiPo table
+//   says ~26%. The shape below is InfiniTime's (plateau to ~3.72 V, a
+//   slope to ~3.62 V, then the knee), scaled to that 31% and moved up
+//   10–25 mV. So it errs low: if the cell holds more, the last quarter
+//   falls slower than the rest, which is the safe way to be wrong.
+// - Empty: 0% is at `CRITICAL_MV`, where the watch saves and switches off:
 //   "0%" should mean it's about to.
 //
-// TODO: a run from full to `CRITICAL_MV` at the sealed watch's own load,
-// with the 10-minute lines, would fit the top half (3.8–4.15 V) to this
-// cell; it's InfiniTime's there.
+// TODO: a run from full to `CRITICAL_MV` at the sealed watch's own load
+// would fit the part below 3.756 V, and say how long a charge lasts,
+// which sets every percentage above it too (they'd all scale).
 
 /// Open-circuit voltage (mV) against charge (%), for the PineTime's cell at
 /// its light load, piecewise linear between the points; see above.
-const CHARGE_CURVE: [(u16, u8); 6] = [
+const CHARGE_CURVE: [(u16, u8); 9] = [
     (CRITICAL_MV as u16, 0),
-    (3616, 3),
-    (3723, 22),
-    (3776, 48),
-    (3979, 79),
+    // Extrapolated, up to here.
+    (3640, 3),
+    (3735, 18),
+    // Measured, from here.
+    (3756, 31),
+    (3780, 43),
+    (3800, 49),
+    (3830, 57),
+    (4000, 81),
     (4150, 100),
 ];
 

@@ -124,11 +124,92 @@ mod tests {
 
     #[test]
     fn the_curve_puts_most_of_the_charge_on_the_plateau() {
-        // Where the linear 3.5–4.2 V percentage it replaced overstated it.
-        assert_eq!(charge_percent(3723), 22);
-        assert_eq!(charge_percent(3776), 48);
-        assert_eq!(charge_percent(3979), 79);
-        assert!(charge_percent(3750) < 40);
+        // Where the linear 3.5–4.2 V percentage overstated it, and where
+        // InfiniTime's curve had it stall (its plateau began at 3.776 V;
+        // this cell's begins at ~3.83 V).
+        assert_eq!(charge_percent(3735), 18);
+        assert_eq!(charge_percent(3756), 31);
+        assert_eq!(charge_percent(3830), 57);
+        assert_eq!(charge_percent(4000), 81);
+        // The plateau: 26 points in 44 mV, and as many in the 170 above.
+        assert!(charge_percent(3800) - charge_percent(3756) >= 18);
+        assert!(charge_percent(3750) < 30);
+    }
+
+    /// The sealed watch's two longest discharges from a full charge, as
+    /// (hours on battery, mV at rest: the median of the 10-minute lines
+    /// within 25 minutes), every six hours: the trip of 2026-11-16 to
+    /// 11-20, and 11-13 to 11-16 before it.
+    const TRIP: [(u32, u32); 18] = [
+        (0, 4181),
+        (6, 4131),
+        (12, 4095),
+        (18, 4068),
+        (24, 4029),
+        (30, 3994),
+        (36, 3962),
+        (42, 3941),
+        (48, 3906),
+        (54, 3875),
+        (60, 3835),
+        (66, 3825),
+        (72, 3802),
+        (78, 3787),
+        (84, 3774),
+        (90, 3767),
+        (96, 3759),
+        (101, 3754),
+    ];
+    const BEFORE_THE_TRIP: [(u32, u32); 13] = [
+        (0, 4178),
+        (6, 4093),
+        (12, 4050),
+        (18, 4023),
+        (24, 3980),
+        (30, 3939),
+        (36, 3899),
+        (42, 3882),
+        (48, 3859),
+        (54, 3820),
+        (60, 3794),
+        (66, 3785),
+        (68, 3789),
+    ];
+
+    /// How far (points) the curve strays, over a discharge, from the
+    /// straight line in time through its readings six hours in (settled
+    /// after the charge) and at its end.
+    fn strays(discharge: &[(u32, u32)]) -> f64 {
+        let at = |&(hours, mv): &(u32, u32)| (f64::from(hours), f64::from(charge_percent(mv)));
+        let (h0, p0) = at(&discharge[1]);
+        let (h1, p1) = at(discharge.last().expect("has readings"));
+        discharge[1..]
+            .iter()
+            .map(at)
+            .map(|(h, p)| (p - (p0 + (p1 - p0) * (h - h0) / (h1 - h0))).abs())
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn the_percentage_falls_in_a_straight_line_in_time() {
+        // By wall-clock hours, though the curve was fitted to hours
+        // weighted by load and to all six discharges, which is why the
+        // one before the trip isn't closer. (InfiniTime's curve strayed
+        // 5.9 and 5.7 points: it stalled from 3.83 V, then caught up.)
+        let trip = strays(&TRIP);
+        assert!(trip <= 2.5, "the trip strays {trip:.1} points");
+        let before = strays(&BEFORE_THE_TRIP);
+        assert!(
+            before <= 5.0,
+            "the discharge before strays {before:.1} points"
+        );
+        // And at the trip's rate, a charge lasts five to six days. (Below
+        // where the trip ended, 3.754 V, the curve is extrapolated, to
+        // err short.)
+        let (hours, mv) = TRIP[TRIP.len() - 1];
+        let used = 100.0 - f64::from(charge_percent(mv));
+        let days = f64::from(hours) * 100.0 / used / 24.0;
+        assert!((5.0..6.5).contains(&days), "{days:.1} days a charge");
     }
 
     // ==========================================================================
