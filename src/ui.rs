@@ -187,7 +187,8 @@
 //!   finger lifts), so there's nothing to keep or throw away.
 //! - The phone's alarms (see [`alarm::Phone`]) have a screen of their own,
 //!   read-only: they're set in Gadgetbridge.
-//! - Ringing takes over the screen: tap to snooze, button to stop. Alarms
+//! - Ringing takes over the screen: tap to snooze (away from the screen's
+//!   very edge, where brushes land), button to stop. Alarms
 //!   start buzzing gently and build up (see [`Pattern::ALARM`]), with the
 //!   backlight low and brightening over a minute; timers buzz at full
 //!   strength straight away.
@@ -2092,7 +2093,16 @@ impl App {
                     defmt::info!("alarm: stopped");
                     self.stop_ringing()
                 }
-                InputEvent::Touch(touch) if touch.gesture == Gesture::Tap => {
+                // A tap anywhere snoozes, bar at the screen's very edge
+                // (the dark's margin for a tap, `wake::inside`), where a
+                // brush lands: in 0.11.3-rc.3's field log, a tap 3 canvas
+                // pixels from the top snoozed a timer 0.7 s before the
+                // wearer's press of the button would have stopped it, and
+                // it rang again nine minutes on. (Likely the finger, on
+                // its way to the button.)
+                InputEvent::Touch(touch)
+                    if touch.gesture == Gesture::Tap && wake::inside(touch.x, touch.y) =>
+                {
                     defmt::info!("alarm: snoozed");
                     self.alarm_state.snooze(now.as_secs() as i64);
                     self.stop_ringing();

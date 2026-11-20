@@ -213,8 +213,8 @@ bar on an edge means there's more that way.
   waits 0.3 s for a second touch, and wakes it if none comes.
   Without a phone connected, a double tap wakes a dark screen instead.
 - **A call:** tap ANSWER or DECLINE, or press the button to silence it.
-- **A ringing alarm:** tap to snooze for 9 minutes; press the button to
-  stop it.
+- **A ringing alarm:** tap to snooze for 9 minutes (not at the screen's
+  very edge, where a brush would); press the button to stop it.
 
 On the settings' **LOOK**, tap **THEME** for the next colour scheme,
 **FORCE** to show the day's schemes (DAY) or the night's (NIGHT)

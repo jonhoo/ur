@@ -926,6 +926,29 @@ fn a_double_tap_s_taps_must_be_close_together_and_away_from_the_edge() {
     }
 }
 
+/// A ringing alarm's snooze takes a tap away from the screen's very edge
+/// (`wake::inside`): a tap 3 canvas pixels from the top, as snoozed a
+/// timer in 0.11.3-rc.3's field log just before the wearer's press of
+/// the button, leaves it ringing, for the button to stop for good. A tap
+/// further in snoozes it (9 minutes).
+#[test]
+fn a_tap_at_the_edge_does_not_snooze_a_ringing_alarm() {
+    let dir = out("snooze-edge");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "time 2026-11-09 06:58 +01:00\nalarm 1 07:00 on\nuntil 07:00\nexpect buzzing\n\
+         wait 4s\ntap 17,3 67\nexpect buzzing\nwait 700ms\nbutton\nexpect not buzzing\n\
+         wait 10m\nexpect not buzzing\n\
+         alarm 1 07:15 on\nuntil 07:15\nexpect buzzing\ntap 17,8 67\nexpect not buzzing\n\
+         wait 8m\nexpect not buzzing\nwait 61s\nexpect buzzing\nbutton\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+}
+
 /// With a phone connected, a second tap that starts too late after a
 /// light first tap's lift for a double tap (`wake::DOUBLE_TAP_MS`, 0.3 s),
 /// but within `wake::RETRY_TAP_MS` (1.5 s), is a retry: the wearer tapping
