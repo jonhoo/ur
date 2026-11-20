@@ -801,7 +801,10 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   - **Why and how it started:** `heart: due (WHY); budget B s, resting
     A/S; round R ARM drive D; calm start after N s, M min since a
     reading`. `WHY` is the schedule's reason (`Rest`, `Moved`, `Asleep`,
-    `Elevated`, `Retry`, `Overdue`, `Budget`, `First`); `calm` or `busy`
+    `Elevated`, `Retry`, `Overdue`, `Budget`, `First`; or `Calm`, from
+    0.11.3-rc.5, for a session that wasn't due but took a calm moment
+    because no reading had come for 20 minutes, see `heart_schedule`'s
+    "Seeking calm"); `calm` or `busy`
     is whether it found the calm wrist it waited `N` s for (a busy one
     also has the `busy start` line); and `M` of 30 or more means a
     reading was overdue. (`Why::Overdue` alone doesn't: it only marks a

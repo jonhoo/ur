@@ -46,8 +46,9 @@ on top:
   come; if 19 s of a busy wrist have shown no sign of a pulse, it stops
   there and saves the light for the next try. Awake, every other
   reading's tries start with a brighter LED, an experiment to see if
-  that reads better at a desk. After half an hour without a reading, it
-  tries every 5 minutes, and may spend up to twice the LED time until
+  that reads better at a desk. After twenty minutes without a reading, it
+  also tries whenever your wrist goes still, and after half an hour
+  every 5 minutes besides, and may spend up to twice the LED time until
   one comes. Asleep, it measures in the last minute of each 5 minutes
   on the clock, which is how the readings reach your phone. To watch it
   live (with your steps), open Gadgetbridge's Live activity chart: the

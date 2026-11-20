@@ -49,6 +49,11 @@
 //!   waits for a calm wrist as any other does: see "Overdue tries wait for
 //!   calm too" below.)
 //!
+//! - **A calm moment is taken when a reading is late** ([`SEEK_AFTER`]):
+//!   twenty minutes without one, awake, and a session starts the next
+//!   time the wrist goes calm, whatever the waits above say (see "Seeking
+//!   calm" below).
+//!
 //! Sessions while the clock face shows aren't scheduled (someone is
 //! looking, so `heart` measures right away), but their readings count as
 //! measurements, and their LED time comes out of the budget.
@@ -179,6 +184,62 @@
 //! The delay it costs is made up by retrying sooner: every five minutes
 //! rather than ten (see [`OVERDUE_RETRY`], and there for what that costs
 //! the battery).
+//!
+//! # Seeking calm
+//!
+//! Everything above decides *when* to try and then waits up to two minutes
+//! for calm. Between tries, calm moments go by unused: after a failure the
+//! next try is 5, 10 or 20 minutes off (5 once a reading is overdue), and
+//! a wrist that was busy at each of those times may well have rested in
+//! between. The user asked (2026-11-21) to "more actively look for calm
+//! and try to get a heart rate reading quickly when calm is detected if
+//! we haven't managed to take a measurement in a while".
+//!
+//! So once no reading has come for [`SEEK_AFTER`], awake, a session
+//! starts at the wrist's next calm moment ([`START_CALM_POLLS`] calm polls
+//! in a row, as for any start), provided the last session ended at least
+//! [`SEEK_GAP`] ago and the budget holds a session's worth (see
+//! [`Schedule::seek`]). Finding the moment costs nothing: `activity`
+//! already polls the accelerometer every 2 s, and wakes `heart` at the
+//! poll that makes the wrist calm.
+//!
+//! What the sealed watch's logs say it's worth (2026-11-16 to 20, 70
+//! waking hours on the wrist under 0.11.3-rc.3's schedule, which is this
+//! one; `tmp/rc5/workout/calmseek2.py`, sessions' outcomes drawn from how
+//! the logs' own sessions fared by how long the wrist stayed calm after
+//! they started, the mean of 10 runs):
+//!
+//! | | sessions | readings | LED | over 30 min from a reading | gaps over 40 min |
+//! |---|---:|---:|---:|---:|---:|
+//! | as logged | 669 | 207 | 13,691 s | 20.7 h | 33 |
+//! | seeking after 30 min | +97 | +36 | +1,820 s | 12.1 h | 27 |
+//! | **after 20 min** | +158 | +64 | +2,883 s | 7.6 h | 16 |
+//! | after 10 min | +277 | +110 | +5,198 s | 6.2 h | 13 |
+//!
+//! A sought reading costs ~45 s of LED where the logged ones cost 66 (and
+//! a busy wrist's 145): a session started calm reads 84% of the time if
+//! the calm lasts 18 s more, 71% at 12-17 s, 47% at 6-11 s and 33% under
+//! that, against 17% started busy. Twenty minutes is where the schedule
+//! itself has run out of patience ([`MAX_INTERVAL`] is the longest it
+//! means to go at rest), so seeking never runs ahead of a schedule that's
+//! doing fine, which ten minutes would: it adds ~690 s of LED a day,
+//! ~0.5 mAh. Over all 12 days of logs (earlier schedules among them) the
+//! same rule adds 170 readings to 571 for 18% more LED.
+//!
+//! What keeps it honest:
+//!
+//! - **The budget** applies as to any background session, so seeking can
+//!   spend no more than the caps already allow.
+//! - **Not after a calm failure, or off the wrist.** A watch on a desk is
+//!   calm all day and never reads; a session that failed on a calm wrist
+//!   (or found no skin) wasn't short of calm, so seeking stops until a
+//!   session ends otherwise (a reading, or a failure on a busy wrist),
+//!   and the back-off above takes over.
+//! - **Not asleep.** The night's sessions are timed to the phone's
+//!   buckets, read 97% of the time, and are left exactly as they were.
+//! - A sought session that fails counts as any failure does, so the
+//!   schedule's own tries back off as before; while a reading stays late,
+//!   it's the calm moments that set the pace, [`SEEK_GAP`] apart at most.
 //!
 //! # Giving up on a hopeless session
 //!
@@ -503,6 +564,14 @@ pub const OVERDUE_BUDGET: u32 = 2 * LED_BUDGET;
 /// | calm when due, then busy without a window with a rate (20 s) | 12 | 240 s | 0.19 mAh |
 /// | calm when due, 30 s without a reading | 11 | 330 s | 0.26 mAh |
 ///
+/// (The last two rows were the worst up to 0.11.3-rc.4. Since a late
+/// reading also takes the calm moments between these tries, see "Seeking
+/// calm" in the module docs, a wrist that's calm whenever it's looked at
+/// and busy as soon as a session starts makes 26 tries and 520 s of LED
+/// an hour giving up at 19 s, and what [`OVERDUE_BUDGET`] allows, 600 s,
+/// running out its 30 s: ~0.46 mAh an hour, the cap's own worst case.
+/// The logs' wrists read 44% of sought tries, which ends the seeking.)
+///
 /// So a walk, mostly the second row, gets half as many tries again for the
 /// LED it had, and the worst hour costs 0.12 mAh more than before:
 /// ~1.9 mAh over 16 waking hours, were every one of them overdue and
@@ -518,6 +587,20 @@ pub const OVERDUE_BUDGET: u32 = 2 * LED_BUDGET;
 /// not the wrist's calm moments, that times them.
 pub const OVERDUE_RETRY: u32 = FAILED_INTERVAL;
 const _: () = assert!(MIN_INTERVAL <= OVERDUE_RETRY && OVERDUE_RETRY <= CALM_RETRY_INTERVAL);
+
+/// How long without a reading, awake, before a calm moment starts a
+/// session by itself (see "Seeking calm" in the module docs):
+/// [`MAX_INTERVAL`], the longest the schedule means to go without one at
+/// rest. Sooner, and a wrist at rest, whose readings are 10 and 20
+/// minutes apart by design, would be measured at every pause.
+pub const SEEK_AFTER: u32 = MAX_INTERVAL;
+
+/// The least time between the end of one session and a sought one:
+/// [`MIN_INTERVAL`], as between any two. A wrist that's calm for a moment
+/// every half minute would otherwise be measured back to back; in the
+/// logs, one minute rather than two made 12% more sessions for 10% more
+/// readings.
+pub const SEEK_GAP: u32 = MIN_INTERVAL;
 
 /// Consecutive failures counted (beyond this the wait is capped anyway).
 const MAX_FAILURES: u8 = 5;
@@ -562,6 +645,11 @@ pub enum Why {
     /// Due already by one of the above, but the LED budget is spent until
     /// then.
     Budget,
+    /// Not due by any of the above, but a reading is late and the wrist
+    /// just went calm (see [`Schedule::seek`]). Never from
+    /// [`Schedule::due`]: `heart` says so of a session it started that
+    /// way.
+    Calm,
 }
 
 /// Whether a due background session starts (see [`Schedule::start`]).
@@ -816,6 +904,32 @@ impl Schedule {
         } else {
             Start::Wait
         }
+    }
+
+    /// From when a calm wrist starts a session by itself, though none is
+    /// due (see "Seeking calm" in the module docs), or `None` while it
+    /// doesn't: asleep, before the first session, on or just off the
+    /// charger, and after a session that found no skin or failed on a
+    /// calm wrist. The latest of [`SEEK_AFTER`] after the last reading
+    /// (or boot), [`SEEK_GAP`] after the last session, and the budget
+    /// holding a session's worth.
+    ///
+    /// From then on, `heart` starts a session as soon as the wrist has
+    /// been calm for [`START_CALM_POLLS`]; there's no waiting it out, as
+    /// [`Self::start`] does for a session that's due: the schedule's own
+    /// tries still come when they would have.
+    pub fn seek(&self, asleep: bool) -> Option<u32> {
+        let seeking = !asleep
+            && self.interval != 0
+            && self.power == Power::Away
+            && !self.off_wrist
+            && self.calm_failures == 0;
+        seeking.then(|| {
+            self.last_reading
+                .saturating_add(SEEK_AFTER)
+                .max(self.last.saturating_add(SEEK_GAP))
+                .max(self.holds(SESSION_RESERVE))
+        })
     }
 
     /// [`Self::due`], as if the budget were unlimited.

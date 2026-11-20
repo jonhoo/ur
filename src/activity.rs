@@ -1626,6 +1626,14 @@ pub async fn activity_task(i2c: Device) {
             Ordering::Relaxed,
             run(recent <= crate::heart::CALM),
         );
+        // The wrist has just been calm for long enough to start a heart
+        // rate session: tell `heart`, which may be waiting for exactly
+        // that with a reading late (see `heart_schedule`'s "Seeking
+        // calm"). Once per calm stretch, and a look that finds nothing to
+        // do is a few comparisons.
+        if CALM_POLLS.load(Ordering::Relaxed) == crate::heart_schedule::START_CALM_POLLS {
+            crate::heart::wake();
+        }
         STEPLESS_POLLS.update(Ordering::Relaxed, Ordering::Relaxed, run(new_steps == 0));
 
         // A stir, which wakes the touch controller; and whether the watch

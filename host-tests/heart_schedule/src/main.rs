@@ -101,9 +101,18 @@ mod tests {
             calm = run(calm, moment.calm);
             stepless = run(stepless, !moment.active);
             let (due, why) = schedule.due_in_phase(polls, moment.asleep, bucket);
+            let mut why = why;
             let how = if t < due {
                 due_since = None;
-                Start::Wait
+                // Not due, but a late reading takes a calm moment (see
+                // `Schedule::seek`), as in `heart`.
+                let seeking = schedule.seek(moment.asleep).is_some_and(|from| t >= from);
+                if seeking && calm >= START_CALM_POLLS {
+                    why = Why::Calm;
+                    Start::Calm
+                } else {
+                    Start::Wait
+                }
             } else {
                 schedule.start(t, *due_since.get_or_insert(t), calm)
             };
@@ -874,16 +883,30 @@ mod tests {
                 sessions.iter().filter(|s| hour.contains(&s.start)).count() as u32
             };
             let most = (1..9).map(tries).max().expect("hours");
-            let led = (1..9).map(|h| led(&sessions, h * HOUR, (h + 1) * HOUR));
-            (most, led.max().expect("hours"))
+            let led = |h: u32| led(&sessions, h * HOUR, (h + 1) * HOUR);
+            // The worst hour, and the worst once the bucket's own store
+            // is spent (it holds an hour's refill when a reading first
+            // becomes overdue).
+            (
+                most,
+                (1..9).map(led).max().expect("hours"),
+                (3..9).map(led).max().expect("hours"),
+            )
         };
         // Never calm: each try waits its two minutes. Giving up at 19 s
         // (20 s of LED, with the half second either side), or running out.
-        assert_eq!(hour(false, 20), (9, 180));
-        assert_eq!(hour(false, 30), (8, 240));
-        // Calm the moment it's due.
-        assert_eq!(hour(true, 20), (12, 240));
-        assert_eq!(hour(true, 30), (11, 330));
+        assert_eq!(hour(false, 20), (9, 180, 180));
+        assert_eq!(hour(false, 30), (8, 240, 240));
+        // Calm whenever it looks, and busy as soon as it has started: the
+        // worst there is, since a reading that's late takes every calm
+        // moment (see `Schedule::seek`), two minutes after the last
+        // session. Giving up at 19 s, that's the pace; running out its
+        // 30 s, the doubled budget sets it instead: an hour's refill,
+        // after a first hour that also spends what the bucket held. (Up
+        // to 0.11.3-rc.4, with tries only when due: 12 tries and 240 s,
+        // 11 and 330 s.)
+        assert_eq!(hour(true, 20), (26, 520, 520));
+        assert_eq!(hour(true, 30), (24, 720, OVERDUE_BUDGET));
     }
 
     /// A busy failure backs off like any other, from when the session ended,
@@ -918,20 +941,34 @@ mod tests {
             ..resting(t)
         });
         let waits = gaps(&sessions);
-        // At least five minutes between tries, doubling; half an hour
-        // without a reading, every ten minutes (see `OVERDUE`).
-        assert!(waits.iter().all(|&w| w >= FAILED_INTERVAL), "{waits:?}");
-        let overdue = sessions
+        // Five and ten minutes between the first tries, backing off, as
+        // `Retry`. Twenty minutes in, a reading is late, and from then
+        // on every calm moment is taken (see `Schedule::seek`): never
+        // sooner than two minutes after the last session, and no more
+        // of them than the budget allows, which is what paces them once
+        // it has run down (30 s of LED every 150 s is its doubled refill).
+        assert!(about(waits[0], FAILED_INTERVAL), "{waits:?}");
+        assert!(about(waits[1], 2 * FAILED_INTERVAL), "{waits:?}");
+        let sought = sessions
             .iter()
-            .position(|s| s.start >= OVERDUE)
-            .expect("overdue");
-        assert!(sessions[1..overdue].iter().all(|s| s.why == Why::Retry));
-        assert!(sessions[overdue].start < OVERDUE + MINUTE, "{sessions:?}");
-        assert!(sessions[overdue..].iter().all(|s| s.why == Why::Overdue));
+            .position(|s| s.why == Why::Calm)
+            .expect("a sought session");
+        assert!(sessions[1..sought].iter().all(|s| s.why == Why::Retry));
+        assert!(sessions[sought].start >= SEEK_AFTER, "{sessions:?}");
         assert!(
-            waits[overdue..].iter().all(|&w| w < OVERDUE_RETRY + MINUTE),
-            "{waits:?}"
+            sessions[sought].start < SEEK_AFTER + 2 * MINUTE,
+            "{sessions:?}"
         );
+        assert!(waits.iter().all(|&w| w >= SEEK_GAP), "{waits:?}");
+        assert!(sessions.iter().all(|s| s.how == Start::Calm));
+        for hour in 0..8 {
+            let spent = led(&sessions, hour * HOUR, (hour + 1) * HOUR);
+            // (A full bucket's worth more in the first hours.)
+            assert!(spent <= 2 * OVERDUE_BUDGET, "hour {hour}: {spent} s");
+            if hour >= 2 {
+                assert!(spent <= OVERDUE_BUDGET + 30, "hour {hour}: {spent} s");
+            }
+        }
 
         // Off the wrist and still (a nightstand), up to an hour: there's no
         // reading to be had, overdue or not.
@@ -945,22 +982,166 @@ mod tests {
         for (wait, expected) in waits.iter().zip([5, 10, 20, 40, 60, 60, 60]) {
             assert!(about(*wait, expected * MINUTE), "{waits:?}");
         }
+        // (A wrist that won't read and offers no calm between its tries
+        // keeps to the back-off and the overdue retries alone: see
+        // `busy_failures_back_off_until_overdue` and
+        // `an_overdue_hour_is_bounded_whatever_the_wrist`.)
+    }
 
-        // On something skin-like, or a wrist that won't read, the back-off
-        // gives way to every ten minutes half an hour in, before it gets to
-        // 20 minutes.
+    // ==========================================================================
+    // Seeking calm
+    // ==========================================================================
+
+    /// A reading that's late (none for `SEEK_AFTER`) makes the next calm
+    /// moment worth a session by itself, no sooner than `SEEK_GAP` after
+    /// the last one: here, a desk morning whose tries have backed off to
+    /// 20 minutes apart.
+    #[test]
+    fn a_late_reading_takes_the_next_calm_moment() {
         let mut schedule = Schedule::new();
-        let sessions = simulate(&mut schedule, 0, 12 * HOUR, |t| Moment {
+        schedule.ended(100, 13, Outcome::Reading(62), true, awake(0));
+        // A reading 13 s ago: nothing to seek for 20 minutes.
+        assert_eq!(schedule.seek(false), Some(100 + SEEK_AFTER));
+        // Three tries on a busy wrist, backing off 5, 10 and then 20
+        // minutes, which a reading overdue cuts short.
+        schedule.ended(430, 30, Outcome::NoReading, true, awake(0));
+        schedule.ended(760, 30, Outcome::NoReading, true, awake(0));
+        assert_eq!(schedule.due(0, false), (760 + 10 * MINUTE, Why::Retry));
+        schedule.ended(1390, 30, Outcome::NoReading, true, awake(0));
+        assert_eq!(schedule.due(0, false), (100 + OVERDUE, Why::Overdue));
+        // But calm is taken from 20 minutes after the reading, and two
+        // after that last try: 6 minutes before the schedule's own.
+        assert_eq!(schedule.seek(false), Some(1390 + SEEK_GAP));
+        const { assert!(1390 + SEEK_GAP > 100 + SEEK_AFTER) };
+        // A sought session that fails: the next no sooner than two
+        // minutes on.
+        schedule.ended(1560, 20, Outcome::NoReading, true, awake(0));
+        assert_eq!(schedule.seek(false), Some(1560 + SEEK_GAP));
+        // One that reads ends the seeking for another 20 minutes.
+        schedule.ended(1700, 13, Outcome::Reading(71), true, awake(0));
+        assert_eq!(schedule.seek(false), Some(1700 + SEEK_AFTER));
+        assert_eq!(schedule.due(0, false).1, Why::Rest);
+    }
+
+    /// Where calm isn't what was missing, it isn't sought: asleep (the
+    /// night keeps its own times), before the first session, on the
+    /// charger, off the wrist, and after a session that failed on a calm
+    /// wrist (a desk is calm all day).
+    #[test]
+    fn calm_is_not_sought_where_it_would_not_help() {
+        let mut schedule = Schedule::new();
+        assert_eq!(schedule.seek(false), None);
+        schedule.ended(100, 13, Outcome::Reading(62), true, awake(0));
+        assert!(schedule.seek(false).is_some());
+        assert_eq!(schedule.seek(true), None);
+
+        // A calm failure: no seeking, until a busy one says the wrist
+        // moves after all.
+        schedule.ended(2000, 30, Outcome::CalmNoReading, true, awake(0));
+        assert_eq!(schedule.seek(false), None);
+        schedule.ended(2700, 30, Outcome::NoReading, true, awake(0));
+        assert_eq!(schedule.seek(false), Some(2700 + SEEK_GAP));
+
+        // Off the wrist: none, until a reading.
+        schedule.ended(3100, 4, Outcome::OffWrist, true, awake(0));
+        assert_eq!(schedule.seek(false), None);
+        schedule.ended(3500, 30, Outcome::NoReading, true, awake(0));
+        assert!(schedule.seek(false).is_some());
+
+        // On the charger, and until it has settled off it.
+        assert_eq!(schedule.charger(3600, true), Charger::Arrived);
+        assert_eq!(schedule.seek(false), None);
+        assert_eq!(schedule.charger(4000, false), Charger::Left(CHARGER_SETTLE));
+        assert_eq!(schedule.seek(false), None);
+        assert_eq!(
+            schedule.charger(4000 + CHARGER_SETTLE, false),
+            Charger::Away
+        );
+        assert_eq!(
+            schedule.seek(false),
+            Some(4000 + SEEK_GAP),
+            "the last reading was an hour ago"
+        );
+    }
+
+    /// The budget holds a sought session back as it does a due one.
+    #[test]
+    fn seeking_waits_for_the_budget() {
+        let mut schedule = Schedule::new();
+        schedule.ended(100, 13, Outcome::Reading(62), true, awake(0));
+        // A long look at the clock face, in a hand, spends it all.
+        schedule.ended(1500, 400, Outcome::NoReading, false, awake(0));
+        assert_eq!(schedule.budget(1500), 0);
+        let from = schedule.seek(false).expect("seeking");
+        assert!(from > 1500 + SEEK_GAP);
+        assert!(schedule.budget(from) >= SESSION_RESERVE);
+        assert!(schedule.budget(from - 12) < SESSION_RESERVE);
+    }
+
+    /// A day at rest, reading every time, never seeks: the schedule's
+    /// longest interval is where seeking starts. And a night never does.
+    #[test]
+    fn a_wrist_that_reads_is_never_sought() {
+        let mut schedule = Schedule::new();
+        let sessions = simulate(&mut schedule, 0, 8 * HOUR, resting);
+        assert!(sessions.iter().all(|s| s.why != Why::Calm), "{sessions:?}");
+        let night = simulate(&mut schedule, 8 * HOUR, 16 * HOUR, |t| Moment {
+            asleep: true,
+            // A night that reads every other time.
+            outcome: if t / 300 % 2 == 0 {
+                Outcome::Reading(52)
+            } else {
+                Outcome::NoReading
+            },
+            ..resting(t)
+        });
+        assert!(night.iter().all(|s| s.why != Why::Calm), "{night:?}");
+        // Nor a night that doesn't read at all.
+        let night = simulate(&mut schedule, 16 * HOUR, 20 * HOUR, |t| Moment {
+            asleep: true,
             outcome: Outcome::NoReading,
             seconds: 30,
             ..resting(t)
         });
-        let waits = gaps(&sessions);
-        for (wait, expected) in waits.iter().zip([5, 10]) {
-            assert!(about(*wait, expected * MINUTE), "{waits:?}");
-        }
-        assert!(about(sessions[3].start, OVERDUE), "{sessions:?}");
-        assert!(waits[3..].iter().all(|&w| about(w, OVERDUE_RETRY)));
+        assert!(night.iter().all(|s| s.why != Why::Calm), "{night:?}");
+    }
+
+    /// A busy desk that reads when it gets 20 s of calm, which it does
+    /// for half a minute every seven: the schedule's tries, timed by the
+    /// back-off, mostly miss those; seeking finds each, so no reading is
+    /// ever much more than `SEEK_AFTER` after the last.
+    #[test]
+    fn seeking_finds_the_calm_between_the_schedules_tries() {
+        let mut schedule = Schedule::new();
+        let desk = |t: u32| {
+            let calm = t % 420 < 30;
+            Moment {
+                fidget: !calm,
+                calm,
+                // A session that starts in the calm half minute reads;
+                // one started busy (after its two minutes' wait) fails.
+                outcome: if calm {
+                    Outcome::Reading(70)
+                } else {
+                    Outcome::NoReading
+                },
+                seconds: if calm { 13 } else { 20 },
+                ..resting(t)
+            }
+        };
+        let sessions = simulate(&mut schedule, 0, 8 * HOUR, desk);
+        let readings: Vec<u32> = sessions
+            .iter()
+            .filter(|s| s.how == Start::Calm)
+            .map(|s| s.end)
+            .collect();
+        let longest = readings
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .max()
+            .expect("readings");
+        assert!(longest <= SEEK_AFTER + 420, "{longest} s: {sessions:?}");
+        assert!(sessions.iter().any(|s| s.why == Why::Calm));
     }
 
     /// Asleep, a reading is overdue after the same half hour: a night's
@@ -1770,6 +1951,7 @@ mod proofs {
             Why::Rest => assert!(read && !asleep && !moved && at <= last + MAX_INTERVAL),
             Why::Retry => assert!(!read),
             Why::Overdue => assert!(!read && outcome != Outcome::OffWrist),
+            Why::Calm => unreachable!("only `heart` says so, of a sought session"),
         }
         assert!(read || !moved || at <= last + MAX_INTERVAL);
         if outcome == Outcome::CalmNoReading {
@@ -2111,6 +2293,7 @@ mod proofs {
                 assert!(!read && outcome != Outcome::OffWrist);
                 assert!(at >= now + OVERDUE_RETRY && at < now + MAX_FAILED_INTERVAL);
             }
+            Why::Calm => unreachable!("only `heart` says so, of a sought session"),
         }
         if why != Why::Budget {
             assert!(read || !moved || at <= now + MAX_INTERVAL);
@@ -2321,6 +2504,40 @@ mod proofs {
         schedule.ended(earlier, kani::any(), reading, kani::any(), before);
         if later <= earlier + OVERDUE {
             assert!(schedule.budget(later) <= LED_BUDGET);
+        }
+    }
+
+    /// From any consistent state: calm is never sought asleep; and when
+    /// it is, not before a reading is `SEEK_AFTER` late, nor within
+    /// `SEEK_GAP` of the last session, nor before the budget holds a
+    /// session's worth (at any time from then on, as nothing but a
+    /// session spends it).
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn calm_is_only_sought_late_apart_and_within_the_budget() {
+        let mut schedule = any_consistent();
+        assert!(schedule.seek(true).is_none());
+        // A session, so that the times it's counted from are known.
+        let (now, later): (u32, u32) = kani::any();
+        kani::assume(schedule.as_of() <= now && now <= later && later < UPTIME);
+        let (outcome, background, before) = any_end();
+        schedule.ended(now, kani::any(), outcome, background, before);
+        let Some(from) = schedule.seek(false) else {
+            return;
+        };
+        if background || matches!(outcome, Outcome::Reading(_)) {
+            assert!(from >= now + SEEK_GAP);
+            // No skin, or a calm failure: what was missing wasn't calm.
+            assert!(!matches!(
+                outcome,
+                Outcome::OffWrist | Outcome::CalmNoReading
+            ));
+        }
+        if matches!(outcome, Outcome::Reading(_)) {
+            assert!(from >= now + SEEK_AFTER);
+        }
+        if from <= later {
+            assert!(schedule.budget(later) >= SESSION_RESERVE);
         }
     }
 

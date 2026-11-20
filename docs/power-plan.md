@@ -373,6 +373,26 @@ Asleep, sessions are timed to the phone's 5-minute buckets
 minutes after the last made ~11.6, ~3% more of the night's LED
 (~0.03 mAh a night).
 
+### Seeking calm
+
+From 0.11.3-rc.5, once no reading has come for 20 minutes awake, the
+wrist's next calm moment starts a session by itself, no sooner than 2
+minutes after the last one (`heart_schedule::Schedule::seek`), rather
+than leave calm unused between the schedule's tries. Finding the moment
+is free: the accelerometer's 2 s polls were already running.
+
+Replayed over the trip's log (2026-11-16 to 20, 70 waking hours on the
+wrist, with each sought session's outcome drawn from how the log's own
+sessions fared by how long the wrist stayed calm): 158 more sessions
+(+24%), 64 more readings (+31%) and 2,883 s more LED (+21%), ~45 s a
+reading where the logged ones cost 66. Time more than half an hour from
+a reading falls from 20.7 h to 7.6, gaps over 40 minutes from 33 to 16.
+That's **~690 s of LED a day, ~0.5 mAh**. The caps are unchanged and
+still bound it: sought sessions need the budget like any other, so the
+worst case stays `OVERDUE_BUDGET`'s ~0.46 mA, which a wrist that is calm
+whenever looked at and never reads now reaches (600 s an hour, where its
+tries when due alone made 330).
+
 ### Through a workout
 
 From 0.11.3-rc.5 the sensor stays on through a workout (`workout`;

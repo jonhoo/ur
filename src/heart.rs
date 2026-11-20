@@ -8,7 +8,9 @@
 //!   (every 2–20 minutes, depending on movement and recent readings), once
 //!   the wrist has been still for a few seconds after that (see [`CALM`]),
 //!   or two minutes on if it isn't
-//!   ([`heart_schedule::Schedule::start`]), for up to [`SESSION_LIMIT`] or
+//!   ([`heart_schedule::Schedule::start`]), or, when no reading has come
+//!   for 20 minutes, as soon as it's still, due or not
+//!   ([`heart_schedule::Schedule::seek`]), for up to [`SESSION_LIMIT`] or
 //!   until it has a reading (typically ~11 s), carrying on through
 //!   movement (see `heart_schedule`'s "Trying through movement"), unless
 //!   it's plainly getting nowhere ([`heart_schedule::hopeless`]); awake,
@@ -684,10 +686,26 @@ pub async fn heart_task(i2c: Device) {
                 schedule.due_in_phase(activity::active_polls(), activity::asleep(), bucket);
             let wait = if now < at {
                 due_since = None;
+                // Not due, but a reading may be late enough that a calm
+                // moment is worth taking by itself (see `heart_schedule`'s
+                // "Seeking calm"). `activity` wakes this at the poll that
+                // makes the wrist calm, so the look costs nothing until
+                // then; if the wrist is calm already as the seeking
+                // starts, the wait below ends then.
+                let seek = schedule.seek(activity::asleep());
+                if seek.is_some_and(|from| now >= from)
+                    && activity::calm_polls() >= heart_schedule::START_CALM_POLLS
+                {
+                    break Some((heart_schedule::Why::Calm, Start::Calm, 0));
+                }
+                let wait = match seek {
+                    Some(from) if from > now => (at - now).min(from - now),
+                    _ => at - now,
+                };
                 if activity::still() {
-                    at - now
+                    wait
                 } else {
-                    (at - now).min(RECHECK_SECS)
+                    wait.min(RECHECK_SECS)
                 }
             } else {
                 let since = *due_since.get_or_insert(now);
