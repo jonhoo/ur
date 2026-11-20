@@ -701,7 +701,14 @@ impl History {
     }
 
     fn slot(minute: i64) -> usize {
-        minute.rem_euclid(HISTORY_MINUTES as i64) as usize
+        // Any real minute fits 32 bits (until the year 10136), which the
+        // CPU divides itself; 64 bits it leaves to a routine, and the
+        // minute's revision of a night's sleep asks for some thousands of
+        // slots, with everything else waiting (see `activity_task`).
+        match u32::try_from(minute) {
+            Ok(minute) => (minute % HISTORY_MINUTES as u32) as usize,
+            Err(_) => minute.rem_euclid(HISTORY_MINUTES as i64) as usize,
+        }
     }
 
     /// The sample for `minute`, clearing any skipped minutes (and stale
@@ -1602,7 +1609,22 @@ pub async fn activity_task(i2c: Device) {
         });
         // Once a minute: revise the recent past's sleep, its stages, and the
         // summary.
+        //
+        // All of it at once, with nothing else running: a fetch, or the
+        // smart alarm, must not see the window re-classified but not yet
+        // re-staged. So it has to be quick, as every other task waits for
+        // it: at up to 93 ms late in a night (0.11.3-rc.3, staging then
+        // reading the history some 31 times per minute of sleep, now 6),
+        // heart rate sessions running across a minute's start lost I2C
+        // transfers to their 50 ms timeout. The time goes in the log, to
+        // keep an eye on.
+        //
+        // TODO: stage only what can still change (the classifier's window
+        // and an hour before it), from a checkpoint of the staging's state
+        // there, so that this stops growing with the night; that takes
+        // ~30 bytes of static RAM, which the `compare` build doesn't have.
         if new_minute {
+            let started = embassy_time::Instant::now();
             let (summary, changed, asleep, light, settled) = HISTORY.lock(|history| {
                 let mut history = history.borrow_mut();
                 history.classify_sleep();
@@ -1619,6 +1641,10 @@ pub async fn activity_task(i2c: Device) {
                     settled,
                 )
             });
+            debug!(
+                "activity: revised sleep in {=u32} us",
+                started.elapsed().as_micros() as u32
+            );
             if asleep != ASLEEP.swap(asleep, Ordering::Relaxed) {
                 info!("sleep: {}", if asleep { "asleep now" } else { "awake now" });
             }
