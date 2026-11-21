@@ -457,6 +457,32 @@ mod tests {
         assert_eq!(boot(&[], &slots[..1], None), Restored::Checkpoint(0));
     }
 
+    /// A planned record saved while the clock was ahead (a phone's that
+    /// was wrong: here ten days, as a dev kit's was after a test), and
+    /// the clock put right since. Its date rules out no checkpoint once
+    /// the clock is known to be before it: a crash restores the newest
+    /// one, rather than nothing until those ten days have passed.
+    #[test]
+    fn a_planned_record_from_a_clock_that_was_ahead_rules_nothing_out() {
+        let ahead = NOW as u32 + 10 * 24 * 60;
+        let planned = consumed(saved(ahead, 600));
+        let mut slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        slots[5] = saved(NOW as u32 - 4, 30);
+        slots[6] = saved(NOW as u32 - 2, 32);
+        assert_eq!(boot(&planned, &slots, Some(NOW)), Restored::Checkpoint(6));
+        // A checkpoint from that clock is still turned down, as any ahead
+        // of the clock is.
+        slots[7] = saved(ahead - 2, 30);
+        assert_eq!(boot(&planned, &slots, Some(NOW)), Restored::Checkpoint(6));
+        // With the clock unknown (a power-on), there's no telling: the
+        // record's date stands, as before.
+        assert_eq!(boot(&planned, &slots[..7], None), Restored::Nothing);
+        // A record dated the minute under way, or the next two (the clock
+        // resumes a little behind), is no clock that was ahead.
+        let planned = consumed(saved(NOW as u32 + 2, 600));
+        assert_eq!(boot(&planned, &slots[..7], Some(NOW)), Restored::Nothing);
+    }
+
     #[test]
     fn a_tie_keeps_the_first() {
         assert!(newer_checkpoint(100, None, None, None));

@@ -295,7 +295,17 @@ pub fn erase_bytes(minutes: u16) -> u32 {
 ///   [`as_of_any`]): the planned record was saved after every checkpoint
 ///   of the run before it, so an older checkpoint is from before that
 ///   update or System OFF, which the planned record has carried on (and
-///   the phone has fetched, if it's been retired);
+///   the phone has fetched, if it's been retired). Unless the planned
+///   record is itself dated ahead of a known clock: then it was saved by
+///   a clock that was ahead (a phone's that was wrong, since put right),
+///   and says nothing of the checkpoints saved since, all of them dated
+///   before it. Held to it, none would be restored after a crash until
+///   the clock caught up with that date, days perhaps (a dev kit's
+///   planned record from a test, 10 days ahead, did just that). The cost
+///   of not holding to it: until the run's first checkpoint, a couple of
+///   minutes at most, a crash restores one from before that reset, if
+///   it's under a day old, whose minutes the log has anyway and whose
+///   steps today are from then;
 /// - if the clock is known (`now`, UTC minutes since 1970: after a crash,
 ///   it's resumed), not ahead of it (it was saved before the reset, as of
 ///   the minute after its newest, and the clock resumes to within about a
@@ -309,6 +319,9 @@ pub fn newer_checkpoint(
     now: Option<i64>,
 ) -> bool {
     let as_of_minute = i64::from(as_of);
+    // With the checkpoints' own allowance for a clock resumed a little
+    // behind.
+    let floor = floor.filter(|&floor| now.is_none_or(|now| i64::from(floor) <= now + 2));
     best.is_none_or(|best| as_of > best)
         && floor.is_none_or(|floor| as_of > floor)
         && now.is_none_or(|now| as_of_minute <= now + 2 && as_of_minute > now - MAX_MINUTES as i64)
