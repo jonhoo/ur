@@ -728,6 +728,10 @@ async fn speed_up(stack: &Stack<'_, Controller, Pool>, conn: &GattConnection<'_,
 /// After this long without traffic, ask the phone to [`slow_down`].
 const IDLE_AFTER: Duration = Duration::from_secs(30);
 
+/// The shortest connection interval [`slow_down`] asks for: a link at
+/// this or longer is at the idle parameters, whoever chose them.
+const IDLE_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Asks for connection parameters for a phone that's just keeping in
 /// touch: 100–125 ms, and we may skip up to seven events in eight when we
 /// have nothing to send. Gadgetbridge asks for "balanced" (30–50 ms, no
@@ -744,7 +748,7 @@ const IDLE_AFTER: Duration = Duration::from_secs(30);
 /// [`listen`] at every event until the burst is over.
 async fn slow_down(stack: &Stack<'_, Controller, Pool>, conn: &GattConnection<'_, '_, Pool>) {
     let params = RequestedConnParams {
-        min_connection_interval: Duration::from_millis(100),
+        min_connection_interval: IDLE_INTERVAL,
         max_connection_interval: Duration::from_millis(125),
         max_latency: 7,
         supervision_timeout: Duration::from_secs(6),
@@ -1158,9 +1162,16 @@ async fn serve(
                                 info!("ble: asked to fetch during a fetch; ignored");
                                 continue;
                             }
-                            // Hundreds of samples: a few per connection
-                            // event, so not at the idle interval.
-                            if slowed {
+                            // Hundreds of samples, or thousands (a phone
+                            // that was away for days): a few per
+                            // connection event, so not at the idle
+                            // interval. Whoever chose that: Android
+                            // settles on it by itself, and BlueZ connects
+                            // with what we last asked of it, so a link
+                            // can be that slow without `slowed`. (A dev
+                            // kit's fetches over such links took 40 ms a
+                            // bucket rather than 5.)
+                            if slowed || conn.raw().params().conn_interval >= IDLE_INTERVAL {
                                 speed_up(stack, conn).await;
                                 slowed = false;
                             }
