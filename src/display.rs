@@ -70,8 +70,10 @@ const FRCTRL1_IDLE: [u8; 3] = [0x12, 0x1E, 0x1E];
 /// switched with idle mode rather than set once.
 const FRCTRL1_NORMAL: [u8; 3] = [0x00, 0x0F, 0x0F];
 
-/// The controller requires this long between entering and leaving sleep
-/// (either direction) before the next sleep command.
+/// How long we wait between entering and leaving sleep (either direction)
+/// before the next sleep command. The datasheet (ST7789VW v1.0, 9.1.11 and
+/// 9.1.12) asks it only from SLPOUT to SLPIN; from SLPIN to SLPOUT it's
+/// our own caution.
 const SLEEP_SETTLE: Duration = Duration::from_millis(120);
 /// One panel refresh at the controller's default 60 Hz frame rate, with
 /// margin: how long after a change in frame memory (or DISPON) until every
@@ -150,6 +152,8 @@ impl Display {
         // and −10.43 V.
         display.command(GCTRL, &[0x00]).await;
         display.command(SLPOUT, &[]).await;
+        // What `mipidsi` waited, as for the reset above; the datasheet
+        // asks 5 ms (as `wake` waits). Kept: it's once, at boot.
         Timer::after_millis(10).await;
         display.last_sleep_change = Instant::now();
         display.command(DISPON, &[]).await;
@@ -170,6 +174,8 @@ impl Display {
         self.command(DISPOFF, &[]).await;
         self.command(SLPIN, &[]).await;
         self.last_sleep_change = Instant::now();
+        // As after SLPOUT: the datasheet asks 5 ms before the next
+        // command.
         Timer::after_millis(5).await;
     }
 

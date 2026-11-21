@@ -201,6 +201,11 @@ const APP_PRIORITY: Priority = Priority::P2;
 pub use crate::ui_loop::InputEvent;
 
 /// Every user input, in order, for the UI loop.
+//
+// 8 isn't derived from anything: the UI loop empties the queue on every
+// pass, and no field log has shown it full. When it is, the button and
+// touches wait for room, while phone events, attention, glances and a
+// touch's last drag are dropped.
 pub static INPUT: Channel<CriticalSectionRawMutex, InputEvent, 8> = Channel::new();
 
 /// Whether the side button is down right now. While it is, the UI loop
@@ -501,6 +506,9 @@ async fn main(spawner: Spawner) {
     // ==========================================================================
 
     i2c::recover_bus().await;
+    // Where embassy copies a write whose bytes are in flash, which DMA
+    // can't read: only constant register writes, 2 bytes at most (see
+    // `touch`). 16 is the size in embassy's own example, not a bound.
     static TWIM_TX_BUFFER: StaticCell<[u8; 16]> = StaticCell::new();
     static I2C_BUS: StaticCell<Mutex<CriticalSectionRawMutex, twim::Twim<'static>>> =
         StaticCell::new();
@@ -625,6 +633,10 @@ async fn main(spawner: Spawner) {
         // Data length extension, so 251-byte packets go out as one radio
         // packet instead of ten 27-byte ones.
         .map(|b| b.support_dle_peripheral())
+        // 3 packets each way per link, as TrouBLE's nrf-sdc example has
+        // it (the controller defaults to 3 to send, 2 to receive). Not
+        // tuned: each one fewer frees ~266 bytes per link, at an untested
+        // cost to updates and log fetches (see `docs/aranet-design.md`).
         .and_then(|b| b.buffer_cfg(packet_size, packet_size, 3, 3))
         .and_then(|b| b.build(sdc_peripherals, rng, mpsl, sdc_mem))
         // The errno, not `expect`'s `Debug` of the error; see MPSL's above.

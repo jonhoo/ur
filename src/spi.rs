@@ -27,14 +27,18 @@ pub const WRITE_CANNOT_FAIL: &str = "SPIM only fails on non-RAM buffers, which e
 /// that lives in the calling future, so every task that ever touched the
 /// bus asynchronously carried those 255 bytes (and more), in its static
 /// task storage, forever. Almost everything we send is in RAM already;
-/// the rest (constant commands) is a few bytes, bounced through a small
-/// buffer instead.
+/// the rest (the activity log's zeroed entries, `spill`'s) is a few bytes,
+/// bounced through a small buffer instead.
 pub async fn write(bus: &mut Spim<'static>, data: &[u8]) {
     if bus.write_from_ram(data).await.is_ok() {
         return;
     }
     // Pieces of one transfer can go out separately: the chip only sees
     // the bytes between its chip-select edges, which the caller owns.
+    //
+    // Any size works for that reason; small, because the buffer lives in
+    // every caller's future. The only data in flash today is `spill`'s
+    // zeroed entry, 8 bytes: one piece.
     let mut bounce = [0u8; 8];
     for piece in data.chunks(bounce.len()) {
         let bounce = &mut bounce[..piece.len()];
