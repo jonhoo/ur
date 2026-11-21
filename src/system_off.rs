@@ -245,11 +245,13 @@ const RESTORED: u8 = 1;
 const RETIRING: u8 = 2;
 
 /// The newest minute (UTC minutes since 1970) the phone has fetched since
-/// boot (or, until it has, the minute before a restored record that knew
-/// where the phone's copy ended), or 0 if the watch doesn't know: where
-/// the next save can start (see [`snapshot::unsynced_from`]), and the next
-/// fetch at the latest (see [`synced_through`]). Put back when the phone
-/// sets the clock to before it (see [`on_clock_set`]).
+/// boot (or, until it has, where [`restore`] found the phone's copy to
+/// end: the log's last note of a fetch, or the minute before a restored
+/// record that knew, whichever is later), or 0 if the watch doesn't know:
+/// what a save says of the phone's copy (see [`save`]), what the log
+/// notes for the next boot (see [`NOTE`]), and where the next fetch starts
+/// at the latest (see [`synced_through`]). Put back when the phone sets
+/// the clock to before it (see [`on_clock_set`]).
 static SYNCED: AtomicU32 = AtomicU32::new(0);
 
 // ==============================================================================
@@ -623,7 +625,7 @@ async fn keep(
 ) {
     let Due { end, back, relog } = due;
 
-    // The log may reach past that, in two ways, and then lets go of every
+    // The log may reach past that, in three ways, and then lets go of every
     // bucket from there on, to take them in again when they can go (until
     // that's done nothing is appended: samples are in order):
     //
