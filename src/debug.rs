@@ -78,7 +78,7 @@ static UR_INPUT: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "debug-input")]
 const PAST_RAM: usize = 0x2002_0000;
 
-/// Input 18: a notification from "Mamma 妈妈" as Gadgetbridge sends it
+/// Input 18: a notification from "Lin 小雨" as Gadgetbridge sends it
 /// with its "Text as Bitmaps" setting on: the second word as an image
 /// (see `gb::Images`; boxed crosses, standing in for the characters), the
 /// whole sender in base64, as Gadgetbridge picks it when that's shorter.
@@ -86,7 +86,7 @@ const PAST_RAM: usize = 0x2002_0000;
 /// check on the watch that the image is left out and the UI says how to
 /// turn the setting off (`sim/gadgetbridge.txt` has the same line).
 #[cfg(feature = "debug-input")]
-const BITMAPS_LINE: &[u8] = br#"GB({"t":"notify","id":1762436802,"src":"Signal","title":"","subject":"","body":"Dinner on Sunday?","sender":atob("TWFtbWEgACUVgQAAAAAAAAAAAAAAAAAAAP//H//mABjAAygBRQApIBIkAkiBERAiQhCIQhIJBEEgkDAiBgSBgRAwJBIIgkEhCEQhCRAiIgRJAJEgElACigBTAAxgAZ//4//8AAAAAAAAAAAAAA=="),"tel":"","reply":true})"#;
+const BITMAPS_LINE: &[u8] = br#"GB({"t":"notify","id":1762436802,"src":"Signal","title":"","subject":"","body":"The parcel is at the door.","sender":atob("TGluIAAlFYEAAAAAAAAAAAAAAAAAAAD//x//5gAYwAMoAUUAKSASJAJIgREQIkIQiEISCQRBIJAwIgYEgYEQMCQSCIJBIQhEIQkQIiIESQCRIBJQAooAUwAMYAGf/+P//AAAAAAAAAAAAAA="),"tel":"","reply":true})"#;
 
 /// Input 20: "find my watch" off and on, as Gadgetbridge sends them for
 /// its "Find lost device" (see `onFindDevice` in its Bangle.js driver),

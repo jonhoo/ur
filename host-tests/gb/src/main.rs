@@ -540,7 +540,7 @@ mod tests {
 
         // Images: big ones, as they are, in the title.
         // (Gadgetbridge crops text before it draws it.)
-        let image = as_bitmaps(&[Ok("Mamma "), Err((60, 24, 3)), Err((60, 24, 3))]);
+        let image = as_bitmaps(&[Ok("Lin "), Err((60, 24, 3)), Err((60, 24, 3))]);
         let image = String::from_utf8(gadgetbridge_string(&image)).expect("escapes are ASCII");
         let line = format!(r#"GB({{"t":"notify","src":"Signal","title":{image},"sender":""}})"#);
         let line = line.as_bytes();
@@ -549,7 +549,7 @@ mod tests {
         let (PhoneEvent::Notification { who, .. }, true) = with_bitmaps(&kept) else {
             panic!("a notification with images");
         };
-        assert_eq!(who.to_string(), "Mamma ?");
+        assert_eq!(who.to_string(), "Lin ?");
 
         // Emoji (12 bytes each), past `MAX_STRING`, before a name.
         let title = format!("{}Kari", "\u{1F389}".repeat(30));
@@ -1875,13 +1875,14 @@ mod tests {
         text
     }
 
-    /// With "Text as Bitmaps" on, "Mamma 妈妈 ❤️" comes as "Mamma ", an
-    /// image of 妈妈, " ", and an image of the heart (in colour): each
-    /// image shows as a `?`, and the line says it had images, both as
-    /// escaped text and as base64 (whichever Gadgetbridge picked).
+    /// With "Text as Bitmaps" on, "Lin 小雨" and a heart emoji come as
+    /// "Lin ", an image of 小雨, " ", and an image of the heart (in
+    /// colour): each image shows as a `?`, and the line says it had
+    /// images, both as escaped text and as base64 (whichever Gadgetbridge
+    /// picked).
     #[test]
     fn text_as_bitmaps() {
-        let sender = as_bitmaps(&[Ok("Mamma "), Err((37, 21, 1)), Ok(" "), Err((19, 21, 3))]);
+        let sender = as_bitmaps(&[Ok("Lin "), Err((37, 21, 1)), Ok(" "), Err((19, 21, 3))]);
         let spelled = gadgetbridge_string(&sender);
         let line = notify_line("Signal", "", &sender);
         assert_eq!(
@@ -1889,7 +1890,7 @@ mod tests {
             (
                 PhoneEvent::Notification {
                     app: t("Signal"),
-                    who: t("Mamma ? ?")
+                    who: t("Lin ? ?")
                 },
                 true
             ),
@@ -1912,7 +1913,7 @@ mod tests {
         }
         assert_eq!(spellings, [true; 2], "both spellings tried");
         // Without, nothing is said.
-        assert_eq!(with_bitmaps(&notify_line("Signal", "", "Mamma")).1, false);
+        assert_eq!(with_bitmaps(&notify_line("Signal", "", "Lin")).1, false);
     }
 
     /// Images are noticed wherever Gadgetbridge puts them in text we

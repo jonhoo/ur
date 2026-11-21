@@ -1599,7 +1599,7 @@ fn gadgetbridge_lines() {
         r#"to the phone: {"t":"gps_power","status":false}"#,
         "location set: 59.9127, 10.7461",
         "notification: Signal: Åse Nordmann",
-        "notification: Signal: Mamma ?",
+        "notification: Signal: Lin ?",
         "text as bitmaps",
         "music: Ida Moreau: Night Signals",
         "incoming call: Kari Nordmann",
