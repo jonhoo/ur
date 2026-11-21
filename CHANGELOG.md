@@ -44,6 +44,7 @@ missing below were test builds for the dev kit.
 
 ### Fixed
 
+- Keep the activity's regular saves when the save made as the watch switches off (or before an update) fails to write: one of them that looked newer than it, from a clock the phone had since set back, was discarded all the same, leaving nothing to restore (5e8c9b8)
 - Keep the steps of the seconds the phone takes back when it trims the watch's clock: it sets the clock back by a few seconds at about one connection in six, and when that went back over the turn of a minute, the steps (and any heart rate) of the new minute's first seconds were dropped, and the steps of the seconds repeated never reached the phone if a 5-minute block had just ended. A new time zone or summer time never moved any of it: the history is kept in UTC (f1afc06)
 - Handle what the phone sends during a long activity fetch (a notification, the time, a call, find my watch) as it arrives, rather than once the fetch is done: the watch sends a fetch a block at a time between everything else, where a fetch of a week (possible since the activity log) kept the phone waiting for 10 seconds to over a minute, and anything past its eighth message in that time was lost (e7f9c88)
 - Fetch a long stretch of activity several times faster when the connection had already settled at its idle pace, as the phone's does by itself seconds after connecting: the watch asked for a quicker one only if it had itself asked for the idle one (74b689d)
