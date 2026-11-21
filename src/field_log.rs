@@ -288,7 +288,11 @@ pub async fn task() {
         // (so a reset loses little), whichever comes first; the 1 KiB RTT
         // buffer holds far more than either. Unless [`flush`] asks for it
         // now.
-        let urgent = FLUSH_NOW.swap(false, Ordering::Relaxed);
+        // Only read here: the flag is cleared once what's waiting is in
+        // flash (see the end of the loop), which is what [`flush`] waits
+        // for. Clearing it on reading would let `flush` return while this
+        // still waits for the flash's lock behind another task.
+        let urgent = FLUSH_NOW.load(Ordering::Relaxed);
         // A lap-test build (see `LAP_TEST`) writes a line a second, saying
         // which sector it should land in, and doesn't wait for more.
         if LAP_TEST {
@@ -310,11 +314,19 @@ pub async fn task() {
         }
         last_flush = embassy_time::Instant::now();
         if frames(usize::MAX).is_none() {
+            if urgent {
+                FLUSH_NOW.store(false, Ordering::Relaxed);
+            }
             continue;
         }
         let mut flash = FLASH.lock().await;
         let flash = flash.as_mut().expect("set at boot");
         if flash.wake().await.is_err() {
+            // Nothing more can be written, so `flush` needn't wait out its
+            // timeout.
+            if urgent {
+                FLUSH_NOW.store(false, Ordering::Relaxed);
+            }
             continue;
         }
         // Everything waiting, including what's logged while this runs (the
@@ -347,6 +359,9 @@ pub async fn task() {
         }
         flash.sleep().await;
         CURSOR.lock(|c| c.set(Some((sector, used))));
+        if urgent {
+            FLUSH_NOW.store(false, Ordering::Relaxed);
+        }
     }
 }
 
@@ -361,7 +376,7 @@ pub async fn task() {
 const LAP_TEST: bool = cfg!(feature = "field-log-lap");
 
 #[cfg(feature = "field-log")]
-/// Set by [`flush`]; the writer clears it as it starts flushing.
+/// Set by [`flush`]; the writer clears it once it has flushed.
 static FLUSH_NOW: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Writes out everything logged so far, now, rather than within the next
@@ -372,13 +387,11 @@ pub async fn flush() {
     #[cfg(feature = "field-log")]
     {
         FLUSH_NOW.store(true, Ordering::Relaxed);
-        // The writer checks once a second. Once it has taken the flag, it
-        // has drained the RTT buffer and holds the flash (no await comes
-        // between), so the flash's lock is free again once it's written.
+        // The writer checks once a second, and clears the flag only once
+        // everything waiting is in flash.
         for _ in 0..30 {
             Timer::after_millis(100).await;
             if !FLUSH_NOW.load(Ordering::Relaxed) {
-                drop(FLASH.lock().await);
                 return;
             }
         }
