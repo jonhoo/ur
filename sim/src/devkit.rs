@@ -183,9 +183,9 @@ impl DevKit {
     /// What the dev kit has logged since it booted, as far as it's
     /// explained a restart: why it reset, and what the previous run's
     /// breadcrumb says (a panic's message, or where the watchdog found it
-    /// stuck; see `field_log::report_boot`). The firmware logs those first,
-    /// over RTT, and with no host reading, defmt keeps what's there and
-    /// drops what doesn't fit, so they're still there to drain a while
+    /// stuck; see `field_log::report_last_reset`). The firmware logs those
+    /// first, over RTT, and with no host reading, defmt keeps what's there
+    /// and drops what doesn't fit, so they're still there to drain a while
     /// after. (Draining is all it costs: nothing else here reads RTT.)
     fn boot_log(&self) -> String {
         let Some(rtt) = self.rtt else {

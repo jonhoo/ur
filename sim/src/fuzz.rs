@@ -507,7 +507,9 @@ fn error_kind(error: &str) -> String {
 }
 
 /// What kind of difference a finding is, by its name (see `devkit.rs`): a
-/// frame's (named for its step), or the phone's, or the storage's.
+/// frame's (named for its step); what the phone got or sent, or Home
+/// Assistant heard (a step's name and a suffix); or, by its whole name, the
+/// settings a reset booted with, the storage's, or too little stack left.
 fn kind(name: &str) -> String {
     for suffix in ["-phone-in", "-phone-out", "-ha"] {
         if name.ends_with(suffix) {
@@ -1320,8 +1322,11 @@ fn keep_bond(
 /// `original`, less any setting stored shorter than the firmware reads it
 /// (a value from a build that used its key for something else: a dev kit's
 /// `PHONE_ALARMS` held a 1-byte item, which every boot logged as
-/// `BufferTooSmall`). TODO: once `storage::load` removes what it can't
-/// read, this is moot.
+/// `BufferTooSmall`).
+///
+/// TODO: `storage::load` removes such an item itself now (see
+/// `storage::load_into`), so the full-size loads below already drop it, and
+/// the `remove` after them never runs: this can go, with its call.
 fn without_stale(original: &[u8], scratch: &Path) -> Result<Vec<u8>, String> {
     std::fs::create_dir_all(scratch).map_err(|e| format!("creating {}: {e}", scratch.display()))?;
     let path = scratch.join("tidied-storage.bin");

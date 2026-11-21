@@ -700,8 +700,8 @@ pub fn execute(watch: &mut Watch, line: &str, output: &Output) -> Result<Next, S
 /// `gb LINE`: a line as Gadgetbridge writes it to the watch, through the
 /// firmware's own line buffer and parser (`src/gb.rs`), and acted on as
 /// `src/ble.rs` acts on it: the clock and location set, events to the UI,
-/// replies printed. What `ble` would do over the radio (GPS requests, the
-/// activity sync) isn't simulated.
+/// replies printed, and the activity sync answered (see `activity_fetch`).
+/// The GPS requests `ble` would make over the radio aren't simulated.
 fn gadgetbridge(watch: &mut Watch, line: &str) -> Result<(), String> {
     let bytes = gb_wire(line)?;
 
