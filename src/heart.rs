@@ -15,9 +15,12 @@
 //!   movement (see `heart_schedule`'s "Trying through movement"), unless
 //!   it's plainly getting nowhere ([`heart_schedule::hopeless`]); awake,
 //!   every other round of tries (a scheduled session and its retries)
-//!   starts with a brighter LED (see [`Arm`]), an experiment (and the
-//!   logging build logs the accelerometer's samples through every awake
-//!   session, see `trace_accel`), and
+//!   starts with a brighter LED (see [`Arm`]), an experiment; the logging
+//!   build instead runs a session that starts on a calm wrist at both
+//!   drives, one after the other, and logs what each made of it (see
+//!   [`Paired`], and `heart_schedule`'s "Both drives in one session"), and
+//!   logs the accelerometer's samples through every awake session (see
+//!   `trace_accel`), and
 //! - while the clock face is showing (see
 //!   [`crate::heart_reading::set_watching`]), continuously,
 //!   since then someone is looking at the number, and
@@ -56,6 +59,8 @@ use crate::activity;
 use crate::heart_reading::{WAKE, on_charger, publish};
 pub use crate::heart_reading::{wake, worn};
 use crate::heart_schedule::{self, Arm, Before, Charger, Outcome, Schedule, Start};
+#[cfg(feature = "field-log")]
+use crate::heart_schedule::{Pair, PairStep};
 use crate::i2c::Device;
 use crate::ppg::{Consensus, Conversions, Ppg, Rejection};
 
@@ -394,6 +399,18 @@ const _: () = assert!(NO_CONTACT < NO_SKIN && NO_SKIN < WEAK && 2 * WEAK < SATUR
 // A bright start's predicted peak stays clear of where the level check
 // steps back down.
 const _: () = assert!(heart_schedule::BRIGHT_PEAK_LIMIT < SATURATED);
+// A paired session's phase holds three windows and no more. The third
+// comes before the level check that ends the phase can (a verdict that
+// came with the very sample that completes that check would be dropped at
+// the switch), and the fourth would only come after it, even if every
+// check ran two samples over its second (one poll can complete several).
+#[cfg(feature = "field-log")]
+const _: () = {
+    let phase = heart_schedule::PAIR_PHASE_CHECKS as usize;
+    let third = crate::ppg::FIRST_WINDOW + 2 * crate::ppg::ESTIMATE_EVERY;
+    assert!(third < phase * LEVEL_CHECK_SAMPLES as usize);
+    assert!(third + crate::ppg::ESTIMATE_EVERY > phase * (LEVEL_CHECK_SAMPLES as usize + 2));
+};
 // The budget's reserve is a whole session (see `SESSION_RESERVE`).
 const _: () = assert!(SESSION_LIMIT.as_secs() == heart_schedule::SESSION_RESERVE as u64);
 // A session gives up for want of a window only once several could have
@@ -741,15 +758,22 @@ pub async fn heart_task(i2c: Device) {
             Some(_) => schedule.begin(asleep),
             None => (0, Arm::Dim),
         };
+        // The light a bright start should expect at this level.
+        let expected = (skin_peak << LEVELS[level].gain)
+            * heart_schedule::DRIVE_CURRENT[usize::from(base)]
+            / heart_schedule::DRIVE_CURRENT[0];
+        #[cfg(not(feature = "field-log"))]
         let drive = match arm {
-            Arm::Bright => {
-                let peak = (skin_peak << LEVELS[level].gain)
-                    * heart_schedule::DRIVE_CURRENT[usize::from(base)]
-                    / heart_schedule::DRIVE_CURRENT[0];
-                heart_schedule::bright_start(base, peak, budget).unwrap_or(base)
-            }
+            Arm::Bright => heart_schedule::bright_start(base, expected, budget).unwrap_or(base),
             Arm::Dim | Arm::Asleep => base,
         };
+        // The logging build compares the drives within a session instead
+        // (see `Paired`): one that starts awake on a calm wrist runs both,
+        // its round's arm first, and every other stays at its level's.
+        #[cfg(feature = "field-log")]
+        let pair = due.and_then(|(_, start, _)| Pair::plan(arm, start, base, expected, budget));
+        #[cfg(feature = "field-log")]
+        let drive = pair.map_or(base, |pair| pair.first);
         if let Some((why, start, waited)) = due {
             let (awake, asleep) = schedule.resting();
             // Everything a field log needs to judge the schedule by,
@@ -772,6 +796,28 @@ pub async fn heart_task(i2c: Device) {
                 waited,
                 (schedule.since_reading(uptime()) / 60).min(u32::from(u16::MAX)) as u16
             );
+        }
+        // Whether the session is paired, and if not, why not, so that what
+        // reads the log can count what the test leaves out. (An asleep
+        // session never is, and doesn't say so.)
+        #[cfg(feature = "field-log")]
+        if let Some((_, start, _)) = due
+            && !asleep
+        {
+            match pair {
+                Some(pair) => info!(
+                    "heart: paired session, drive {=u8} then {=u8}",
+                    pair.first, pair.second
+                ),
+                None => info!(
+                    "heart: not paired ({=str})",
+                    if start == Start::Calm {
+                        "no brighter drive"
+                    } else {
+                        "busy start"
+                    }
+                ),
+            }
         }
         // A workout's session (or one looked at during a workout): said
         // here, as it has no `due` line, and ends on a line of its own.
@@ -810,10 +856,18 @@ pub async fn heart_task(i2c: Device) {
             drive,
             &mut conversions,
             // Awake, and the schedule's: such a session ends early if it's
-            // getting nowhere (see `heart_schedule::hopeless`).
-            background && !asleep,
+            // getting nowhere (see `heart_schedule::hopeless`). Not a
+            // paired one, though: which sessions were cut short would
+            // depend on what the first phase's drive made of the wrist,
+            // and a comparison of what's left would lean the other way.
+            #[cfg(not(feature = "field-log"))]
+            (background && !asleep),
+            #[cfg(feature = "field-log")]
+            (background && !asleep && pair.is_none()),
             &mut spent,
             &mut peak,
+            #[cfg(feature = "field-log")]
+            pair,
         )
         .await;
         // The accelerometer's next samples still overlap the session.
@@ -1056,7 +1110,13 @@ enum Ended {
 /// [`Arm`]). `stop_early`: whether it may end before its time if it's getting nowhere
 /// (see [`heart_schedule::hopeless`]), which an awake background session
 /// may. `spent` is set to what the session cost the budget, and `skin_peak` to
-/// its last second's peak, scaled to 12.5 mA ×1.
+/// its last second's peak, scaled to 12.5 mA ×1. In the logging build,
+/// `pair` is the two drives it runs a phase at each, if it's paired (see
+/// [`Paired`]); `drive` is then the first.
+// One argument over clippy's seven, in the logging build alone: the pair
+// is the session's as the drive is, and bundling the two for that build
+// would only hide which is which.
+#[cfg_attr(feature = "field-log", allow(clippy::too_many_arguments))]
 async fn measure(
     hrs: &mut Hrs3300,
     level: &mut usize,
@@ -1065,6 +1125,7 @@ async fn measure(
     stop_early: bool,
     spent: &mut u32,
     skin_peak: &mut u32,
+    #[cfg(feature = "field-log")] pair: Option<Pair>,
 ) -> Result<Ended, ()> {
     // The LED's drive: `LEVELS[*level]`'s, unless the session started
     // brighter (see `heart_schedule::bright_start`), keeping the gain.
@@ -1078,7 +1139,11 @@ async fn measure(
     let mut led = LedMeter::new(drive, spent);
     conversions.restart();
     let mut ppg = Ppg::new();
-    let mut consensus = Consensus::new();
+    let mut consensus = Agreement {
+        session: Consensus::new(),
+        #[cfg(feature = "field-log")]
+        paired: Paired::new(pair),
+    };
     let started = Instant::now();
     // The latest reading, once there is one, and how many level checks
     // (seconds) ago it came; saturating.
@@ -1124,7 +1189,16 @@ async fn measure(
             }
             return Ok(Ended::Charger(measured));
         }
-        let ended = if watching() {
+        // A pair under way runs both its phases, reading or none (the
+        // reading was published as it came): what the second phase makes
+        // of the wrist is half of what the session is for. Within the
+        // session's time, which the phases fit well inside unless the
+        // sensor's conversions stalled.
+        #[cfg(feature = "field-log")]
+        let pairing = consensus.paired.plan.is_some() && elapsed < SESSION_LIMIT;
+        #[cfg(not(feature = "field-log"))]
+        let pairing = false;
+        let ended = if watching() || pairing {
             None
         } else if let Some(bpm) = measured {
             Some(if since_read < FRESH_CHECKS {
@@ -1254,6 +1328,52 @@ async fn measure(
                 // Any brighter drive was the old level's.
                 drive = LEVELS[*level].drive;
             }
+            // A paired session's phases (see `Paired`). The switch between
+            // them is a change of drive like the ones above, and is made
+            // the same way below: the sensor set anew, and the conversions'
+            // timing, the estimator (its filters, and the LED's first,
+            // darker conversion) and the pairs of windows in a row all
+            // started over. Nothing here needs more settling than that.
+            // The sensor has no gain control of its own, only this one;
+            // and where field logs have a drive change on a still wrist
+            // (the late brighter phases, up to 0.11.3-rc.2), one
+            // conversion lies between the two levels and the next is at
+            // the new one, to within the slow droop every session starts
+            // with (2,450, then 2,772, then 7,148, 7,135, 7,131 at 30 mA):
+            // the one conversion `ppg::WARMUP` drops, before the filters
+            // are primed and given half a second (`ppg::SETTLE`).
+            #[cfg(feature = "field-log")]
+            if let Some(plan) = consensus.paired.plan {
+                if (*level, drive) != before {
+                    // The light didn't suit the phase's drive (it clipped,
+                    // or the level control stepped): the phases are no
+                    // longer the two drives at one gain, so the session
+                    // goes on as any other, at its level's drive.
+                    info!("heart: pair void (level moved)");
+                    consensus.paired.plan = None;
+                } else {
+                    match plan.step(checks) {
+                        PairStep::Within(_) => {}
+                        PairStep::Switch(second) => {
+                            consensus.paired.phase_over(1, at(*level, drive), checks);
+                            drive = second;
+                        }
+                        PairStep::Over => {
+                            consensus.paired.phase_over(2, at(*level, drive), checks);
+                            consensus.paired.plan = None;
+                        }
+                    }
+                }
+            }
+            // Once its pair is over, a session that someone watches goes
+            // back to its level's drive, should the second phase have been
+            // the bright one: it may stay on for minutes. (One that nobody
+            // watches is over with its pair, or within 4 s of it, which a
+            // switch would only waste.)
+            #[cfg(feature = "field-log")]
+            if consensus.paired.plan.is_none() && drive != LEVELS[*level].drive && watching() {
+                drive = LEVELS[*level].drive;
+            }
             *skin_peak = (peak >> LEVELS[before.0].gain) * heart_schedule::DRIVE_CURRENT[0]
                 / heart_schedule::DRIVE_CURRENT[usize::from(before.1)];
             (peak, sum, count) = (0, 0, 0);
@@ -1291,6 +1411,7 @@ async fn measure(
         // over. (Counted here, before this window is judged; an accepted
         // one resets it below.)
         unaccepted = unaccepted.saturating_add(1);
+        consensus.window();
         if unaccepted > AGREE_WITHIN {
             consensus.expire();
             unaccepted = 0;
@@ -1361,10 +1482,12 @@ async fn measure(
         // Both ways to agree are told of the window. A strong pair only
         // counts on a wrist that isn't stepping (see
         // `STRONG_STEPLESS_POLLS`), and the usual agreement comes first.
-        let strong = consensus
-            .push_strong(bpm, estimate.quality)
-            .filter(|_| activity::stepless_polls() >= STRONG_STEPLESS_POLLS);
-        let usual = consensus.push(bpm, calm);
+        let (usual, strong) = consensus.push(
+            bpm,
+            estimate.quality,
+            calm,
+            activity::stepless_polls() >= STRONG_STEPLESS_POLLS,
+        );
         if usual.is_none() && strong.is_some() {
             // So a field log says which readings the rule made.
             debug!("heart: strong pair");
@@ -1373,6 +1496,186 @@ async fn measure(
             measured = Some(read(bpm, measured, started, at(*level, drive), conversions));
             since_read = 0;
         }
+    }
+}
+
+/// What a session's windows agree on: [`Consensus`], which every window's
+/// verdict is told to, and in the logging build a paired session's own
+/// account of its phase alongside (see [`Paired`]), told the same.
+struct Agreement {
+    session: Consensus,
+    #[cfg(feature = "field-log")]
+    paired: Paired,
+}
+
+impl Agreement {
+    /// A window has a verdict, whatever it is.
+    fn window(&mut self) {
+        #[cfg(feature = "field-log")]
+        {
+            self.paired.windows = self.paired.windows.saturating_add(1);
+        }
+    }
+
+    /// See [`Consensus::reject`].
+    fn reject(&mut self) {
+        self.session.reject();
+        #[cfg(feature = "field-log")]
+        self.paired.alone.reject();
+    }
+
+    /// See [`Consensus::expire`].
+    fn expire(&mut self) {
+        self.session.expire();
+        #[cfg(feature = "field-log")]
+        self.paired.alone.expire();
+    }
+
+    /// See [`Consensus::push_faint`].
+    fn push_faint(&mut self, bpm: f32, calm: bool, asleep: bool) -> Option<u8> {
+        #[cfg(feature = "field-log")]
+        {
+            self.paired.faint = self.paired.faint.saturating_add(1);
+            let alone = self.paired.alone.push_faint(bpm, calm, asleep);
+            self.paired.reads(alone);
+        }
+        self.session.push_faint(bpm, calm, asleep)
+    }
+
+    /// An accepted window: both ways it may agree with earlier ones are
+    /// told of it, the usual ([`Consensus::push`]) and the strong pair
+    /// ([`Consensus::push_strong`]), which only counts if the wrist is
+    /// `stepless` (see [`STRONG_STEPLESS_POLLS`]). Returns each one's
+    /// reading; the usual comes first.
+    fn push(
+        &mut self,
+        bpm: f32,
+        quality: f32,
+        calm: bool,
+        stepless: bool,
+    ) -> (Option<u8>, Option<u8>) {
+        #[cfg(feature = "field-log")]
+        {
+            self.paired.accepted = self.paired.accepted.saturating_add(1);
+            let strong = self
+                .paired
+                .alone
+                .push_strong(bpm, quality)
+                .filter(|_| stepless);
+            let usual = self.paired.alone.push(bpm, calm);
+            self.paired.reads(usual.or(strong));
+        }
+        let strong = self.session.push_strong(bpm, quality).filter(|_| stepless);
+        (self.session.push(bpm, calm), strong)
+    }
+}
+
+// ==============================================================================
+// Both drives in one session (the logging build)
+// ==============================================================================
+
+/// A paired session's account of the phase it's in: what that phase's
+/// windows would have made of the wrist had the session been the phase
+/// alone, for the field log to compare the two drives by (see
+/// `heart_schedule`'s "Both drives in one session" for the why, and for
+/// what becomes of the reading).
+///
+/// "Alone" is a [`Consensus`] of the phase's own, started afresh with it
+/// and told every verdict the session's is. In the first phase the two
+/// can't differ. In the second, the session's still holds the first's
+/// accepted windows, for three that agree across the switch (which is
+/// today's rule, and the wearer's reading), while this one knows only
+/// what its own drive saw.
+///
+/// Each phase ends on a line of the log:
+///
+/// `heart: pair phase N at D/G: W windows, A accepted, F faint; read B
+/// BPM at window K (check C)` (or `; no reading (check C)`): the phase (1
+/// or 2), its drive and gain, the windows it judged (three, unless
+/// conversions stalled), how many of them were accepted and how many
+/// faint, and the phase's own first reading with the window that made it
+/// (the second comes 10.5 s into the phase, the third at 12.5 s); `C` is
+/// the session's level check the phase ended at. The windows' own lines
+/// (their rate and quality, or why they were rejected) and the samples
+/// lie between the session's start, the first phase's line and the
+/// second's, at `debug` and `trace`, for anything else to be worked out
+/// from: the pulse's size and the noise around it, say, which cost
+/// nothing to log that way.
+///
+/// A pair that doesn't run its course says `heart: pair void (level
+/// moved)`, or ends as its session does (no skin, the charger, the
+/// sensor lost) without a phase's line.
+///
+/// Only the logging build has any of this: 48 bytes of static RAM (the
+/// task's future), which the `compare` build doesn't have to spare, and
+/// ~1.1 KB of flash; other builds have nothing to say it with.
+#[cfg(feature = "field-log")]
+struct Paired {
+    /// The two drives, while the pair is under way: none if the session
+    /// isn't paired, or once its pair is over, or void.
+    plan: Option<Pair>,
+    /// What the phase's windows agree on by themselves.
+    alone: Consensus,
+    /// The phase's windows so far: all, and those the estimator accepted
+    /// or found faint (the faint ones before the wrist's movement has its
+    /// say, the accepted after: see `measure`).
+    windows: u8,
+    accepted: u8,
+    faint: u8,
+    /// The phase's own first reading, in BPM (0: none yet).
+    read: u8,
+    /// Which of the phase's windows made that reading (from 1).
+    read_window: u8,
+}
+
+#[cfg(feature = "field-log")]
+impl Paired {
+    fn new(plan: Option<Pair>) -> Self {
+        Self {
+            plan,
+            alone: Consensus::new(),
+            windows: 0,
+            accepted: 0,
+            faint: 0,
+            read: 0,
+            read_window: 0,
+        }
+    }
+
+    /// Notes what the phase's own windows read at the latest, if anything
+    /// (and if it's the phase's first).
+    fn reads(&mut self, alone: Option<u8>) {
+        if let Some(bpm) = alone
+            && self.read == 0
+        {
+            self.read = bpm;
+            self.read_window = self.windows;
+        }
+    }
+
+    /// Logs `phase`'s account as it ends, at the session's level check
+    /// number `checks`, and starts the next one's.
+    fn phase_over(&mut self, phase: u8, level: Level, checks: u8) {
+        if self.read == 0 {
+            info!(
+                "heart: pair phase {=u8} at {=u8}/{=u8}: {=u8} windows, {=u8} accepted, {=u8} faint; no reading (check {=u8})",
+                phase, level.drive, level.gain, self.windows, self.accepted, self.faint, checks
+            );
+        } else {
+            info!(
+                "heart: pair phase {=u8} at {=u8}/{=u8}: {=u8} windows, {=u8} accepted, {=u8} faint; read {=u8} BPM at window {=u8} (check {=u8})",
+                phase,
+                level.drive,
+                level.gain,
+                self.windows,
+                self.accepted,
+                self.faint,
+                self.read,
+                self.read_window,
+                checks
+            );
+        }
+        *self = Self::new(self.plan);
     }
 }
 

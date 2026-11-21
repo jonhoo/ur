@@ -76,6 +76,11 @@ const WARMUP: usize = 1;
 /// LED before its first window, for no gain in field-log replays.)
 const SETTLE: usize = 13;
 
+/// Samples from the sensor's start (or a restart) to the first window's
+/// verdict: 8.5 s. (Only the logging build's `heart` asks.)
+#[allow(dead_code)]
+pub const FIRST_WINDOW: usize = WARMUP + SETTLE + WINDOW;
+
 /// Samples between estimates: 2 s. Consecutive windows overlap by 6 s, so
 /// estimates closer together than this would mostly repeat each other, and
 /// [`Consensus`] wants agreement across *different* data.

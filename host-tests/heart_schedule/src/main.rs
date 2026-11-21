@@ -1447,6 +1447,201 @@ mod tests {
         assert_eq!(bright_start(0, 2000, 47), None);
     }
 
+    /// The logging build's paired sessions: only an awake session that
+    /// started on a calm wrist, with a brighter drive to be had, runs
+    /// both drives; its round's arm says which comes first.
+    #[test]
+    fn only_calm_awake_sessions_with_a_brighter_drive_are_paired() {
+        let plenty = LED_BUDGET;
+        let dim_first = Pair {
+            first: 0,
+            second: 2,
+        };
+        let bright_first = Pair {
+            first: 2,
+            second: 0,
+        };
+        assert_eq!(
+            Pair::plan(Arm::Dim, Start::Calm, 0, 3098, plenty),
+            Some(dim_first)
+        );
+        assert_eq!(
+            Pair::plan(Arm::Bright, Start::Calm, 0, 3098, plenty),
+            Some(bright_first)
+        );
+        // Not asleep, nor from a busy start (nor one that's still
+        // waiting, which `heart` never starts).
+        assert_eq!(Pair::plan(Arm::Asleep, Start::Calm, 0, 3098, plenty), None);
+        for arm in [Arm::Dim, Arm::Bright] {
+            assert_eq!(Pair::plan(arm, Start::Busy, 0, 3098, plenty), None);
+            assert_eq!(Pair::plan(arm, Start::Wait, 0, 3098, plenty), None);
+        }
+        // The safeguards are `bright_start`'s, to the count and the
+        // second: 20 mA where 30 would be too much light, or more than
+        // the budget holds, and no pair where 20 mA would be.
+        for arm in [Arm::Dim, Arm::Bright] {
+            let bright = |peak, budget| {
+                Pair::plan(arm, Start::Calm, 0, peak, budget).map(|pair| match arm {
+                    Arm::Dim => {
+                        assert_eq!(pair.first, 0);
+                        pair.second
+                    }
+                    _ => {
+                        assert_eq!(pair.second, 0);
+                        pair.first
+                    }
+                })
+            };
+            for (peak, budget) in [
+                (3098, plenty),
+                (4035, plenty),
+                (5200, plenty),
+                (2000, 72),
+                (2000, 71),
+                (2000, 48),
+                (2000, 47),
+                (0, 0),
+            ] {
+                assert_eq!(bright(peak, budget), bright_start(0, peak, budget));
+            }
+        }
+        // From a level whose own drive is higher (which no wrist in the
+        // field logs has needed), the pair is that drive and up to two
+        // above it.
+        assert_eq!(
+            Pair::plan(Arm::Dim, Start::Calm, 1, 1000, plenty),
+            Some(Pair {
+                first: 1,
+                second: 3
+            })
+        );
+        assert_eq!(Pair::plan(Arm::Dim, Start::Calm, 3, 1000, plenty), None);
+    }
+
+    /// The order takes turns by round, as the arms do: every paired try of
+    /// a round runs the same drive first, and the next round the other,
+    /// so that a round's first tries (at the scheduled time) and its
+    /// retries (at a still moment) both get both orders.
+    #[test]
+    fn paired_sessions_take_turns_at_which_drive_goes_first() {
+        let mut schedule = Schedule::new();
+        let mut t = 0;
+        let mut firsts = Vec::new();
+        for _ in 0..8 {
+            // A round of three tries: two that fail, then a reading.
+            for outcome in [
+                Outcome::CalmNoReading,
+                Outcome::NoReading,
+                Outcome::Reading(60),
+            ] {
+                t += 600;
+                let (_, arm) = schedule.begin(false);
+                let pair = Pair::plan(arm, Start::Calm, 0, 2500, LED_BUDGET).unwrap();
+                firsts.push(pair.first);
+                assert_eq!(pair.first + pair.second, 2);
+                schedule.ended(t, 30, outcome, true, Before::default());
+            }
+        }
+        assert_eq!(firsts, [0, 0, 0, 2, 2, 2].repeat(4));
+    }
+
+    /// A paired session's level checks, as `heart::measure` asks of each:
+    /// thirteen at the first drive, thirteen at the second, and the pair
+    /// is over, within a session's time.
+    #[test]
+    fn a_pair_spends_a_phase_at_each_drive() {
+        let pair = Pair {
+            first: 0,
+            second: 2,
+        };
+        let mut drive = pair.first;
+        let mut at_each = [0u32; 4];
+        let mut over = None;
+        for checks in 1..=SESSION_RESERVE as u8 {
+            // The check's second was spent at the drive it began with.
+            at_each[usize::from(drive)] += 1;
+            match pair.step(checks) {
+                PairStep::Within(phase) => {
+                    assert!(over.is_none());
+                    assert_eq!(phase, if drive == pair.first { 1 } else { 2 });
+                }
+                PairStep::Switch(to) => {
+                    assert_eq!((drive, to), (pair.first, pair.second));
+                    drive = to;
+                }
+                PairStep::Over => {
+                    // `heart` asks no more once it's over.
+                    over = Some(checks);
+                    break;
+                }
+            }
+        }
+        let phase = u32::from(PAIR_PHASE_CHECKS);
+        assert_eq!(at_each, [phase, 0, phase, 0]);
+        assert_eq!(over, Some(2 * PAIR_PHASE_CHECKS));
+        assert!(u32::from(2 * PAIR_PHASE_CHECKS) < SESSION_RESERVE);
+    }
+
+    /// A paired session never costs the budget more than a bright start's
+    /// whole session, which is what its budget had to hold: 54 budget
+    /// seconds at most (bright second, and no reading, so it runs out its
+    /// 30 s there), against 72.
+    #[test]
+    fn a_paired_session_costs_less_than_its_budget_held() {
+        let dim_first = Pair {
+            first: 0,
+            second: 2,
+        };
+        let bright_first = Pair {
+            first: 2,
+            second: 0,
+        };
+        assert_eq!(dim_first.most(SESSION_RESERVE), 13 + 41);
+        assert_eq!(bright_first.most(SESSION_RESERVE), 32 + 17);
+        for arm in [Arm::Dim, Arm::Bright] {
+            for drive in 0..=3 {
+                for peak in [0, 1000, 2500, 4035, 5200, 9000] {
+                    for budget in 0..=OVERDUE_BUDGET {
+                        let Some(pair) = Pair::plan(arm, Start::Calm, drive, peak, budget) else {
+                            continue;
+                        };
+                        let bright = pair.first.max(pair.second);
+                        assert!(pair.most(SESSION_RESERVE) <= budget);
+                        assert!(
+                            pair.most(SESSION_RESERVE)
+                                <= budget_seconds(bright, SESSION_RESERVE * 1000)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// What the paired test costs a failing desk: an hour of calm tries
+    /// that never read, every five minutes once overdue, spends no more
+    /// of the budget paired (13 s at one drive and 17 at the other, the
+    /// order taking turns) than the arms' rounds did (30 s at one drive,
+    /// by turns): the same LED seconds, and fewer of them at 30 mA.
+    #[test]
+    fn a_failing_hour_of_pairs_costs_no_more_than_the_arms_did() {
+        let session = SESSION_RESERVE;
+        let arms = budget_seconds(0, session * 1000) + budget_seconds(2, session * 1000);
+        let pairs = Pair {
+            first: 0,
+            second: 2,
+        }
+        .most(session)
+            + Pair {
+                first: 2,
+                second: 0,
+            }
+            .most(session);
+        assert_eq!(arms, 30 + 72);
+        assert_eq!(pairs, 54 + 49);
+        // A budget second over, from rounding each drive's share up.
+        assert!(pairs <= arms + 1);
+    }
+
     /// The LED experiment's arms take turns by round: every try of a round
     /// (failed, retried) keeps its arm, and only a reading
     /// starts the next round, on the other arm. The field log that showed
@@ -2148,6 +2343,71 @@ mod proofs {
             steps_up_within_the_peak_limit(drive, peak, next);
             assert!(budget >= budget_seconds(next, SESSION_RESERVE * 1000));
         }
+    }
+
+    /// For every arm, start, drive setting, expected peak and budget: a
+    /// session is paired only awake and from a calm start; its two drives
+    /// are its level's and the one `bright_start` would start at, the
+    /// round's arm first; and the budget covers the most it can cost.
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn pairs_are_the_levels_drive_and_a_bright_start() {
+        let (drive, peak, budget): (u8, u32, u32) = kani::any();
+        kani::assume(drive <= 3);
+        let arm = [Arm::Asleep, Arm::Dim, Arm::Bright][usize::from(kani::any::<u8>() % 3)];
+        let start = [Start::Wait, Start::Calm, Start::Busy][usize::from(kani::any::<u8>() % 3)];
+        let Some(pair) = Pair::plan(arm, start, drive, peak, budget) else {
+            // No pair without a reason for none.
+            assert!(
+                arm == Arm::Asleep
+                    || start != Start::Calm
+                    || bright_start(drive, peak, budget).is_none()
+            );
+            return;
+        };
+        assert!(arm != Arm::Asleep && start == Start::Calm);
+        let bright = bright_start(drive, peak, budget).unwrap();
+        let (dim_first, bright_first) = (
+            Pair {
+                first: drive,
+                second: bright,
+            },
+            Pair {
+                first: bright,
+                second: drive,
+            },
+        );
+        assert_eq!(
+            pair,
+            if arm == Arm::Dim {
+                dim_first
+            } else {
+                bright_first
+            }
+        );
+        assert!(pair.most(SESSION_RESERVE) <= budget);
+    }
+
+    /// For every level check a session can count: a pair is in its first
+    /// phase, then switches to its second drive once, is in its second,
+    /// and is over, each for as many checks as the phase is long.
+    #[kani::proof]
+    fn a_pairs_phases_follow_each_other() {
+        let pair = Pair {
+            first: kani::any(),
+            second: kani::any(),
+        };
+        let checks: u8 = kani::any();
+        let expected = if checks < PAIR_PHASE_CHECKS {
+            PairStep::Within(1)
+        } else if checks == PAIR_PHASE_CHECKS {
+            PairStep::Switch(pair.second)
+        } else if checks < 2 * PAIR_PHASE_CHECKS {
+            PairStep::Within(2)
+        } else {
+            PairStep::Over
+        };
+        assert_eq!(pair.step(checks), expected);
     }
 
     /// For every count of busy checks among a session's: calm means busy

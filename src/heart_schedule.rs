@@ -1538,6 +1538,11 @@ pub fn bright_start(drive: u8, peak: u32, budget: u32) -> Option<u8> {
 /// choose its round's arm (an awake one later in the round does). Watched
 /// sessions stay there too, as they're not in the comparison.
 ///
+/// The logging build makes something else of the arms, while it's
+/// settling this: there a round's arm only says which drive a session
+/// that started on a calm wrist has *first*, as it runs both (see
+/// [`Pair`]), and every other session stays at its level's drive.
+///
 /// TODO: once field logs have judged it, make the winner the rule.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(target_os = "none", derive(defmt::Format))]
@@ -1570,6 +1575,194 @@ impl Schedule {
         (self.round, arm)
     }
 }
+
+// ==============================================================================
+// Both drives in one session (the experiment, paired; the logging build's)
+// ==============================================================================
+//
+// Rounds taking turns couldn't settle the experiment: over 494 of them
+// (2026-11-07 to 21) a bright round's first try read 55% of the time
+// against a dim one's 49% (+6 points, 95% interval -3 to +15), and by the
+// end of a round there was no difference at all. The arms compare
+// different moments, and whether a wrist reads varies far more from one
+// moment to the next (a still wrist's signal comes and goes over minutes)
+// than any LED could change it, so a difference of that size would need
+// ~1,100 rounds an arm, six weeks, while the bright arm costs ~5 mAh a
+// day, a quarter of the LED's charge.
+//
+// The same moment at both drives needs far fewer. So, in the logging
+// build, a session that starts awake on a calm wrist runs a *phase* at
+// each drive, one after the other ([`PAIR_PHASE_CHECKS`] seconds each),
+// and logs what each made of it by itself: the windows it judged, and
+// whether they'd have made a reading under the usual rules had the
+// session been that phase alone. Whatever the wrist was doing in those
+// 26 s, both drives saw nearly the same of it, so the comparison is
+// within the session (did one phase read where the other didn't?), and
+// what the sessions differ in drops out. Which drive goes first takes
+// turns by round, as the arms did and for the same reason (see [`Arm`]):
+// the second phase has a wrist that has been still 13 s longer, and
+// windows of its own, so order matters, and turns even it out.
+//
+// Only the logging build: the sealed watch runs it, and a build without
+// a field log has nowhere to say what the phases found, so it would pay
+// for the second phase (see below) and learn nothing. Other builds keep
+// the rounds' arms as they were until this is decided.
+//
+// The reading mustn't pay for it:
+//
+// - Every rule that makes a reading applies as it always did, to the
+//   session as a whole: a reading is published the moment the windows
+//   agree, in either phase, or across both (the three accepted windows
+//   that agree needn't be one phase's, as they needn't be one level's
+//   when the level control steps mid-session).
+// - A session that has read still runs both phases, which is what the
+//   test costs (below); if both read, both are published as they come,
+//   and the session's reading, for the schedule and the minute's history,
+//   is the later one. That's what a session that goes on after a reading
+//   has always done (someone looking at the clock face gets every one),
+//   and neither drive has a better claim: against a Garmin, the arms'
+//   readings were equally far off.
+// - A session with no reading by the end of the second phase carries on
+//   at that drive to its usual 30 s, as it would have.
+//
+// What a session loses is the windows that would have spanned the switch:
+// samples at two drives aren't comparable, so the estimator starts over
+// (its filters primed afresh, the LED's first conversion dropped, half a
+// second of settling: see `ppg::WARMUP` and `SETTLE`), exactly as it does
+// when the level control changes the gain, and the second phase's first
+// window comes 8.5 s after the switch. Of the logs' sessions that started
+// calm (435, 2026-11-16 to 21), 31% read within 13 s and 14% later, at
+// 14-28 s; the second phase reads some of those, having 13-17 s of its
+// own, but not the ones whose only clean stretch straddles the switch.
+// The field log says how many: compare the paired sessions' readings with
+// those 44% (`tmp/led-paired/paired.py` does).
+//
+// What's kept of the experiment's safeguards: the bright drive is still
+// [`bright_start`]'s, so 20 mA rather than 30 where 30 would be expected
+// to pass [`BRIGHT_PEAK_LIMIT`] or the budget doesn't cover a whole
+// session at it, and where even 20 mA wouldn't do, the session isn't
+// paired at all, and runs at its level's drive. (A paired session costs
+// at most 54 budget seconds, 13 s at 12.5 mA and 17 at 30, less than the
+// 72 its budget must hold.) A phase that saturates, or whose level the
+// level control changes, ends the pair there (`heart` says so in the
+// log), and the session goes on as any other.
+//
+// What it replaces, in the logging build: the arms' own comparison. A
+// session that isn't paired (a busy start) stays at its level's drive
+// whichever arm its round is on, so nothing is brighter than 12.5 mA but
+// a pair's bright phase.
+//
+// What it costs: the same sessions as the logs' (2026-11-16 to 21: 143
+// awake background sessions a day, 91 of them from a calm start), run this
+// way, spend ~5,530 budget seconds of LED a day where the arms spent
+// ~4,260, 30% more, or ~1 mAh a day at the ~2.8 mA a session draws (every
+// session at 12.5 mA would be ~2,820). A failing session costs what the
+// arms' did between them (30 s, 13 of them at one drive and 17 at the
+// other, where the arms alternated 30 s at each). The difference is the
+// sessions that read within their first phase, 31% of the calm starts,
+// which run ~26 s rather than ~11; busy starts no longer at 30 mA give a
+// third of it back. It's a week or two's cost, not a standing one (see
+// `tmp/led-paired/paired.py` for how many sessions settle it).
+//
+// TODO: take this out again once the field log has answered it, with the
+// arms, or with whichever of them lost.
+
+/// Level checks (seconds) a paired session spends at each drive.
+///
+/// Three windows' worth: half a second of warming up and settling, the
+/// first window 8 s later, and two more at 2 s each, 12.5 s in all. So
+/// every way the windows have of agreeing can happen within a phase (two
+/// in a row on a calm wrist, at 10.5 s; a strong pair; three that agree),
+/// which is what makes "would this phase alone have read?" a fair
+/// question, and 31% of the logs' calm sessions read within it (88% of
+/// all readings come by 14 s). Longer phases don't fit: two of 15 s, a
+/// fourth window each, would overrun a session's 30 s. (10 s each, as
+/// first proposed, holds one window, which can never make a reading.)
+#[cfg(any(feature = "field-log", not(target_os = "none")))]
+pub const PAIR_PHASE_CHECKS: u8 = 13;
+
+/// The two drives of a paired session, in the order it runs them: its
+/// level's (12.5 mA on a wrist) and [`bright_start`]'s.
+#[cfg(any(feature = "field-log", not(target_os = "none")))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Pair {
+    pub first: u8,
+    pub second: u8,
+}
+
+/// What a paired session does at one of its level checks.
+#[cfg(any(feature = "field-log", not(target_os = "none")))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PairStep {
+    /// Carry on, within the first phase (1) or the second (2).
+    Within(u8),
+    /// The first phase is over: switch to the second's drive.
+    Switch(u8),
+    /// The second phase is over, and with it the pair.
+    Over,
+}
+
+#[cfg(any(feature = "field-log", not(target_os = "none")))]
+impl Pair {
+    /// The pair for a background session on `arm` that started as
+    /// `start`, at a level whose drive is `drive`, with `peak` and
+    /// `budget` as for [`bright_start`]; or none, if the session isn't
+    /// one to pair: asleep, started on a busy wrist (where little reads at
+    /// any drive, and what moves the wrist changes within seconds, so the
+    /// phases wouldn't have seen the same), or with no brighter drive to
+    /// be had.
+    ///
+    /// The round's arm goes first: dim on a `Dim` round, bright on a
+    /// `Bright` one.
+    pub fn plan(arm: Arm, start: Start, drive: u8, peak: u32, budget: u32) -> Option<Self> {
+        if start != Start::Calm {
+            return None;
+        }
+        let bright = bright_start(drive, peak, budget)?;
+        match arm {
+            Arm::Asleep => None,
+            Arm::Dim => Some(Self {
+                first: drive,
+                second: bright,
+            }),
+            Arm::Bright => Some(Self {
+                first: bright,
+                second: drive,
+            }),
+        }
+    }
+
+    /// What to do at the session's level check number `checks` (from 1),
+    /// the phases being [`PAIR_PHASE_CHECKS`] each from the session's
+    /// start.
+    pub fn step(self, checks: u8) -> PairStep {
+        if checks < PAIR_PHASE_CHECKS {
+            PairStep::Within(1)
+        } else if checks == PAIR_PHASE_CHECKS {
+            PairStep::Switch(self.second)
+        } else if checks < 2 * PAIR_PHASE_CHECKS {
+            PairStep::Within(2)
+        } else {
+            PairStep::Over
+        }
+    }
+
+    /// The most a paired session can cost the budget (see
+    /// [`budget_seconds`]): a phase at the first drive, and the rest of
+    /// `session` seconds at the second. (For the host tests, which check
+    /// it against what [`bright_start`] asks of the budget.)
+    #[cfg(not(target_os = "none"))]
+    pub fn most(self, session: u32) -> u32 {
+        let phase = u32::from(PAIR_PHASE_CHECKS);
+        budget_seconds(self.first, phase * 1000)
+            + budget_seconds(self.second, session.saturating_sub(phase) * 1000)
+    }
+}
+
+// Both phases fit a session, with time to spare for the level checks
+// running a little over a second each.
+#[cfg(any(feature = "field-log", not(target_os = "none")))]
+const _: () = assert!(2 * PAIR_PHASE_CHECKS as u32 + 2 <= SESSION_RESERVE);
 
 /// The brightest drive up to two settings above `drive` at which `peak`,
 /// scaled by the current, stays within [`BRIGHT_PEAK_LIMIT`], and that

@@ -280,6 +280,17 @@ doesn't move the cap, only how soon it's reached: a 30 s desk session
 that fails costs 72 budget seconds rather than 30, ~0.03 mAh more. At
 ~3 bright sessions an hour over 8 desk hours, ~0.7 mAh a day.
 
+The logging build (0.11.3-rc.5 on) instead runs every session that
+starts on a calm wrist at both drives, 13 s each, to settle the
+experiment within a session (`heart_schedule`'s "Both drives in one
+session"), and nothing else above 12.5 mA. That doesn't move the cap
+either: a failing session costs 49 or 54 budget seconds, where the arms'
+cost 30 and 72 by turns. What costs more is a session that reads early,
+which now runs both phases (~26 s) rather than ending at ~11. Replayed
+over the sealed watch's sessions of 2026-11-16 to 21, the LED spends
+~5,530 budget seconds a day rather than ~4,260, **~1 mAh a day more**,
+for the week or two the test runs.
+
 ### A desk that won't read
 
 Up to 0.10.0-rc.3, a background session stopped early on a busy wrist

@@ -885,6 +885,35 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   brighter after`: 1 of 12 such phases read, and they're gone; the
   replay leaves them out of older logs.)
 
+  From 0.11.3-rc.5 the logging build asks the experiment's question
+  within a session instead (`heart_schedule`'s "Both drives in one
+  session"): rounds taking turns couldn't answer it in under six weeks,
+  as one moment's wrist differs from the next far more than the LED
+  could change it. An awake background session from a calm start runs
+  13 s at its level's drive and 13 s at the brighter one, the round's
+  `ARM` saying which comes first (`Dim`: 12.5 mA first), and every other
+  session stays at 12.5 mA, so the `due` line's `ARM` no longer means a
+  bright session. The lines:
+
+  - `heart: paired session, drive A then B` after the `due` line, or
+    `heart: not paired (busy start)` (or `(no brighter drive)`: the
+    budget or the light level allowed none);
+  - `heart: pair phase N at D/G: W windows, A accepted, F faint; read B
+    BPM at window K (check C)`, or `…; no reading (check C)`, as each
+    phase ends: what that phase's own windows (three) made of the wrist,
+    as if the session had been the phase alone. The windows' verdicts
+    and the samples before each line are that phase's;
+  - `heart: pair void (level moved)` if the light clipped or the level
+    control stepped, after which the session is an ordinary one.
+
+  A reading is logged (and published) as it comes, `heart: N BPM after
+  S s` for the session's first and `heart: N BPM` at `debug` for any
+  later one; a paired session runs both phases whatever it has read, so
+  one that reads at 10 s still ends at 26. `tmp/led-paired/paired.py`
+  (not in the repository) compares the phases: which read, with McNemar's
+  test and an interval; window quality; the pulse against the noise from
+  the samples; and how many more pairs it needs.
+
   Logging builds from 0.11.0 to 0.11.3-rc.2 ran a field experiment for
   a busy wrist: an awake background session that reached 30 s without a
   reading went on to 90 s on half the rounds (`heart: due` lines ending
