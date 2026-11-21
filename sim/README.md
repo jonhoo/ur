@@ -198,8 +198,8 @@ UPDATE_SHOTS=1 cargo test
 
 That makes each approved directory exactly what its script drew: it
 adds new screenshots, rewrites changed ones, and deletes those no longer
-taken. The Info screen shows the version, from Cargo.toml (`0.9.0-dev`
-here) unless a script says otherwise: the tour and each theme's script
+taken. The Info screen shows the version, from Cargo.toml with `-dev`
+added (see `build.rs`), unless a script says otherwise: the tour and each theme's script
 pin one with `version`, so a release changes none of them. The README's
 `info.png` is the exception: it shows a release's version and commit
 (`UR_VERSION`; see `readme-screenshots.txt`), which the tests' build
@@ -523,9 +523,12 @@ log lines go to it, and files download.
   watch is never lying still on a desk.
 - **Bluetooth.** Only the phone's messages: `gb` parses its lines as the
   watch does, but no radio, GATT, or MTU-sized pieces carry them.
-  Pairing, bonds, updates, GPS requests and the activity sync don't run;
-  `passkey` and `update` only show their screens, and `slots full` only
-  what the grid does when its presses can't go.
+  Pairing, bonds, updates and GPS requests don't run; `passkey` and
+  `update` only show their screens, and `slots full` only what the grid
+  does when its presses can't go. The activity sync is answered, in the
+  watch's buckets, but from what the simulator has: the steps and heart
+  rates set, and the last night as light sleep, with no movement or
+  stages.
 - **Flash, in part.** Settings are saved and loaded (see
   [The flash](#the-flash)), but a location from the phone isn't saved,
   and Bluetooth bonds and the SPI flash (the activity record, field logs)

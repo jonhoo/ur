@@ -15,8 +15,8 @@ cd "$sim"
 web/build.sh "$sim/target/web"
 
 # The scripts whose screenshots and recordings must match: the tour (every
-# screen), the README's (themes too, and its GIFs), and the whole watch,
-# drawn round the panel.
+# screen), the README's (themes too, and its GIFs), a Gadgetbridge
+# session, and the whole watch, drawn round the panel.
 scripts=(tour.txt readme-screenshots.txt readme-gifs.txt gadgetbridge.txt web/compare.txt)
 
 rm -rf "$out"

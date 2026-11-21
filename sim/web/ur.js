@@ -18,7 +18,7 @@ export const THEMES = 3;
 // Instantiates the module from its bytes, and boots the watch, which
 // runs sim/web/start.txt unless `start` is false. `print(kind, text)` gets
 // every line the simulator prints; `download(name, bytes)` every file it
-// writes (screenshots).
+// writes (screenshots and recordings).
 export async function load(bytes, { print, download, start = true }) {
   let memory;
   const text = (pointer, length) =>
