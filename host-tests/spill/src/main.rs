@@ -203,7 +203,7 @@ mod tests {
         read_on(flash, &mut reader, from, end)
     }
 
-    /// Reads on as `ble::send_activity` does: a bucket at a time, each
+    /// Reads on as `ble::Fetching` does: a bucket at a time, each
     /// from after the last, opening the log again should the ring have
     /// overtaken the reader.
     fn read_on(flash: &mut Nor, reader: &mut Reader, from: u32, end: u32) -> Vec<(u32, Vec<u32>)> {

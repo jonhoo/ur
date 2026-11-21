@@ -320,6 +320,28 @@ impl Fetch {
         self.end = self.end.min(start_of(from));
     }
 
+    /// The phone set the clock to `now` (a UTC minute) while the fetch was
+    /// under way (its writes are served between buckets). The buckets from
+    /// the one `now` is in were filed by a clock that was ahead, and the
+    /// history files those minutes again (see the module docs' "A clock
+    /// put right"): so the fetch ends there, if that's sooner, and claims
+    /// no more for the phone's copy than what's before it, even if it
+    /// started later ([`Fetch::synced_through`]). The next fetch sends
+    /// that bucket whole, and everything since.
+    ///
+    /// Without this, the fetch's end would take the sync point back past
+    /// where [`synced_after_set`] had just put it. (When a fetch kept the
+    /// phone's writes waiting until it was done, the clock was only set
+    /// after the sync point had moved, and that put it right.)
+    ///
+    /// A clock set to the bucket under way or later, as nearly all are,
+    /// changes nothing: the fetch still ends where it was going to.
+    pub fn clock_set(&mut self, now: i64) {
+        self.end = self.end.min(start_of(now));
+        self.start = self.start.min(self.end);
+        self.next = self.next.min(self.end);
+    }
+
     /// Where the fetch ends: the start of the first bucket it doesn't
     /// send.
     pub fn end(&self) -> i64 {

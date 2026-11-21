@@ -803,7 +803,7 @@ pub fn on_clock_set(utc_seconds: i64) {
     *synced = crate::gb_buckets::synced_after_set(*synced, utc_seconds.div_euclid(60));
 }
 
-/// As `ble::send_activity` does: the history since where the last fetch
+/// As `ble::Fetching` does: the history since where the last fetch
 /// stopped, or without one, since after what Gadgetbridge asked for (see
 /// `gb_buckets::start`), in buckets (see `gb_buckets`), the bucket under way
 /// left for later, and the last sleep held back until its stages settle,

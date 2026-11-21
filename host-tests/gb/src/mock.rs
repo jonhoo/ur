@@ -659,7 +659,7 @@ const REVISED: i64 = 164;
 const HISTORY_MINUTES: i64 = 24 * 60;
 
 /// The watch, as far as an activity fetch goes: its clock, its minutes,
-/// and `ble::send_activity`'s arithmetic over them. (`ble` itself needs
+/// and `ble::Fetching`'s arithmetic over them. (`ble` itself needs
 /// the radio; this is its logic, restated, with the firmware's own
 /// `gb_buckets::start`, `gb_buckets::Fetch` and `Outgoing` doing the work.)
 struct Watch {
@@ -716,7 +716,7 @@ impl Watch {
         out
     }
 
-    /// `ble::send_activity`, less the sending: every message of a fetch.
+    /// `ble::Fetching`, less the sending: every message of a fetch.
     /// [`Watch::completed`] is what it does at the end, if every one of
     /// them went out.
     fn send_activity(&mut self, since_ms: i64) -> Vec<Outgoing> {

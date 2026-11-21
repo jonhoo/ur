@@ -937,6 +937,11 @@ mod tests {
         until: i64,
         on_connect: bool,
         fetches: Vec<i64>,
+        /// Whether a fetch is under way as the phone puts the clock right
+        /// (at `right`), and how many buckets it has sent by then: the
+        /// phone's writes are served between a fetch's buckets, so the
+        /// rest go out by the clock put right (see [`Fetch::clock_set`]).
+        mid_fetch: Option<u16>,
     }
 
     /// What came of a [`WrongClock`]: Gadgetbridge's samples, the watch's
@@ -953,21 +958,40 @@ mod tests {
         let mut synced = None;
         let mut last_sync_ms = None::<i64>;
         let mut end = i64::MIN;
-        // One fetch, as `ble::send_activity` answers it, at the watch's
-        // `watch_seconds` and the phone's `phone_ms`.
+        // One fetch, as `ble::Fetching` answers it, at the watch's
+        // `watch_seconds` and the phone's `phone_ms`. With `set`, the
+        // phone sets the clock to that minute once that many buckets have
+        // gone out (or all of them, if that's fewer): the watch takes it
+        // as `ble` does, and the rest go out after.
         let mut fetch = |ring: &Ring,
                          synced: &mut Option<i64>,
                          store: &mut BTreeMap<i64, Stored>,
                          watch_seconds: i64,
-                         phone_ms: i64| {
+                         phone_ms: i64,
+                         set: Option<(u16, i64)>| {
             let asked = last_sync_ms.map_or(phone_ms - 86_400_000, |last| last - 60_000);
             let now = watch_seconds.div_euclid(60);
             let oldest = ring.oldest() + MINUTES;
-            let fetch = Fetch::new(start(asked, *synced, now), oldest, now);
-            *synced = Some(fetch.synced_through());
-            for bucket in run(fetch, &ring.minutes, ring.oldest()) {
+            let mut fetch = Fetch::new(start(asked, *synced, now), oldest, now);
+            let mut next = |fetch: &mut Fetch| {
+                let from = fetch.from().max(ring.oldest());
+                let minutes = ring.minutes.range(from..);
+                let bucket = fetch.next(minutes.map(|(&minute, &sample)| (minute, sample)))?;
                 send(store, &bucket);
+                Some(())
+            };
+            if let Some((sent, minute)) = set {
+                for _ in 0..sent {
+                    if next(&mut fetch).is_none() {
+                        break;
+                    }
+                }
+                *synced = synced_after_set(*synced, minute);
+                fetch.clock_set(minute);
             }
+            while next(&mut fetch).is_some() {}
+            // Only now, with every bucket sent, does the sync point move.
+            *synced = Some(fetch.synced_through());
             last_sync_ms = Some(phone_ms);
             end = synced.expect("just set") + 1;
         };
@@ -978,18 +1002,26 @@ mod tests {
                 0
             };
             let watch = real + lead;
-            if real == clock.wrong || real == clock.right {
+            if let Some(sent) = clock.mid_fetch
+                && real == clock.right
+            {
+                // A fetch begun by the clock that was ahead, a moment
+                // before the phone puts it right, part-way through it.
+                let ahead = (real + clock.lead) * 60;
+                let set = Some((sent, watch));
+                fetch(&ring, &mut synced, &mut store, ahead, ahead * 1000, set);
+            } else if real == clock.wrong || real == clock.right {
                 // The phone sets the watch's clock to its own, and the
                 // watch takes it as `ble` does.
                 synced = synced_after_set(synced, watch);
-                if clock.on_connect {
-                    fetch(&ring, &mut synced, &mut store, watch * 60, watch * 60_000);
-                }
+            }
+            if (real == clock.wrong || real == clock.right) && clock.on_connect {
+                fetch(&ring, &mut synced, &mut store, watch * 60, watch * 60_000, None);
             }
             ring.record(watch, steps_at(real));
             if clock.fetches.contains(&real) {
                 let seconds = watch * 60 + 30;
-                fetch(&ring, &mut synced, &mut store, seconds, seconds * 1000);
+                fetch(&ring, &mut synced, &mut store, seconds, seconds * 1000, None);
             }
         }
         PutRight { store, ring, end }
@@ -1029,6 +1061,7 @@ mod tests {
             until: NOON + 600,
             on_connect: false,
             fetches: (NOON + 15..NOON + 600).step_by(30).collect(),
+            mid_fetch: None,
         };
         let put = put_right(&clock);
         assert!(put.end > clock.right + 200);
@@ -1051,6 +1084,7 @@ mod tests {
             until: NOON + 600,
             on_connect: false,
             fetches: (NOON + 15..NOON + 600).step_by(30).collect(),
+            mid_fetch: None,
         };
         let put = put_right(&clock);
         assert!(put.end > clock.right + 200);
@@ -1070,19 +1104,73 @@ mod tests {
             until: NOON + 600,
             on_connect: true,
             fetches: (NOON + 15..NOON + 600).step_by(30).collect(),
+            mid_fetch: None,
         };
         let put = put_right(&clock);
         assert!(put.end > clock.right + 200);
         assert_eq!(lost_after(clock.right, &put), []);
     }
 
+    /// The phone's clock 3 hours ahead, put right while a fetch is under
+    /// way (the watch serves the phone's writes between a fetch's
+    /// buckets), two buckets into it. The fetch began at 20:00 by the
+    /// clock that was ahead, so it would end at 19:59; but the clock now
+    /// says 17:00, and the watch files those minutes again. The fetch
+    /// stops short of 17:00 and leaves the sync point before it, so the
+    /// next one sends everything from 17:00. (Left to finish as it
+    /// began, it took the sync point to 19:59 after the clock's setting
+    /// had put it at 16:59, and the fetch at 17:15 sent nothing.)
+    #[test]
+    fn a_clock_put_right_mid_fetch_loses_nothing() {
+        let clock = WrongClock {
+            lead: 180,
+            wrong: NOON + 60,
+            right: NOON + 300,
+            until: NOON + 600,
+            on_connect: false,
+            fetches: (NOON + 15..NOON + 600).step_by(30).collect(),
+            mid_fetch: Some(2),
+        };
+        let put = put_right(&clock);
+        assert!(put.end > clock.right + 200);
+        assert_eq!(lost_after(clock.right, &put), []);
+    }
+
+    /// The same when the fetch under way began after where the clock is
+    /// put back to: by a clock 3 hours ahead, a fetch at 19:45 has the
+    /// phone's copy end at 19:44, and the one under way at 20:00 starts
+    /// there. It claims nothing for the phone's copy past 16:59.
+    #[test]
+    fn a_fetch_begun_after_where_the_clock_is_put_back_to_claims_nothing_past_it() {
+        let mut fetch = Fetch::new(NOON + 465, NOON - DAY, NOON + 482);
+        assert_eq!(fetch.synced_through(), NOON + 479);
+        fetch.clock_set(NOON + 302);
+        assert_eq!(fetch.synced_through(), NOON + 299);
+        assert_eq!(fetch.next([(NOON + 466, minute(3, 0, None))]), None);
+        // And a clock set to the bucket under way, or later, changes
+        // nothing.
+        let mut fetch = Fetch::new(NOON + 465, NOON - DAY, NOON + 482);
+        fetch.clock_set(NOON + 481);
+        fetch.clock_set(NOON + 4000);
+        assert_eq!(fetch.synced_through(), NOON + 479);
+        assert!(fetch.next([(NOON + 466, minute(3, 0, None))]).is_some());
+    }
+
     /// Any lead (up to two days), for any time, fetched from on any
-    /// schedule: once the phone has put the watch's clock right,
-    /// Gadgetbridge gets every bucket from the one it was put right in
-    /// as the watch has it.
+    /// schedule, with or without a fetch under way as the clock is put
+    /// right (any number of buckets into it): once the phone has put the
+    /// watch's clock right, Gadgetbridge gets every bucket from the one
+    /// it was put right in as the watch has it.
     #[test]
     fn a_clock_put_right_loses_nothing() {
-        fn property(lead: u16, wrong: (u8, u16), on_connect: bool, gaps: Vec<u8>) -> bool {
+        fn property(
+            lead: u16,
+            wrong: (u8, u16),
+            on_connect: bool,
+            mid_fetch: Option<u8>,
+            gaps: Vec<u8>,
+        ) -> bool {
+            let mid_fetch = mid_fetch.map(u16::from);
             let lead = 1 + i64::from(lead) % (2 * DAY);
             let wrong_at = NOON + i64::from(wrong.0);
             let right = wrong_at + 1 + i64::from(wrong.1 % 600);
@@ -1100,6 +1188,7 @@ mod tests {
                 until,
                 on_connect,
                 fetches,
+                mid_fetch,
             };
             let put = put_right(&clock);
             let lost = lost_after(right, &put);
@@ -1108,7 +1197,8 @@ mod tests {
             }
             lost.is_empty()
         }
-        quickcheck().quickcheck(property as fn(u16, (u8, u16), bool, Vec<u8>) -> bool);
+        quickcheck()
+            .quickcheck(property as fn(u16, (u8, u16), bool, Option<u8>, Vec<u8>) -> bool);
     }
 
     /// The buckets before real minute `wrong` (when the phone's clock
@@ -1144,6 +1234,7 @@ mod tests {
             until: NOON + 600,
             on_connect: false,
             fetches: (NOON + 15..NOON + 600).step_by(30).collect(),
+            mid_fetch: None,
         };
         let put = put_right(&clock);
         assert_eq!(lost_before(clock.wrong, NOON + 15, &put), []);
@@ -1165,6 +1256,7 @@ mod tests {
             until: NOON + 600,
             on_connect,
             fetches: (NOON + 15..NOON + 600).step_by(30).collect(),
+            mid_fetch: None,
         };
         let put = put_right(&clock(true));
         assert_eq!(lost_before(NOON + 60, NOON + 15, &put), []);

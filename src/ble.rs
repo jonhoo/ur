@@ -856,11 +856,22 @@ async fn serve(
     let mut stay = Stay::new(Instant::now().as_millis());
     // Whether the phone listens to the UART: see `link`, and `judge_uart`.
     let mut uart = link::Watch::default();
+    // The activity fetch under way, if any: sent a step at a time (see
+    // `Fetching`), between whatever else the loop below has to do.
+    let mut fetching: Option<Fetching> = None;
 
     let reason = loop {
-        // The end of a burst comes first (it's sooner), then the slowing.
+        // A fetch's next step is due at once, but only if nothing else is:
+        // `select4` polls its branches in order, and this is the last. So
+        // what the phone writes during a fetch (a notification, the time,
+        // a call) is handled before the next bucket, as are our own
+        // messages and the deadlines; and the link isn't idle meanwhile.
+        //
+        // Otherwise, the end of a burst comes first (it's sooner), then
+        // the slowing.
         let idle = async {
-            if listening {
+            if fetching.is_some() {
+            } else if listening {
                 Timer::at(last_traffic + BURST_OVER_AFTER).await
             } else if phone.get() && !slowed && !update.active() {
                 Timer::at(last_traffic + IDLE_AFTER).await
@@ -913,7 +924,24 @@ async fn serve(
                 continue;
             }
             Either4::Fourth(()) => {
-                if listening {
+                // A fetch's step (see `Fetching`): its start, or a bucket,
+                // and after the last one its end. Each awaited to its end
+                // here, not as a branch of the `select4`: a step dropped
+                // half-way would leave a bucket read from the log and not
+                // sent, or half a message with the phone. And each a
+                // future of its own, awaited from here, rather than one
+                // that awaits the three: so they share their bytes of
+                // this one.
+                if let Some(Fetching::Asked { since_ms }) = fetching {
+                    let sending = fetch_start(server, conn, since_ms).await;
+                    fetching = Some(Fetching::Sending(sending));
+                } else if let Some(Fetching::Sending(sending)) = &mut fetching {
+                    if let Some(complete) = fetch_bucket(server, conn, sending).await {
+                        fetch_end(server, conn, sending, complete).await;
+                        fetching = None;
+                        last_traffic = Instant::now();
+                    }
+                } else if listening {
                     listen(stack, conn, false).await;
                     listening = false;
                 } else {
@@ -1067,7 +1095,12 @@ async fn serve(
                         slowed = false;
                     }
                 }
-                for action in actions {
+                // Oldest first, popped off the end of the list turned
+                // around: `for action in actions` would keep a second
+                // copy of the list (its iterator) in this future, across
+                // every await below.
+                actions.reverse();
+                while let Some(action) = actions.pop() {
                     match action {
                         Action::SetTime {
                             utc_seconds,
@@ -1075,6 +1108,15 @@ async fn serve(
                         } => {
                             clock::set(utc_seconds, offset_minutes);
                             crate::system_off::on_clock_set(utc_seconds.div_euclid(60));
+                            // A fetch under way began by the clock as it
+                            // was: if that was ahead, it mustn't end by
+                            // undoing what the line above did.
+                            if let Some(Fetching::Sending(Sending {
+                                fetch: Some(fetch), ..
+                            })) = &mut fetching
+                            {
+                                fetch.clock_set(utc_seconds.div_euclid(60));
+                            }
                             info!("ble: time set (UTC offset {} min)", offset_minutes);
                             // Proof that this image can talk to the phone,
                             // and so receive the next update.
@@ -1107,14 +1149,23 @@ async fn serve(
                             send(server, conn, Outgoing::GpsPower(gps_deadline.is_some())).await;
                         }
                         Action::ActivityFetch { since_ms } => {
+                            // The one under way already sends everything
+                            // up to the bucket under way, and Gadgetbridge
+                            // (busy from its start to its end) asks for
+                            // no other meanwhile. One that did would get
+                            // a bucket at most, were it run afterwards.
+                            if fetching.is_some() {
+                                info!("ble: asked to fetch during a fetch; ignored");
+                                continue;
+                            }
                             // Hundreds of samples: a few per connection
                             // event, so not at the idle interval.
                             if slowed {
                                 speed_up(stack, conn).await;
                                 slowed = false;
                             }
-                            send_activity(server, conn, since_ms).await;
-                            last_traffic = Instant::now();
+                            // Begun, and sent, from the top of the loop.
+                            fetching = Some(Fetching::Asked { since_ms });
                         }
                     }
                 }
@@ -1236,6 +1287,15 @@ async fn serve(
         }
     };
     update.abandon("left").await;
+    // A fetch the client left in the middle of: nothing of it counts (the
+    // sync point stays, so the next fetch sends it all again), but its
+    // reads left the flash awake for the next.
+    if let Some(Fetching::Sending(sending)) = fetching {
+        info!("ble: the client left {} buckets into a fetch", sending.sent);
+        if sending.log.is_some() {
+            crate::system_off::log_close().await;
+        }
+    }
     if stay.pairing() {
         pairing_failed(stack).await;
     }
@@ -1448,37 +1508,99 @@ static SLEEP_HELD: AtomicBool = AtomicBool::new(false);
 /// same phone's export either way.
 static LAST_NO_TRACKS: AtomicU32 = AtomicU32::new(0);
 
-/// Sends the activity Gadgetbridge asked for, in buckets of a few minutes
-/// (see [`gb_buckets`]: a sample a minute, Gadgetbridge would merge).
-async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>, since_ms: i64) {
+/// An activity fetch under way: sending the activity Gadgetbridge asked
+/// for, in buckets of a few minutes (see [`gb_buckets`]: a sample a
+/// minute, Gadgetbridge would merge), a step at a time: its start
+/// ([`fetch_start`]), then a bucket a step ([`fetch_bucket`]), and after
+/// the last one its end ([`fetch_end`]).
+///
+/// A step at a time, because a fetch can be long: a phone that was away
+/// for a week is sent 2016 buckets, which takes 10 s over a quick link
+/// and over a minute over a slow one. [`serve`] takes a step whenever it
+/// has nothing else to do, so what the phone writes meanwhile (a
+/// notification, the time, a call, find-my-watch) waits for one bucket
+/// rather than for all of them, and our own messages (the battery, a
+/// button for the music) go out between two. Sent all at once, a fetch
+/// kept the phone's writes waiting, and the host dropped those after the
+/// eighth (it logs `no memory for packets`).
+///
+/// Each step runs to its end (`serve` doesn't drop it for something more
+/// urgent), so the phone gets every message whole, and a bucket read is a
+/// bucket sent or the fetch's failure. What `serve` does in between may
+/// change the ground under a fetch:
+///
+/// - The phone sets the clock: `serve` tells the fetch
+///   ([`gb_buckets::Fetch::clock_set`]), which stops short of the new time
+///   if the clock went back that far, and carries on as it was otherwise.
+/// - It asks for another fetch: ignored, as this one sends all there is.
+/// - It leaves: `serve` drops the fetch, and puts the flash back to sleep
+///   if the log was being read. The sync point hasn't moved, so the next
+///   fetch sends everything again.
+///
+/// This lives in [`serve`]'s future, which is static RAM for each
+/// connection slot whether or not a fetch is on, so it's only what the
+/// steps can't work out again.
+enum Fetching {
+    /// Asked for, from this time (UTC milliseconds, Gadgetbridge's `ts`),
+    /// and not begun.
+    Asked { since_ms: i64 },
+    /// Begun: the phone has been told so, and the buckets are going out.
+    Sending(Sending),
+}
+
+/// A fetch that has begun (see [`Fetching`]).
+struct Sending {
+    /// Which buckets (see [`gb_buckets`]); `None` without the time, when
+    /// there's nothing to send but the end.
+    fetch: Option<gb_buckets::Fetch>,
+    /// Its place in the activity log in the SPI flash, while that has
+    /// more for it; the rest is in the history.
+    log: Option<crate::spill::Reader>,
+    /// What it holds back (see [`crate::sleep_hold`]).
+    hold: Option<crate::sleep_hold::Hold>,
+    /// How many buckets went out.
+    sent: u32,
+    /// Whether the phone was told it started (see [`fetch_end`]).
+    started: bool,
+}
+
+/// Starts a fetch of the activity since `since_ms` (see [`Fetching`]):
+/// tells the phone so, and works out which buckets to send.
+async fn fetch_start(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, Pool>,
+    since_ms: i64,
+) -> Sending {
     let now = clock::now_utc_seconds();
     if now.is_some_and(|now| since_ms > now * 1000) {
         info!("ble: fetch from the phone's future");
     }
-    // Once Gadgetbridge hears the start, it's busy until it hears the end
-    // (see below).
+    // Once Gadgetbridge hears the start, it's busy until it hears the
+    // end (see below).
     let started = send(server, conn, Outgoing::ActivityFetch { done: false }).await;
-    // From where the watch last stopped sending, which is before what the
-    // phone asks for when a fetch held something back, or else from after
-    // all the phone may have: never over samples it already has, which
-    // may be a sample a minute from an older build (see `gb_buckets`).
+    // From where the watch last stopped sending, which is before what
+    // the phone asks for when a fetch held something back, or else
+    // from after all the phone may have: never over samples it already
+    // has, which may be a sample a minute from an older build (see
+    // `gb_buckets`).
     //
-    // Without the time there's nothing to send, as the history is filed by
-    // it; the phone sets it before fetching.
+    // Without the time there's nothing to send, as the history is
+    // filed by it; the phone sets it before fetching.
     //
-    // The history's oldest minutes drop out as new ones come in, which may
-    // happen while the fetch goes on: so it's as if a few more had already.
+    // The history's oldest minutes drop out as new ones come in, which
+    // may happen while the fetch goes on: so it's as if a few more had
+    // already.
     //
-    // The buckets come from the activity log in the SPI flash first (see
-    // `spill`), which has every one a fetch could have sent for the last
-    // 11 days, so a phone that was away for longer than the history's day
-    // still gets them all; then from the history, for what's not in the
-    // log yet (the last minutes; and all of it, should the flash not
-    // answer).
+    // The buckets come from the activity log in the SPI flash first
+    // (see `spill`), which has every one a fetch could have sent for
+    // the last 11 days, so a phone that was away for longer than the
+    // history's day still gets them all; then from the history, for
+    // what's not in the log yet (the last minutes; and all of it,
+    // should the flash not answer).
     let synced = crate::system_off::synced_through();
     let hold = activity::gadgetbridge_hold();
     let mut log = None;
-    let mut fetch = match now {
+    let fetch = match now {
         Some(now) => {
             let now = now.div_euclid(60);
             let since = gb_buckets::start(since_ms, synced, now);
@@ -1486,8 +1608,9 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
                 newest - activity::HISTORY_MINUTES as i64 + 1 + gb_buckets::MINUTES
             });
             if let Some((reader, logged)) = crate::system_off::log_open(minute32(since)).await {
-                // (Not from before the log's first whole bucket either:
-                // `Fetch::new` takes that from its oldest minute.)
+                // (Not from before the log's first whole bucket
+                // either: `Fetch::new` takes that from its oldest
+                // minute.)
                 oldest = oldest.min(i64::from(logged));
                 log = Some(reader);
             }
@@ -1499,60 +1622,87 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
         }
         None => None,
     };
-    let mut sent = 0;
-    // Whether every sample went out (as far as we can tell: notifications
-    // aren't acknowledged).
-    let mut complete = fetch.is_some();
-    while let Some(fetch) = fetch.as_mut() {
-        // A bucket at a time, from the log while it has any: each read
-        // takes the flash for a millisecond or so, and leaves it to the
-        // activity task in between.
-        let mut logged = None;
-        while let Some(reader) = log.as_mut() {
-            let mut want = crate::spill::Want {
-                reader,
-                from: minute32(fetch.from()),
-                end: minute32(fetch.end()),
-                out: [None; gb_buckets::MINUTES as usize],
-            };
-            match crate::system_off::log_bucket(&mut want).await {
-                crate::spill::Read::Bucket(first) => {
-                    let minutes =
-                        (i64::from(first)..)
-                            .zip(want.out)
-                            .filter_map(|(minute, sample)| {
-                                Some((minute, activity::bucket_minute(sample?)))
-                            });
-                    logged = fetch.next(minutes);
-                    break;
-                }
-                // The rest is in the history.
-                crate::spill::Read::End => log = None,
-                // A full log's oldest sector was erased as it was read:
-                // on from the oldest it has now. (That one's first
-                // bucket may have lost minutes with the sector before;
-                // what's left of it goes all the same.)
-                crate::spill::Read::Lost => {
-                    log = crate::system_off::log_open(want.from)
-                        .await
-                        .map(|(reader, _)| reader);
-                }
+    Sending {
+        fetch,
+        log,
+        hold,
+        sent: 0,
+        started,
+    }
+}
+
+/// Sends a fetch's next bucket (see [`Fetching`]). `None` if it did;
+/// otherwise the fetch is over, but for its end ([`fetch_end`]):
+/// `Some(complete)`, whether every bucket went out (as far as we can
+/// tell: notifications aren't acknowledged). They have when there's none
+/// left to send; not without the time, or after a bucket that failed.
+async fn fetch_bucket(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, Pool>,
+    sending: &mut Sending,
+) -> Option<bool> {
+    let Sending {
+        fetch, log, sent, ..
+    } = sending;
+    // Without the time, there's none to send.
+    let Some(fetch) = fetch.as_mut() else {
+        return Some(false);
+    };
+    // From the log while it has any: each read takes the flash for a
+    // millisecond or so, and leaves it to the activity task in
+    // between.
+    let mut logged = None;
+    while let Some(reader) = log.as_mut() {
+        let mut want = crate::spill::Want {
+            reader,
+            from: minute32(fetch.from()),
+            end: minute32(fetch.end()),
+            out: [None; gb_buckets::MINUTES as usize],
+        };
+        match crate::system_off::log_bucket(&mut want).await {
+            crate::spill::Read::Bucket(first) => {
+                let minutes = (i64::from(first)..)
+                    .zip(want.out)
+                    .filter_map(|(minute, sample)| {
+                        Some((minute, activity::bucket_minute(sample?)))
+                    });
+                logged = fetch.next(minutes);
+                break;
+            }
+            // The rest is in the history.
+            crate::spill::Read::End => *log = None,
+            // A full log's oldest sector was erased as it was read:
+            // on from the oldest it has now. (That one's first
+            // bucket may have lost minutes with the sector before;
+            // what's left of it goes all the same.)
+            crate::spill::Read::Lost => {
+                *log = crate::system_off::log_open(want.from)
+                    .await
+                    .map(|(reader, _)| reader);
             }
         }
-        // And from the history: it can't be borrowed across the awaits
-        // while sending.
-        let bucket = logged.or_else(|| {
-            activity::HISTORY.lock(|history| {
-                let history = history.borrow();
-                let minutes = history
-                    .since(fetch.from())
-                    .map(|(utc_minute, sample)| (utc_minute, sample.bucket_minute()));
-                fetch.next(minutes)
-            })
-        });
-        let Some(bucket) = bucket else {
-            break;
-        };
+    }
+    // And from the history: it can't be borrowed across the awaits
+    // while sending.
+    let bucket = logged.or_else(|| {
+        activity::HISTORY.lock(|history| {
+            let history = history.borrow();
+            let minutes = history
+                .since(fetch.from())
+                .map(|(utc_minute, sample)| (utc_minute, sample.bucket_minute()));
+            fetch.next(minutes)
+        })
+    });
+    // The log's reads leave the flash awake for the next (see
+    // `system_off::log_bucket`), and here there's none: the log had a
+    // bucket that the fetch didn't take. (Only if the fetch's end
+    // moved since the read was asked for; `log_bucket` reads none
+    // from the end on. But a flash left awake is a battery drained.)
+    if bucket.is_none() && log.is_some() {
+        crate::system_off::log_close().await;
+        *log = None;
+    }
+    if let Some(bucket) = bucket {
         let message = Outgoing::Activity {
             timestamp_ms: bucket.timestamp_ms(),
             steps: bucket.steps,
@@ -1560,19 +1710,39 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
             heart_rate: bucket.heart_rate,
             kind: bucket.kind,
         };
-        // A bucket that didn't go out leaves a hole the next fetch fills
-        // (it resends from where this one started): the ones after it
-        // would only keep the phone waiting for the end.
-        if !send(server, conn, message).await {
-            complete = false;
-            // The log's reads left the flash awake for the next.
-            if log.is_some() {
-                crate::system_off::log_close().await;
-            }
-            break;
+        if send(server, conn, message).await {
+            *sent += 1;
+            return None;
         }
-        sent += 1;
+        // A bucket that didn't go out leaves a hole the next fetch
+        // fills (it resends from where this one started): the ones
+        // after it would only keep the phone waiting for the end. And
+        // the log's reads left the flash awake for the next.
+        if log.is_some() {
+            crate::system_off::log_close().await;
+        }
+        return Some(false);
     }
+    Some(true)
+}
+
+/// Ends a fetch (see [`Fetching`]): tells the phone so, and if it was
+/// `complete` (see [`fetch_bucket`]), moves the sync point to where it
+/// ended.
+async fn fetch_end(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, Pool>,
+    sending: &Sending,
+    mut complete: bool,
+) {
+    let Sending {
+        fetch,
+        hold,
+        sent,
+        started,
+        ..
+    } = sending;
+    let (hold, sent, started) = (*hold, *sent, *started);
     // The end, and the empty track list that gets Gadgetbridge to pass
     // the samples on to Health Connect (see `gb::FETCH_END`), at most
     // every `HEALTH_CONNECT_EVERY`, or when a held-back sleep went out.
@@ -1614,9 +1784,9 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
         ),
         _ => info!("ble: sent {} buckets of activity", sent),
     }
-    if let Some(fetch) = fetch.filter(|_| complete) {
+    if let Some(fetch) = fetch.as_ref().filter(|_| complete) {
         // The phone now has everything before the bucket under way, or the
-        // first one held back.
+        // first one held back (or the one the clock was put back to).
         crate::system_off::on_synced(fetch.synced_through());
     }
 }
@@ -1711,7 +1881,7 @@ fn make_room_for_bond(stack: &Stack<'_, Controller, Pool>, conn: &GattConnection
 /// something to say too. Twice in a four-day field log (0.11.3) that
 /// failed every remaining message of a fetch within milliseconds, its end
 /// included, and Gadgetbridge showed "fetching activity data" until its
-/// Bluetooth was restarted (see [`send_activity`]).
+/// Bluetooth was restarted (see [`Fetching`]).
 ///
 /// The queue is 4 now (trouble-host's `l2cap-tx-queue-size-4`, in
 /// Cargo.toml): 6 of ours, 15 in all with one client, so the phone alone
@@ -1722,16 +1892,9 @@ fn make_room_for_bond(stack: &Stack<'_, Controller, Pool>, conn: &GattConnection
 /// notifications queued, a few per connection event, so a wait is all it
 /// takes; a connection event is at least 7.5 ms.
 ///
-/// TODO: a fetch still keeps [`serve`] from the phone's writes until it's
-/// done, so more than 8 of those in that time are dropped by the host
-/// (it logs `no memory for packets`, or an error processing ACL data).
-/// Sending the buckets from `serve`'s loop, between events, would fix
-/// that. It matters more since a fetch can be of a week (see
-/// `crate::spill`), 2016 buckets: a dev kit sent a computer 5 ms a
-/// bucket over a new connection (half of that reading the log), 10 s
-/// for a week, but 40 ms a bucket, 80 s for a week, over one that had
-/// been up for 20 minutes (at whatever interval the computer had by
-/// then; a build without the log wasn't timed over such a link).
+/// That wait is the longest the phone's writes go unread during a fetch
+/// (see [`Fetching`]): it's sent a message at a time, from [`serve`]'s
+/// loop, with the writes handled in between.
 const PACKET_POLL: Duration = Duration::from_millis(10);
 
 /// Sends one message, split into notifications that fit the MTU, waiting
