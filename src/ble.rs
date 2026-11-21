@@ -883,8 +883,9 @@ async fn serve(
                 core::future::pending().await
             }
         };
-        // The GPS, security, cut-off, and update deadlines share a branch
-        // (`select4` has only four); which one passed is sorted out below.
+        // The GPS, security, UART, cut-off, and update deadlines share a
+        // branch (`select4` has only four); which one passed is sorted out
+        // below.
         let deadline = async {
             let cut_off_ms = stay.cut_off_at(authenticated(conn));
             let security_deadline = judge
@@ -1615,6 +1616,9 @@ async fn fetch_start(
         Some(now) => {
             let now = now.div_euclid(60);
             let since = gb_buckets::start(since_ms, synced, now);
+            // With no history, nothing bounds the start: half of the
+            // least minute, so that `Fetch::new`'s arithmetic on it can't
+            // overflow.
             let mut oldest = activity::newest_minute().map_or(i64::MIN / 2, |newest| {
                 newest - activity::HISTORY_MINUTES as i64 + 1 + gb_buckets::MINUTES
             });
