@@ -372,6 +372,9 @@ impl Bma421 {
         Timer::after_millis(150).await;
         let mut status = [0];
         self.read(REG_INTERNAL_STATUS, &mut status).await?;
+        // The low five bits are the engine's message, below the error flags
+        // (see `INTERNAL_ERRORS`): 0x01 is "initialised", and anything else
+        // (not yet, or a failed load) leaves it without features.
         if status[0] & 0x1F != 0x01 {
             warn!(
                 "activity: feature engine didn't start (status {=u8:#04x})",
@@ -2190,6 +2193,9 @@ const RETAINED_MAGIC: u32 = 0x7572_5331; // "urS1"
 const RETAINED_ADDRESS: usize = 0x2000_D400;
 const _: () = assert!(size_of::<Retained>() <= 32);
 
+// The fields mixed and inverted, as `clock` does for its own block (its
+// `Retained::check`), so that random power-on RAM contents can't pass
+// for a saved total.
 fn check(today: &Today) -> i64 {
     !(today.day ^ (i64::from(today.steps) << 24))
 }
