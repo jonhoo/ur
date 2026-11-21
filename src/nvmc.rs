@@ -451,6 +451,8 @@ struct Step {
 
 impl Step {
     fn micros(self) -> u32 {
+        // An RTC tick is 1_000_000 / 32_768 µs, which reduces to
+        // 15_625 / 512.
         self.rtc_ticks * 15_625 / 512
     }
 }

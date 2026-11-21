@@ -19,9 +19,10 @@
 //!    clients expect the "init done" response to take a while.
 //! 3. Optionally, packet receipt notifications every N packets (`08 <N>`):
 //!    the client's flow control.
-//! 4. Receive (`03`), then the image as packets of up to 20 bytes, with a
-//!    receipt (`11 <bytes so far>`) every N packets and a response once all
-//!    of it is in.
+//! 4. Receive (`03`), then the image as packets of up to 20 bytes (what
+//!    the protocol's clients send; we take up to 244, the negotiated MTU
+//!    permitting), with a receipt (`11 <bytes so far>`) every N packets
+//!    and a response once all of it is in.
 //! 5. Validate (`04`): we read the slot back and check its CRC, and that
 //!    it's an image the bootloader will install and that will run here:
 //!    header, sizes, SHA-256, vector table (see [`crate::mcuboot`]).
@@ -150,6 +151,10 @@ pub struct Session {
     state: State,
     image_size: u32,
     received: u32,
+    // A legacy init packet is 12 + 2n bytes: device type, revision,
+    // application version and SoftDevice count, n SoftDevice ids, and the
+    // CRC-16. `scripts/package.py` lists one id, for 14 bytes; 32 leaves
+    // room for ten, and `on_packet` refuses a longer one.
     init_packet: Vec<u8, 32>,
     expected_crc: u16,
     receipt_interval: u16,
@@ -387,8 +392,12 @@ impl Session {
             self.fail();
             return Some(response(opcode::RECEIVE, status::TOO_BIG));
         }
-        // Gather whole pages: programming is per page, so this halves the
-        // flash traffic compared to programming each 20-byte packet.
+        // Gather whole pages, as the flash programs at most one page per
+        // operation. Programming each packet as it came would take more
+        // operations: most 240-byte packets (the size the README has
+        // `scripts/dfu.py` send) straddle a page boundary and would take
+        // two, and the 20-byte packets of a client that keeps to the
+        // protocol's size would take about 13 a page.
         while !data.is_empty() {
             let room = self.page.capacity() - self.page.len();
             let (now, later) = data.split_at(room.min(data.len()));
