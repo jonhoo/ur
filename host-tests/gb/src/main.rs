@@ -1323,7 +1323,7 @@ mod tests {
     #[test]
     fn a_callers_emoji_go() {
         for (name, shown) in [
-            ("Mor :blue_heart:", "Mor"),
+            ("Ida :blue_heart:", "Ida"),
             (":house_with_garden: Familien Nordmann", "Familien Nordmann"),
             ("Kari :+1::skin-tone-2:", "Kari"),
             // An emoji the library lacks, as itself, escaped.

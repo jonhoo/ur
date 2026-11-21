@@ -524,8 +524,8 @@ fn phone_event(kind: &str, object: Object<'_>, bitmaps: &mut bool) -> Option<Pho
         "call" => match object.get("cmd").and_then(|v| v.as_raw_str()) {
             // The name and the number are kept as a notification's text
             // is (see `TextBuilder`), so a contact's emoji, which
-            // Gadgetbridge sends as shortcodes, go (`Mor :blue_heart:`
-            // is `Mor`), and the number stands in for a name that would
+            // Gadgetbridge sends as shortcodes, go (`Ida :blue_heart:`
+            // is `Ida`), and the number stands in for a name that would
             // show nothing, as the title does for a sender.
             //
             // Then back to UTF-8, where the UI (and the dev kit's
@@ -548,7 +548,7 @@ fn phone_event(kind: &str, object: Object<'_>, bitmaps: &mut bool) -> Option<Pho
             _ => PhoneEvent::CallOver,
         },
         // Kept as a notification's text is too, for Gadgetbridge's
-        // shortcodes (`Natt :crescent_moon:`).
+        // shortcodes (`Night Signals :crescent_moon:`).
         "musicinfo" => PhoneEvent::MusicInfo {
             artist: shown::<40>(object, "artist", bitmaps).finish().to_utf8(),
             track: shown::<40>(object, "track", bitmaps).finish().to_utf8(),

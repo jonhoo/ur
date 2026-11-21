@@ -1012,7 +1012,7 @@ fn emoji_in_calls_and_music_arrive_as_ascii_by_default() {
     let mut gb = connected();
     gb.on_set_call_state(&CallSpec {
         command: CallSpec::CALL_INCOMING,
-        name: Some("Mor \u{2764}\u{FE0F} \u{1F3E1}".into()),
+        name: Some("Ida \u{2764}\u{FE0F} \u{1F3E1}".into()),
         number: Some("+4799999999".into()),
     });
     gb.on_set_music_info(&gbmock::spec::MusicSpec {
@@ -1032,7 +1032,7 @@ fn emoji_in_calls_and_music_arrive_as_ascii_by_default() {
         };
         // `:house_with_garden:` goes; `<3`, Gadgetbridge's emoticon for
         // the heart, is text.
-        assert_eq!(caller, "Mor <3");
+        assert_eq!(caller, "Ida <3");
     })
     .expect("it fits");
     received(&sent[1], |parsed| {
