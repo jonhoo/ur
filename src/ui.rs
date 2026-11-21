@@ -292,10 +292,10 @@ use crate::game::{self, Game};
 use crate::gb::{CallAction, MusicCommand, Outgoing};
 use crate::motor::{self, Pattern};
 use crate::nav::{self, Place, Side};
-// Defined apart from the UI, so that `gb` (which decodes them) builds
-// without it, in host tests; see `phone`.
 use crate::palette::{self, Color, Palette};
 use crate::phone::Text;
+// Defined apart from the UI, so that `gb` (which decodes them) builds
+// without it, in host tests; see `phone`.
 pub use crate::phone::{PhoneEvent, Unpaired};
 use crate::route::Route;
 use crate::sleep::{self, Change, Over, Rest};
@@ -421,7 +421,8 @@ pub enum Screen {
     Buttons,
     /// One of the two settings screens.
     Settings(Page),
-    /// A nearby Aranet4's readings.
+    /// A nearby room sensor's readings (an Aranet4's, or a BTHome
+    /// thermometer's).
     Air,
     Info,
     /// Asking whether to switch to storage mode: in no line, only reached
@@ -754,7 +755,8 @@ pub struct App {
     /// In the editor: its switch was tapped since it opened, so DONE
     /// leaves the alarm as that left it (see `on_editor_input`).
     switched: bool,
-    /// The local minute, as of the last tick (for edits that need "now").
+    /// Local seconds since 1970, as of the last tick (see
+    /// [`Status::local_second`]): for whatever needs "now" between ticks.
     local_second: Option<i64>,
     /// While glancing: until when.
     glance_until: Option<Instant>,
@@ -840,7 +842,8 @@ pub struct App {
     /// [`App::take_ha_press`]): sealing them needs flash, which is async.
     /// Two, as one touch can complete two (see [`buttons::Grid::touch`]).
     ha_presses: heapless::Vec<Press, 2>,
-    /// Whether there's an Aranet4 reading to show (see [`App::set_air`]).
+    /// Whether there's a room sensor's reading to show (see
+    /// [`App::set_air`]).
     air: bool,
     /// Whether a long press begun on the awake screen is still held on,
     /// until its release: the screen stays on for it, up to
@@ -969,18 +972,18 @@ impl App {
         if !cfg!(debug_assertions) {
             return;
         }
-        // A glance is the clock face, lit, with the screen otherwise off:
-        // it only starts from the screen off (which is on the clock), and
-        // whatever wakes the screen properly, or takes it over, ends it
-        // first. `on_tick` relies on it: while glancing it does nothing
-        // but end the glance, so a call or an alarm ringing under one
-        // would never time out, and a banner never go.
         // A deliberate tap's wake waits only on a glance, which the
         // screen going off ends (see `held_wake`).
         debug_assert!(
             !self.glance_wake || self.awake,
             "a glance's tap in the dark"
         );
+        // A glance is the clock face, lit, with the screen otherwise off:
+        // it only starts from the screen off (which is on the clock), and
+        // whatever wakes the screen properly, or takes it over, ends it
+        // first. `on_tick` relies on it: while glancing it does nothing
+        // but end the glance, so a call or an alarm ringing under one
+        // would never time out, and a banner never go.
         if self.glancing() {
             debug_assert!(self.awake, "a glance with the screen off");
             debug_assert!(self.screen == Screen::Clock, "a glance off the clock");
@@ -1005,8 +1008,7 @@ impl App {
         }
         // What rings has the screen, lit, until it's dealt with: each
         // turns the screen on as it starts, and holds it on from then
-        // (`on_tick`). And an alarm closes the editor as it starts to ring
-        // (it couldn't be opened under one: the ringing takes the touch).
+        // (`on_tick`).
         debug_assert!(!self.ringing_any() || self.awake, "ringing in the dark");
         // The full charge's screen is on screen, lit, and not dimly: it
         // takes over a glance or a notification's own wake as it shows
@@ -1016,6 +1018,8 @@ impl App {
             debug_assert!(!self.glancing(), "the full charge on a glance");
             debug_assert!(!self.brief_wake, "the full charge in a notification's wake");
         }
+        // An alarm closes the editor as it starts to ring (and it couldn't
+        // be opened under one: the ringing takes the touch).
         debug_assert!(self.ringing.is_none() || self.editing.is_none());
         // A drag is of the editor's time: closing the editor settles it
         // (`close_editor`).
@@ -2673,8 +2677,8 @@ impl App {
         };
         // A swipe that wasn't followed as a drag (an injected gesture: the
         // dev kit's debug input, the simulator's scripts and keys), or
-        // whose drag came to nothing: one step. Hours, or minutes: 5 at a time, but 1 for the timer, where
-        // short durations are common.
+        // whose drag came to nothing: one step. Hours, or minutes: 5 at a
+        // time, but 1 for the timer, where short durations are common.
         let step = match (theme.editor_field(touch.x, touch.y), editing) {
             (EditorField::Hours, _) => 60,
             (EditorField::Minutes, Editing::Timer(_)) => 1,
@@ -3009,8 +3013,9 @@ impl App {
             (Some(before), Some(now)) => sleep::noon_between(before, now),
             _ => false,
         };
-        // Truncated to 32 bits to keep `Night` small; that's 136 years.
         let nap_hours = sleep::nap_hours(local_second);
+        // Uptime truncated to 32 bits to keep `Night` small; that's 136
+        // years.
         let change = self
             .night
             .update(asleep, now.as_secs() as u32, noon, nap_hours);
