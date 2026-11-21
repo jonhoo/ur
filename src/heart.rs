@@ -932,10 +932,6 @@ pub async fn heart_task(i2c: Device) {
             Ok(Ended::TooBright) => info!("heart: too much light (after {} s)", led_seconds),
             Err(()) => warn!("heart: lost the sensor mid-session"),
         }
-        // A pulse means skin. No light coming back, or ambient light
-        // flooding in, means the sensor isn't against anything. Light
-        // without a pulse proves nothing: a desk reflects the LED too (the
-        // dev kit lying on one times out exactly like a busy wrist).
         // At the lowest drive, `spent` is `led_seconds`, short of the
         // moments around the LED's switching on and off.
         let spent = spent.max(led_seconds);
@@ -950,6 +946,11 @@ pub async fn heart_task(i2c: Device) {
         // schedule's either, should the schedule have started it (and a
         // look at the clock face, or a workout, then kept it going).
         let background = background && !matches!(outcome, Ok(Ended::Faded));
+        // Whether it's worn: a pulse means skin. No light coming back, or
+        // ambient light flooding in, means the sensor isn't against
+        // anything. Light without a pulse proves nothing: a desk reflects
+        // the LED too (the dev kit lying on one times out exactly like a
+        // busy wrist).
         let (worn, outcome) = match outcome {
             // What it read before the charger came stands.
             Ok(Ended::Measured(bpm) | Ended::Charger(Some(bpm))) => {
