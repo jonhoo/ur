@@ -27,6 +27,27 @@ mod tests {
     }
 
     #[test]
+    fn an_hour_in_two_parts_adds_up_to_the_hour() {
+        // As `aged` keeps the older part of an hour, already summed: the
+        // two together are the hour's minutes added one by one.
+        let minutes = [(10, 0), (0, 62), (250, 140), (3, 0), (0, 48), (7, 90)];
+        for split in 0..=minutes.len() {
+            let (mut older, mut newer, mut whole) = (Hour::NONE, Hour::NONE, Hour::NONE);
+            for (i, &(steps, heart_rate)) in minutes.iter().enumerate() {
+                whole.add(steps, heart_rate);
+                if i < split {
+                    older.add(steps, heart_rate);
+                } else {
+                    newer.add(steps, heart_rate);
+                }
+            }
+            newer.merge(&older);
+            assert_eq!(newer, whole, "split at {split}");
+        }
+        assert_eq!(Hour::NONE, Hour::default());
+    }
+
+    #[test]
     fn minutes_beyond_the_day_are_ignored() {
         let mut day = Day::default();
         day.add(24 * 60, 100, 80);

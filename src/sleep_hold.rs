@@ -189,10 +189,12 @@
 //! **A hold can't last for ever**: from [`CAP`] minutes back, a fetch sends
 //! whatever the watch has, settled or not. Otherwise a sleep that never
 //! ends (a watch lying still on a nightstand, before the heart rate sensor
-//! notices it's off) would keep everything back until the history (24
+//! notices it's off) would keep everything back until the history (14½
 //! hours) drops it: what's held back is in the history alone, and only
 //! what a fetch could send goes on into the activity log, which keeps it
-//! for days (see `crate::spill`).
+//! for days (see `crate::spill`). The history is as long as it is to hold
+//! a hold (see `crate::minute_ring::MINUTES`), so the cap is what sets the
+//! watch's largest piece of static RAM.
 //!
 //! What's settled stays so until a reset, which loses it: the history the
 //! phone has fetched is gone then too, and what it hasn't is restored
@@ -203,9 +205,29 @@
 
 use crate::sleep::{self, Kind};
 
-/// The most a hold keeps back, in minutes: a night and then some, but
-/// with six hours to spare before the history drops what's held.
-pub const CAP: i64 = 18 * 60;
+/// The most a hold keeps back, in minutes: 14 hours, the longest night
+/// and then some.
+///
+/// A hold lasts from a sleep's first minute until the watch settles it:
+/// 47 minutes after its last minute asleep if the wearer is up and about
+/// by then, 2¼ hours after at the latest (see the module docs). The
+/// longest on record:
+///
+/// | Nights | Longest sleep | Its hold |
+/// |---|---:|---:|
+/// | ur's field logs, 8 nights (2026-11-13 to 21) | 8.7 h | 9.2 h (as settled, of an 8.4 h night); 11.0 h at the latest |
+/// | A Garmin's, 346 nights (Health Connect, 2025-11 to 2026-11) | 11.3 h | 12.1 h settled as usual; 13.6 h at the latest |
+///
+/// The Garmin's second longest was 10.7 hours, and the rest under 10. So
+/// 14 hours holds every one of those nights whole, however late it was
+/// settled. It was 18 hours while the history held a day, each hour of
+/// which is 360 bytes of static RAM.
+///
+/// A sleep that does outlast it (a day in bed with a fever) loses
+/// little: its minutes from 14 hours back go to the phone as they are
+/// then, and what could still change in them is a stage, light, deep or
+/// REM, near a sleep's end; they were sleep long since.
+pub const CAP: i64 = 14 * 60;
 
 /// Minutes walking (of [`sleep::WAKE_STEPS`] steps or more) or off the
 /// wrist since the last minute asleep that, with the rest of [`settles`],

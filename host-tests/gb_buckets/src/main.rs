@@ -52,7 +52,7 @@ mod tests {
     /// 2026-11-09 12:00 UTC, in minutes since 1970: a bucket's start.
     const NOON: i64 = 29_903_760;
     /// The history's length (`activity::HISTORY_MINUTES`).
-    const DAY: i64 = 24 * 60;
+    const HISTORY: i64 = super::minute_ring::MINUTES as i64;
 
     // ==========================================================================
     // Histories
@@ -252,7 +252,7 @@ mod tests {
     /// The watch's history at `now` (a UTC minute): what `full` holds of
     /// its 24 hours, and the current minute's steps so far (half).
     fn history_at(full: &History, now: i64) -> History {
-        let oldest = now - DAY + 1;
+        let oldest = now - HISTORY + 1;
         let mut history: History = full.range(oldest..now).map(|(&m, &s)| (m, s)).collect();
         if let Some(&current) = full.get(&now) {
             history.insert(
@@ -279,7 +279,7 @@ mod tests {
         now_seconds: i64,
     ) -> (i64, i64) {
         let now = now_seconds.div_euclid(60);
-        let oldest = now - DAY + 1;
+        let oldest = now - HISTORY + 1;
         let fetch = Fetch::new(start(asked_ms, *synced, now), oldest, now);
         let from = fetch.from();
         *synced = Some(fetch.synced_through());
@@ -619,7 +619,7 @@ mod tests {
         let now = NOON + 600;
         let synced = Some(NOON + 99);
         assert_eq!(start((now - 2) * 60_000, synced, now), NOON + 100);
-        assert_eq!(start((now + DAY) * 60_000, synced, now), NOON + 100);
+        assert_eq!(start((now + HISTORY) * 60_000, synced, now), NOON + 100);
     }
 
     /// Without that, or if the phone asks from earlier than the watch
@@ -645,9 +645,9 @@ mod tests {
     #[test]
     fn from_the_future_without_knowing_nothing_before_now() {
         let now = NOON + 602;
-        assert_eq!(start((now + DAY) * 60_000, None, now), NOON + 605);
+        assert_eq!(start((now + HISTORY) * 60_000, None, now), NOON + 605);
         let history: History = (0..610).map(|i| (NOON + i, minute(10, 0, None))).collect();
-        let fetch = Fetch::new(start((now + DAY) * 60_000, None, now), NOON, now);
+        let fetch = Fetch::new(start((now + HISTORY) * 60_000, None, now), NOON, now);
         assert_eq!(fetch.synced_through(), NOON + 604);
         assert_eq!(run(fetch, &history, NOON), []);
     }
@@ -740,7 +740,7 @@ mod tests {
             + i64::from(to_update % 60);
         let restart = (now_seconds + skew).div_euclid(60);
         let mut history: History = if record {
-            let first = (synced_old - OLD_REVISED).max(restart - DAY + 1);
+            let first = (synced_old - OLD_REVISED).max(restart - HISTORY + 1);
             full.range(first..restart).map(|(&m, &s)| (m, s)).collect()
         } else {
             History::new()
@@ -769,7 +769,7 @@ mod tests {
             let (from, end) = fetch(&mut store, &at, asked, &mut synced, watch_seconds);
             if first.is_none() {
                 first = Some(from);
-                oldest = watch_now - DAY + 1;
+                oldest = watch_now - HISTORY + 1;
             }
             to = end;
             last_sync_seconds = Some(now_seconds);
@@ -894,7 +894,7 @@ mod tests {
         /// Adds `steps` to `minute`'s sample, as `activity` does every few
         /// seconds.
         fn record(&mut self, minute: i64, steps: u16) {
-            let (stale, newest) = minute_ring::file(self.newest, minute, DAY);
+            let (stale, newest) = minute_ring::file(self.newest, minute, HISTORY);
             for dropped in stale {
                 self.minutes.remove(&dropped);
             }
@@ -908,7 +908,8 @@ mod tests {
 
         /// The oldest minute `History::since` reads.
         fn oldest(&self) -> i64 {
-            self.newest.map_or(i64::MIN / 2, |newest| newest - DAY + 1)
+            self.newest
+                .map_or(i64::MIN / 2, |newest| newest - HISTORY + 1)
         }
     }
 
@@ -1016,12 +1017,26 @@ mod tests {
                 synced = synced_after_set(synced, watch);
             }
             if (real == clock.wrong || real == clock.right) && clock.on_connect {
-                fetch(&ring, &mut synced, &mut store, watch * 60, watch * 60_000, None);
+                fetch(
+                    &ring,
+                    &mut synced,
+                    &mut store,
+                    watch * 60,
+                    watch * 60_000,
+                    None,
+                );
             }
             ring.record(watch, steps_at(real));
             if clock.fetches.contains(&real) {
                 let seconds = watch * 60 + 30;
-                fetch(&ring, &mut synced, &mut store, seconds, seconds * 1000, None);
+                fetch(
+                    &ring,
+                    &mut synced,
+                    &mut store,
+                    seconds,
+                    seconds * 1000,
+                    None,
+                );
             }
         }
         PutRight { store, ring, end }
@@ -1098,7 +1113,7 @@ mod tests {
     #[test]
     fn a_fetch_as_the_clock_is_put_right_from_days_ahead_loses_nothing() {
         let clock = WrongClock {
-            lead: DAY * 3 / 2,
+            lead: HISTORY * 3 / 2,
             wrong: NOON + 60,
             right: NOON + 300,
             until: NOON + 600,
@@ -1142,14 +1157,14 @@ mod tests {
     /// there. It claims nothing for the phone's copy past 16:59.
     #[test]
     fn a_fetch_begun_after_where_the_clock_is_put_back_to_claims_nothing_past_it() {
-        let mut fetch = Fetch::new(NOON + 465, NOON - DAY, NOON + 482);
+        let mut fetch = Fetch::new(NOON + 465, NOON - HISTORY, NOON + 482);
         assert_eq!(fetch.synced_through(), NOON + 479);
         fetch.clock_set(NOON + 302);
         assert_eq!(fetch.synced_through(), NOON + 299);
         assert_eq!(fetch.next([(NOON + 466, minute(3, 0, None))]), None);
         // And a clock set to the bucket under way, or later, changes
         // nothing.
-        let mut fetch = Fetch::new(NOON + 465, NOON - DAY, NOON + 482);
+        let mut fetch = Fetch::new(NOON + 465, NOON - HISTORY, NOON + 482);
         fetch.clock_set(NOON + 481);
         fetch.clock_set(NOON + 4000);
         assert_eq!(fetch.synced_through(), NOON + 479);
@@ -1171,7 +1186,7 @@ mod tests {
             gaps: Vec<u8>,
         ) -> bool {
             let mid_fetch = mid_fetch.map(u16::from);
-            let lead = 1 + i64::from(lead) % (2 * DAY);
+            let lead = 1 + i64::from(lead) % (2 * HISTORY);
             let wrong_at = NOON + i64::from(wrong.0);
             let right = wrong_at + 1 + i64::from(wrong.1 % 600);
             let mut fetches = Vec::new();
@@ -1197,8 +1212,7 @@ mod tests {
             }
             lost.is_empty()
         }
-        quickcheck()
-            .quickcheck(property as fn(u16, (u8, u16), bool, Option<u8>, Vec<u8>) -> bool);
+        quickcheck().quickcheck(property as fn(u16, (u8, u16), bool, Option<u8>, Vec<u8>) -> bool);
     }
 
     /// The buckets before real minute `wrong` (when the phone's clock
@@ -1250,7 +1264,7 @@ mod tests {
     #[test]
     fn a_clock_set_days_ahead_keeps_what_was_unfetched_only_if_fetched_then() {
         let clock = |on_connect| WrongClock {
-            lead: 2 * DAY,
+            lead: 2 * HISTORY,
             wrong: NOON + 60,
             right: NOON + 300,
             until: NOON + 600,
@@ -1418,6 +1432,80 @@ mod tests {
                 sleep: true,
             })
         );
+    }
+
+    // ==========================================================================
+    // What the activity log takes in
+    // ==========================================================================
+
+    use super::gb_buckets::loggable_end;
+
+    /// Running, the log takes in what a fetch would send: the buckets that
+    /// are over, before the first minute held back.
+    #[test]
+    fn the_log_takes_what_a_fetch_would_send() {
+        let newest = NOON + 123;
+        assert_eq!(loggable_end(newest, None, newest, CAP), NOON + 120);
+        assert_eq!(
+            loggable_end(newest, Some(NOON + 42), newest, CAP),
+            NOON + 40
+        );
+        // A hold is never from further back than the cap, so the cap
+        // changes nothing while the clock runs.
+        let capped = newest - CAP + 1;
+        assert_eq!(
+            loggable_end(newest, Some(capped), newest, CAP),
+            start_of(capped)
+        );
+    }
+
+    /// After a jump of the clock (the watch was off), before the history
+    /// files the new time: nothing older than the cap is held any more.
+    #[test]
+    fn a_jump_ahead_frees_what_was_held() {
+        let newest = NOON + 123;
+        let held = Some(NOON - 300);
+        // An hour on: the night that was under way is still held.
+        assert_eq!(loggable_end(newest, held, newest + 60, CAP), NOON - 300);
+        // By the time its start is older than the cap, that goes; the
+        // rest stays in the history, which still holds it.
+        let now = NOON - 300 + CAP + 100;
+        assert_eq!(loggable_end(newest, held, now, CAP), NOON - 200);
+        // And a day on, all of it does, with the bucket that was under
+        // way, which is long over.
+        for now in [newest + CAP + 5, newest + 24 * 60, newest + 40 * 24 * 60] {
+            assert_eq!(loggable_end(newest, held, now, CAP), NOON + 125);
+            assert_eq!(loggable_end(newest, None, now, CAP), NOON + 125);
+        }
+    }
+
+    /// Whatever the hold and the jump: whole buckets, never less than a
+    /// fetch at the newest minute would send, never past the bucket the
+    /// newest minute is in, and never leaving out a minute that the
+    /// history lets go of when it files the new time (with the half
+    /// hour the history has over the cap, and a jump of more than
+    /// `activity::JUMP`, which is when this is asked).
+    #[test]
+    fn what_the_log_takes_covers_what_the_history_lets_go_of() {
+        const JUMP: i64 = 15;
+        fn prop(newest: u16, held_back: Option<u16>, jump: u32) -> bool {
+            let newest = NOON + i64::from(newest);
+            // A hold is from at most `CAP` minutes back.
+            let held = held_back.map(|back| newest - i64::from(back) % CAP);
+            let now = newest + JUMP + 1 + i64::from(jump % (3 * 24 * 60));
+            let end = loggable_end(newest, held, now, CAP);
+            let running = loggable_end(newest, held, newest, CAP);
+            // The first minute the history still holds once `now` is
+            // filed.
+            let kept_from = now - HISTORY + 1;
+            end % MINUTES == 0
+                && end >= running
+                && end <= start_of(newest) + MINUTES
+                && (end >= kept_from || end > newest)
+        }
+        QuickCheck::new()
+            .tests(100_000)
+            .quickcheck(prop as fn(u16, Option<u16>, u32) -> bool);
     }
 
     // ==========================================================================
@@ -1899,7 +1987,7 @@ mod tests {
             sleep::classify(asleep_ago, before_evidence, &evidence, &mut out);
             self.kinds[rewrite..=now].copy_from_slice(&out[rewrite - read..]);
 
-            let oldest = (now + 1).saturating_sub(DAY as usize);
+            let oldest = (now + 1).saturating_sub(HISTORY as usize);
             if let Some((start, end, _)) =
                 sleep::last_sleep(now + 1 - oldest, |i| self.kinds[oldest + i])
                 && self
@@ -2053,7 +2141,7 @@ mod tests {
                 let hold = watch.hold();
                 let mut fetch = Fetch::new(
                     start(asked, synced, now_minute),
-                    now_minute - DAY + 1,
+                    now_minute - HISTORY + 1,
                     now_minute,
                 );
                 if let Some(hold) = hold {
@@ -2063,7 +2151,7 @@ mod tests {
                 // came in between) finds the history has dropped what
                 // came first, up to its first whole bucket; any other gap
                 // is the property's to catch.
-                let oldest = start_of(now_minute - DAY + MINUTES);
+                let oldest = start_of(now_minute - HISTORY + MINUTES);
                 if first.is_some() && to < oldest {
                     dropped.push((to, oldest));
                 }
@@ -2071,7 +2159,7 @@ mod tests {
                 synced = Some(fetch.synced_through());
                 to = fetch.synced_through() + 1;
                 let history = watch.history();
-                for bucket in run(fetch, &history, now_minute - DAY + 1) {
+                for bucket in run(fetch, &history, now_minute - HISTORY + 1) {
                     send(&mut store, &bucket);
                 }
                 last_held_sleep = hold.is_some_and(|hold| hold.sleep);

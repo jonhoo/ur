@@ -1605,9 +1605,9 @@ async fn fetch_start(
     // The buckets come from the activity log in the SPI flash first
     // (see `spill`), which has every one a fetch could have sent for
     // the last 11 days, so a phone that was away for longer than the
-    // history's day still gets them all; then from the history, for
-    // what's not in the log yet (the last minutes; and all of it,
-    // should the flash not answer).
+    // history holds (14½ hours) still gets them all; then from the
+    // history, for what's not in the log yet (the last minutes; and
+    // all of it, should the flash not answer).
     let synced = crate::system_off::synced_through();
     let hold = activity::gadgetbridge_hold();
     let mut log = None;

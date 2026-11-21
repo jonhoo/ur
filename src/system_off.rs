@@ -147,7 +147,8 @@ const _: () = assert!(RECORD.start.is_multiple_of(spi_flash::SECTOR));
 /// Samples go between the history and the flash this many bytes at a time
 /// (six minutes, the least that also holds a header): a small buffer, since
 /// it sits in a task's future for good, in a build with little RAM to
-/// spare. A day's record then takes 240 small writes, about a second.
+/// spare. The largest record then takes 145 small writes, about half a
+/// second.
 const CHUNK: usize = 6 * SAMPLE_BYTES;
 
 /// The most minutes the activity log takes in at once, every couple of
@@ -262,7 +263,7 @@ static SYNCED: AtomicU32 = AtomicU32::new(0);
 async fn save(flash: &mut spi_flash::SpiFlash, start: u32, logged: Option<u32>) {
     let newest = activity::newest_minute();
     let room = if start == RECORD.start {
-        snapshot::MAX_MINUTES
+        activity::HISTORY_MINUTES
     } else {
         CHECKPOINT_ROOM
     };
@@ -386,9 +387,11 @@ pub async fn restore() -> Log {
     }
 
     // The log first, oldest first, so the history ends up with its last
-    // day: the minutes the phone hasn't fetched, and those it has, which
-    // the Today screen and last night's sleep are drawn from all the
-    // same. A full log is 128 KB, read in under a second.
+    // 14½ hours, and with the sums of the day before those (each minute
+    // filed pushes an older one out, into `aged`): the minutes the phone
+    // hasn't fetched, and those it has, which the Today screen and last
+    // night's sleep are drawn from all the same. A full log is 128 KB,
+    // read in under a second.
     let mut minutes = 0u32;
     let noted;
     (log, noted) = spill::scan(flash, LOG, |minute, sample| {
@@ -454,6 +457,62 @@ pub async fn restore() -> Log {
     if let Some(start) = chosen
         && let Some(header) = read_header(flash, start, &mut buffer).await
     {
+        // A record may hold more than the history does: one saved by a
+        // build up to 0.11.3-rc.4 holds all the phone hadn't fetched, up
+        // to a day, where the history is now 14½ hours (and the log may
+        // be empty: those builds had none). Put back, its oldest minutes
+        // would be let go of as its newest went in, with no copy but the
+        // record, which is retired at the next fetch. So they go from
+        // the record straight into the log, where a fetch reads them:
+        // the minutes before the first bucket the history will hold
+        // whole, which is where `keep` then carries on from. They're
+        // older than any hold lasts (the history is longer than that),
+        // so they are what a fetch could send.
+        //
+        // TODO: this is for the one update from a build without the log
+        // (it costs ~0.6 KB of flash); once no watch runs one, a record
+        // never holds more than the history, and it can go.
+        //
+        // (In 32 bits, and few of them: what's live across the awaits
+        // here is static RAM, in the activity task's future.)
+        let (from, until) = {
+            let last = i64::from(header.as_of()) - 1;
+            let newest = activity::newest_minute().map_or(last, |newest| newest.max(last));
+            let kept_from = gb_buckets::start_of(
+                newest - activity::HISTORY_MINUTES as i64 + gb_buckets::MINUTES,
+            );
+            let from = log.through().map_or(header.first_minute, |logged| {
+                header.first_minute.max(logged + 1)
+            });
+            (from, minute32(kept_from).min(header.as_of()))
+        };
+        if from < until {
+            info!(
+                "spill: minutes {}..{} of the saved activity are older than the history holds; into the log",
+                from, until
+            );
+            let mut minute = from;
+            while minute < until {
+                let sample: &mut [u8; SAMPLE_BYTES] = (&mut buffer[..SAMPLE_BYTES])
+                    .try_into()
+                    .expect("SAMPLE_BYTES long");
+                let at = HEADER_BYTES as u32 + (minute - header.first_minute) * SAMPLE_BYTES as u32;
+                flash.read(start + at, sample).await;
+                if spill::recorded(sample)
+                    && let Err(e) = spill::append(flash, LOG, &mut log, minute, sample).await
+                {
+                    warn!("spill: appending failed: {}", e);
+                    break;
+                }
+                minute += 1;
+            }
+            // (Not past a minute that didn't go in: there's no other copy,
+            // but a later boot can't put it in either, once newer ones
+            // are.)
+            if minute == until {
+                log.passed(until - 1);
+            }
+        }
         checks_out(flash, start, &header, &mut buffer, true).await;
         info!(
             "snapshot: restored {} minutes of activity from minute {}, and {} steps ({=str})",
@@ -494,7 +553,10 @@ pub async fn restore() -> Log {
 /// holds what a fetch could send now and no more: takes back what no
 /// longer is that, notes the last fetch, and appends up to `at_once` of
 /// the minutes that newly are.
-async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64) {
+///
+/// As of the clock's minute `now`, when it has jumped ahead of the
+/// history's newest (see `activity::jumps`); else as of that.
+async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64, now: Option<i64>) {
     // Boot couldn't read the log (the flash didn't answer): find its end
     // now, before anything is appended over it.
     if writer.is_unread() {
@@ -509,10 +571,12 @@ async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64) {
     // over the history with interrupts off, a millisecond or so; like the
     // minute's sleep review, which is why this is every couple of
     // minutes, not every poll.
-    let mut end = gb_buckets::start_of(newest);
-    if let Some(hold) = activity::gadgetbridge_hold() {
-        end = end.min(gb_buckets::start_of(hold.from));
-    }
+    let end = gb_buckets::loggable_end(
+        newest,
+        activity::gadgetbridge_hold().map(|hold| hold.from),
+        now.unwrap_or(newest),
+        crate::sleep_hold::CAP,
+    );
     // Where the log has to go back to, which is `end` unless minutes
     // before it have changed since they went in (see `relog_from`): those
     // go straight back in below, as they are now.
@@ -656,9 +720,9 @@ async fn read_header(
 /// checksum: the whole record, read through `buffer`. And if they do, and
 /// `restore`, puts the record back (see [`put_back`]). So a record that
 /// checks out is read twice over, once to check and once to restore, as
-/// none of it may be used before all of it is checked; but a day's record
-/// is 8.6 KB: a few tens of ms. (One function for both passes, as two
-/// cost flash.)
+/// none of it may be used before all of it is checked; but a record is
+/// 5.2 KB at the most (8.6 KB, an older build's): a few tens of ms. (One
+/// function for both passes, as two cost flash.)
 async fn checks_out(
     flash: &mut spi_flash::SpiFlash,
     start: u32,
@@ -764,44 +828,70 @@ pub async fn serve(log: &mut Log) {
     }
     let asked = SAVE.load(Ordering::Relaxed);
     let saving = matches!(asked, SAVE_ASKED | CHECKPOINT_ASKED);
+    // The clock has jumped far ahead of the history (the phone set it:
+    // after the watch was off, say), and the next minute filed would push
+    // out of the history minutes that aren't in the log yet (see
+    // `activity::jumps`). So the log takes those first, and the minute is
+    // filed from here, before anything else files one.
+    let jump = clock::now_utc_seconds()
+        .map(|seconds| seconds.div_euclid(60))
+        .filter(|&minute| activity::jumps(minute));
     // Between saves, the log wants writing only for a fetch to note.
-    if !(saving || NOTE.load(Ordering::Relaxed)) {
+    if !(saving || jump.is_some() || NOTE.load(Ordering::Relaxed)) {
         return;
     }
     {
         let mut flash = FLASH.lock().await;
         let flash = flash.as_mut().expect("set at boot");
-        match flash.wake().await {
-            Ok(()) => {
-                // First the log, so that the record starts where it ends.
-                // Before a planned reset, all there is: the record is
-                // what an older build would restore, and has only a day.
-                let at_once = match asked {
-                    SAVE_ASKED => snapshot::MAX_MINUTES as i64,
-                    CHECKPOINT_ASKED => SPILL_AT_ONCE,
-                    _ => 0,
-                };
-                keep(flash, log, at_once).await;
-                let logged = log.through();
-                match asked {
-                    SAVE_ASKED => {
-                        // The new record replaces any restored one, and
-                        // with the log holds all that's unsynced: nothing
-                        // to retire after a fetch that ends meanwhile.
-                        RECORD_STATE.store(NONE, Ordering::Relaxed);
-                        save(flash, RECORD.start, logged).await;
-                    }
-                    CHECKPOINT_ASKED => {
-                        if let Some(newest) = activity::newest_minute() {
-                            let slot = snapshot::checkpoint_slot(newest);
-                            let start = CHECKPOINTS.start + slot * snapshot::SLOT_BYTES;
-                            save(flash, start, logged).await;
-                        }
-                    }
-                    _ => {}
-                }
+        let awake = match flash.wake().await {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("snapshot: the flash didn't wake: {}", e);
+                false
             }
-            Err(e) => warn!("snapshot: the flash didn't wake: {}", e),
+        };
+        if awake {
+            // First the log, so that the record starts where it ends.
+            // Before a planned reset, all there is: the record is what
+            // an older build would restore, and has only a day. Before a
+            // jump too: all that it pushes out.
+            let at_once = match (asked, jump) {
+                (SAVE_ASKED, _) | (_, Some(_)) => snapshot::MAX_MINUTES as i64,
+                (CHECKPOINT_ASKED, None) => SPILL_AT_ONCE,
+                _ => 0,
+            };
+            keep(flash, log, at_once, jump).await;
+        }
+        // With no `await` since the log took them in. And whether or not
+        // it could: a flash that doesn't answer mustn't stop the history's
+        // clock, and a heart rate waits on this (see
+        // `activity::record_heart_rate`).
+        if let Some(minute) = jump {
+            info!(
+                "spill: the clock jumped ahead; the history moves on to minute {}",
+                minute
+            );
+            activity::skip_to(minute);
+        }
+        if awake {
+            let logged = log.through();
+            match asked {
+                SAVE_ASKED => {
+                    // The new record replaces any restored one, and with
+                    // the log holds all that's unsynced: nothing to
+                    // retire after a fetch that ends meanwhile.
+                    RECORD_STATE.store(NONE, Ordering::Relaxed);
+                    save(flash, RECORD.start, logged).await;
+                }
+                CHECKPOINT_ASKED => {
+                    if let Some(newest) = activity::newest_minute() {
+                        let slot = snapshot::checkpoint_slot(newest);
+                        let start = CHECKPOINTS.start + slot * snapshot::SLOT_BYTES;
+                        save(flash, start, logged).await;
+                    }
+                }
+                _ => {}
+            }
         }
         flash.sleep().await;
     }

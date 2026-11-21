@@ -1,7 +1,8 @@
 //! The activity log in the SPI flash: every minute a fetch could have
 //! sent, appended as it becomes one, so that what the phone hasn't
-//! fetched outlives both the day the in-RAM history holds (see
-//! [`crate::activity`]) and a reset.
+//! fetched outlives both the hours the in-RAM history holds (see
+//! [`crate::activity`]: a day, when this was written; 14½ hours since,
+//! as it no longer has to hold what's here) and a reset.
 //!
 //! Before this, the minutes the phone hadn't fetched lived in RAM alone,
 //! with a copy of all of them rewritten to the flash every couple of

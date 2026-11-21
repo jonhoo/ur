@@ -12,9 +12,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::minute_ring::file;
+    use super::minute_ring::{file, let_go};
 
-    /// A day of minutes, as the firmware's ring has.
+    /// A day of minutes: what the firmware's ring had (it has
+    /// `minute_ring::MINUTES` now; nothing here goes by the length).
     const DAY: i64 = 24 * 60;
     /// 2026-11-09 12:00 UTC, in minutes since 1970.
     const NOON: i64 = 29_903_760;
@@ -147,6 +148,35 @@ mod tests {
         assert_eq!(ring.minutes().len(), 631);
     }
 
+    #[test]
+    fn moving_on_lets_go_of_the_oldest() {
+        // A minute on: the one a ring's length before it.
+        assert_eq!(
+            let_go(Some(NOON), NOON + 1, DAY),
+            NOON - DAY + 1..NOON - DAY + 2
+        );
+        // An hour on: an hour of them.
+        assert_eq!(
+            let_go(Some(NOON), NOON + 60, DAY),
+            NOON - DAY + 1..NOON - DAY + 61
+        );
+        // Days on: all the ring held, and no more.
+        assert_eq!(
+            let_go(Some(NOON), NOON + 3 * DAY, DAY),
+            NOON - DAY + 1..NOON + 1
+        );
+    }
+
+    #[test]
+    fn nothing_is_let_go_of_otherwise() {
+        // The first minute, the same minute again, and a clock put back
+        // (which drops minutes, after the new time: see `file`).
+        assert!(let_go(None, NOON, DAY).is_empty());
+        assert!(let_go(Some(NOON), NOON, DAY).is_empty());
+        assert!(let_go(Some(NOON), NOON - 1, DAY).is_empty());
+        assert!(let_go(Some(NOON), NOON - 3 * DAY, DAY).is_empty());
+    }
+
     /// xorshift64*, so runs are reproducible without dependencies.
     struct Rng(u64);
 
@@ -176,12 +206,15 @@ mod tests {
                     _ => -((rng.next() % (3 * LEN as u64)) as i64),
                 };
                 let before = ring.minutes();
+                let gone = let_go(ring.newest, minute, LEN as i64);
+                let was = ring.newest;
                 ring.file(minute);
                 ring.check();
                 assert_eq!(ring.newest, Some(minute));
                 // What's kept from before is everything that was before
                 // the new minute and still in reach.
                 let kept: Vec<i64> = before
+                    .clone()
                     .into_iter()
                     .filter(|&m| m <= minute && minute - m < LEN as i64)
                     .collect();
@@ -190,6 +223,23 @@ mod tests {
                     now.retain(|&m| m != minute);
                 }
                 assert_eq!(now, kept);
+                // And what's gone, as the clock moved on, is what the
+                // ring let go of (which names every minute it no longer
+                // reaches back to, sampled or not).
+                if was.is_some_and(|was| minute >= was) {
+                    let lost: Vec<i64> = before
+                        .iter()
+                        .copied()
+                        .filter(|m| !kept.contains(m))
+                        .collect();
+                    assert!(
+                        lost.iter().all(|m| gone.contains(m)),
+                        "{lost:?} of {gone:?}"
+                    );
+                    assert!(kept.iter().all(|m| !gone.contains(m)));
+                } else {
+                    assert!(gone.is_empty());
+                }
             }
         }
     }
@@ -208,7 +258,7 @@ mod tests {
 /// an `i64`.
 #[cfg(kani)]
 mod proofs {
-    use super::minute_ring::file;
+    use super::minute_ring::{file, let_go};
 
     /// A day of minutes, as the firmware's ring has.
     const DAY: i64 = 24 * 60;
@@ -262,5 +312,22 @@ mod proofs {
         let emptied = shares < stale.end;
         let belongs = minute - DAY < held && held <= minute;
         assert_eq!(emptied, !belongs);
+    }
+
+    /// For the firmware's ring (of a day, as above: nothing goes by the
+    /// length), any newest minute, and any minute to file: a minute the
+    /// ring held is let go of exactly when the clock moved on past its
+    /// reach. So everything that leaves the ring by age is handed on
+    /// (see `crate::aged`), nothing that stays is, and nothing is when
+    /// the clock goes back. And the minutes let go of are no more than
+    /// the ring held, oldest first.
+    #[kani::proof]
+    fn a_minute_is_let_go_of_exactly_when_the_ring_moves_past_it() {
+        let (newest, minute, held) = (any_minute(), any_minute(), any_minute());
+        kani::assume(newest - DAY < held && held <= newest);
+        let gone = let_go(Some(newest), minute, DAY);
+        assert!(gone.start <= gone.end && gone.end - gone.start <= DAY);
+        let outlived = minute > newest && held <= minute - DAY;
+        assert_eq!(gone.contains(&held), outlived);
     }
 }

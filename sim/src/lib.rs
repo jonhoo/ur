@@ -25,6 +25,9 @@
 // At the crate root, where their `crate::…` paths expect each other. Not
 // everything in them is used here.
 
+#[path = "../../src/aged.rs"]
+#[allow(dead_code)]
+mod aged;
 #[path = "../../src/alarm.rs"]
 #[allow(dead_code)]
 mod alarm;
@@ -95,6 +98,9 @@ mod glance;
 mod heart_reading;
 #[path = "../../src/live.rs"]
 mod live;
+#[path = "../../src/minute_ring.rs"]
+#[allow(dead_code)]
+mod minute_ring;
 #[path = "../../src/motor.rs"]
 #[allow(dead_code)]
 mod motor;

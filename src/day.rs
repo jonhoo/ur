@@ -2,8 +2,9 @@
 //! steps, the heart rate's range, and a resting heart rate; and which
 //! steps today's total counts, for the clock face.
 //!
-//! [`crate::activity`] feeds it the day's per-minute samples; this only
-//! adds them up. Hardware-free, so it runs in host tests
+//! [`crate::activity`] feeds it the day's per-minute samples, and for the
+//! hours older than its history holds, their sums (see [`crate::aged`]);
+//! this only adds them up. Hardware-free, so it runs in host tests
 //! (`host-tests/day`).
 
 pub const HOURS: usize = 24;
@@ -29,6 +30,49 @@ pub struct Hour {
 }
 
 impl Hour {
+    /// An hour with nothing in it.
+    pub const NONE: Self = Self {
+        steps: 0,
+        heart_min: 0,
+        heart_max: 0,
+        heart_sum: 0,
+        heart_count: 0,
+    };
+
+    /// Adds a minute's sample: its steps, and its heart rate (0 if none
+    /// was measured).
+    pub fn add(&mut self, steps: u16, heart_rate: u8) {
+        self.steps = self.steps.saturating_add(steps);
+        if heart_rate > 0 {
+            if self.heart_count == 0 {
+                self.heart_min = heart_rate;
+                self.heart_max = heart_rate;
+            } else {
+                self.heart_min = self.heart_min.min(heart_rate);
+                self.heart_max = self.heart_max.max(heart_rate);
+            }
+            self.heart_sum = self.heart_sum.saturating_add(u16::from(heart_rate));
+            self.heart_count = self.heart_count.saturating_add(1);
+        }
+    }
+
+    /// Adds another stretch of the same hour, already summed (see
+    /// [`crate::aged`]): as if its minutes had been added one by one.
+    pub fn merge(&mut self, other: &Hour) {
+        self.steps = self.steps.saturating_add(other.steps);
+        if other.heart_count > 0 {
+            if self.heart_count == 0 {
+                self.heart_min = other.heart_min;
+                self.heart_max = other.heart_max;
+            } else {
+                self.heart_min = self.heart_min.min(other.heart_min);
+                self.heart_max = self.heart_max.max(other.heart_max);
+            }
+            self.heart_sum = self.heart_sum.saturating_add(other.heart_sum);
+            self.heart_count = self.heart_count.saturating_add(other.heart_count);
+        }
+    }
+
     /// The average heart rate, if it was measured often enough to say
     /// (see [`RESTING_READINGS`]).
     fn resting(&self) -> Option<u8> {
@@ -48,20 +92,8 @@ impl Day {
     /// its steps, and its heart rate (0 if none was measured). Minutes
     /// outside the day are ignored.
     pub fn add(&mut self, minute: usize, steps: u16, heart_rate: u8) {
-        let Some(hour) = self.hours.get_mut(minute / 60) else {
-            return;
-        };
-        hour.steps = hour.steps.saturating_add(steps);
-        if heart_rate > 0 {
-            if hour.heart_count == 0 {
-                hour.heart_min = heart_rate;
-                hour.heart_max = heart_rate;
-            } else {
-                hour.heart_min = hour.heart_min.min(heart_rate);
-                hour.heart_max = hour.heart_max.max(heart_rate);
-            }
-            hour.heart_sum = hour.heart_sum.saturating_add(u16::from(heart_rate));
-            hour.heart_count = hour.heart_count.saturating_add(1);
+        if let Some(hour) = self.hours.get_mut(minute / 60) {
+            hour.add(steps, heart_rate);
         }
     }
 
@@ -95,7 +127,8 @@ impl Day {
 // ==============================================================================
 //
 // The clock face shows a running total of today's steps, kept apart from
-// the per-minute history (which is UTC, and holds a day) because the
+// the per-minute history (which is UTC, and with what it keeps of the
+// minutes it has let go of, reaches back a day: see `aged`) because the
 // total counts steps the history can't: those before the phone set the
 // clock. It starts over at local midnight. But the local date also
 // changes without midnight passing: a flight across time zones, or the
@@ -112,7 +145,10 @@ impl Day {
 // midnight, exactly what the Today screen shows. Midnight passing is the
 // same rule (there's nothing in the history since midnight yet), so
 // there's no telling the two apart. The history always reaches back far
-// enough: local midnight is never more than a day ago. The cost: the
+// enough: local midnight is never more than a day ago, and what the
+// history no longer holds by the minute, it has by the hour (`aged`;
+// exact but after a move between zones that aren't whole hours apart).
+// The cost: the
 // steps counted before the phone first set the clock that day aren't in
 // the history, so they're dropped.
 //

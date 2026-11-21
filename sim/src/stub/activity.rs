@@ -4,7 +4,11 @@
 //!
 //! The per-minute history is kept the way the real one is (UTC minutes,
 //! steps and a heart rate each), so the Today screen adds it up through the
-//! firmware's own [`crate::day::Day`].
+//! firmware's own [`crate::day::Day`]: by the minute for the 14½ hours the
+//! watch's history holds, and through the firmware's hourly sums
+//! ([`crate::aged`]) for what's older, as the watch does (see
+//! [`day_so_far`]). All of it stays here, though, standing for the
+//! watch's activity log too, which a fetch reads the older minutes from.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -140,14 +144,50 @@ fn on(state: &State, (utc_minute, offset): (i64, i16)) -> Option<(i64, u32)> {
     let (counted_on, steps) = state.today?;
     let day = crate::day::date(utc_minute, offset);
     let steps = crate::day::steps_today(Some(counted_on), steps, day, || {
-        let midnight = crate::day::midnight(utc_minute, offset);
-        state
-            .history
-            .range(midnight..=utc_minute)
-            .map(|(_, &(steps, _))| u32::from(steps))
+        day_so_far(state, utc_minute, offset)
+            .hours
+            .iter()
+            .map(|hour| u32::from(hour.steps))
             .sum()
     });
     Some((day, steps))
+}
+
+/// The hours whose sums the watch keeps of the minutes its history has
+/// let go of (`activity::AGED_HOURS`).
+const AGED_HOURS: usize = (24 * 60 - crate::minute_ring::MINUTES).div_ceil(60) + 1;
+
+/// As `activity::History::day`: the day so far, hour by hour, from the
+/// minutes the watch's history holds (the last
+/// [`crate::minute_ring::MINUTES`]), and, for those it has let go of, the
+/// sums [`crate::aged`] keeps of them.
+///
+/// The sums are made afresh here, of the minutes that would have left
+/// the history by now, in the zone the wearer is in now: so, unlike the
+/// watch's, they never straddle the hours after a move between zones
+/// that aren't whole hours apart (see `aged`'s TODO).
+fn day_so_far(state: &State, utc_minute: i64, offset: i16) -> crate::day::Day {
+    let midnight = crate::day::midnight(utc_minute, offset);
+    let kept_from = utc_minute - crate::minute_ring::MINUTES as i64 + 1;
+    let mut aged = crate::aged::Aged::<AGED_HOURS>::new();
+    // (Since midnight is as far back as today reaches.)
+    let older = midnight..kept_from.max(midnight);
+    for (&minute, &(steps, heart_rate)) in state.history.range(older) {
+        aged.take(
+            minute,
+            offset,
+            steps,
+            heart_rate,
+            crate::sleep::Kind::Unknown,
+        );
+    }
+    let mut day = crate::day::Day::default();
+    aged.add_to(&mut day, midnight, offset);
+    for (&minute, &(steps, heart_rate)) in state.history.range(midnight.max(kept_from)..=utc_minute)
+    {
+        day.add((minute - midnight) as usize, steps, heart_rate);
+    }
+    day
 }
 
 /// As `activity::today`: the history since local midnight, hour by hour.
@@ -156,12 +196,7 @@ pub fn today() -> Option<crate::day::Day> {
         return day;
     }
     let (utc_minute, offset) = now_minute()?;
-    let midnight = crate::day::midnight(utc_minute, offset);
-    let mut day = crate::day::Day::default();
-    for (&minute, &(steps, heart_rate)) in state().history.range(midnight..=utc_minute) {
-        day.add((minute - midnight) as usize, steps, heart_rate);
-    }
-    Some(day)
+    Some(day_so_far(&state(), utc_minute, offset))
 }
 
 // ==============================================================================

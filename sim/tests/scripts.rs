@@ -2027,6 +2027,35 @@ fn steps_today_follow_a_new_time_zone() {
     assert!(ok, "{log}");
 }
 
+/// Today's steps from hours ago, which the watch's history no longer
+/// holds by the minute (it holds 14½ hours: `minute_ring::MINUTES`), are
+/// still on the Today screen, and in the total a new time zone's day
+/// starts from: they come from the sums of the hours the history has let
+/// go of (`aged`). `expect steps` checks the clock face's total and the
+/// Today screen's alike.
+#[test]
+fn steps_today_outlast_the_minutes_of_the_history() {
+    let dir = out("steps-aged");
+    let script = dir.join("script.txt");
+    std::fs::create_dir_all(&dir).expect("the target dir is writable");
+    std::fs::write(
+        &script,
+        "# A long day in Kathmandu, whose hours start on UTC's quarter.\n\
+         time 2026-11-09 00:20 +05:45\nsteps 300\nuntil 06:10\nsteps 40\n\
+         until 23:50\nsteps 5\nexpect steps 345\n\
+         # An early walk in London, then a flight west late that night,\n\
+         # landing on the same date: the day is still the whole day.\n\
+         time 2026-11-11 05:00 +00:00\nsteps 3000\nuntil 22:00\nsteps 50\n\
+         expect steps 3050\n\
+         time 2026-11-11 17:30 -05:00\nexpect steps 3050\n\
+         # And one east, into the next date: only what's since its midnight.\n\
+         time 2026-11-12 01:40 +03:00\nexpect steps 50\nsteps 8\nexpect steps 58\n",
+    )
+    .expect("the target dir is writable");
+    let (ok, log) = run(script.to_str().expect("UTF-8"), &[]);
+    assert!(ok, "{log}");
+}
+
 /// The screen going off closes the alarm editor, keeping what was edited
 /// (it was saved as it changed): the next wake is to the clock face, as
 /// every wake is, where the button turns the screen off again. The

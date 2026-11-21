@@ -655,8 +655,8 @@ type Kind = Option<&'static str>;
 /// (`stages::REVISED`): where the story below has it look at the night
 /// again.
 const REVISED: i64 = 164;
-/// `activity::HISTORY_MINUTES`.
-const HISTORY_MINUTES: i64 = 24 * 60;
+/// `activity::HISTORY_MINUTES` (`minute_ring::MINUTES`): 14½ hours.
+const HISTORY_MINUTES: i64 = 14 * 60 + 30;
 
 /// The watch, as far as an activity fetch goes: its clock, its minutes,
 /// and `ble::Fetching`'s arithmetic over them. (`ble` itself needs
@@ -689,7 +689,8 @@ impl Watch {
         }
     }
 
-    /// Records a minute, dropping those a day older (`minute_ring`).
+    /// Records a minute, dropping those older than the history holds
+    /// (`minute_ring`).
     fn record(&mut self, minute: i64, sample: Minute<Kind>) {
         self.history.insert(minute, sample);
         self.history = self.history.split_off(&(minute - HISTORY_MINUTES + 1));

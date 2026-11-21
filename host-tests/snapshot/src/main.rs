@@ -183,9 +183,10 @@ mod tests {
 
     #[test]
     fn a_checkpoint_has_room_for_all_a_fetch_holds_back() {
-        // `sleep_hold::CAP`, 18 hours, and the bucket under way.
+        // `sleep_hold::CAP`, 14 hours, and the bucket under way; all of
+        // the history, at that (`minute_ring::MINUTES`, 14½ hours).
         assert_eq!(ROOM, 1360);
-        const { assert!(ROOM >= 18 * 60 + 2 * 5) };
+        const { assert!(ROOM >= 14 * 60 + 30) };
     }
 
     #[test]

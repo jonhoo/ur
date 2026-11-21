@@ -24,7 +24,8 @@
 //!   them for days, until it has.
 //! - [`activity`] / [`sleep`]: steps, movement, and sleep, from the
 //!   accelerometer; [`minute_ring`]: which minutes their history keeps as
-//!   the clock moves; [`day`]: the day's activity by the hour, for the UI.
+//!   the clock moves; [`aged`]: what it keeps of the minutes it lets go
+//!   of; [`day`]: the day's activity by the hour, for the UI.
 //! - [`heart`] / [`ppg`] / [`heart_schedule`]: heart rate from the optical
 //!   sensor, the signal processing behind it, and when to measure.
 //! - [`i2c`] / [`backoff`]: the shared sensor bus, and retrying a sensor's
@@ -68,6 +69,7 @@
 )]
 
 mod activity;
+mod aged;
 mod alarm;
 mod aranet;
 mod arrival;

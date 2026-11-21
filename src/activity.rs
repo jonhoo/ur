@@ -28,7 +28,8 @@
 //! which tells a desk (see [`crate::desk`]): its minutes are off the
 //! wrist, so never sleep.
 //!
-//! Both are kept per minute for the last day ([`History`]), which is what
+//! Both are kept per minute, for the last 14½ hours in RAM ([`History`])
+//! and the last 11 days in the SPI flash ([`crate::spill`]), which is what
 //! Gadgetbridge fetches as activity samples, and today's step total is
 //! shown on the clock face. The history also holds each minute's heart
 //! rate, recorded by [`crate::heart`], and the heart-rate measurement asks
@@ -55,7 +56,7 @@ use embedded_hal_async::i2c::I2c;
 
 use crate::i2c::Device;
 use crate::step_counter::{Read, StepCounter};
-use crate::{clock, desk, minute_ring, sleep, sleep_hold, stages, workout};
+use crate::{aged, clock, desk, minute_ring, sleep, sleep_hold, stages, workout};
 
 // ==============================================================================
 // The BMA421
@@ -578,8 +579,33 @@ pub async fn suspend(twim: &mut embassy_nrf::twim::Twim<'static>) {
 // Shared state
 // ==============================================================================
 
-/// Per-minute samples for the last 24 hours.
-pub const HISTORY_MINUTES: usize = 24 * 60;
+/// Per-minute samples for the last 14½ hours: see
+/// [`minute_ring::MINUTES`] for why that long.
+pub const HISTORY_MINUTES: usize = minute_ring::MINUTES;
+
+/// The hours between the history's oldest minute and a day ago, whose
+/// sums [`aged`] keeps, and one more, as neither end falls on the hour.
+const AGED_HOURS: usize = (24 * 60 - HISTORY_MINUTES).div_ceil(60) + 1;
+
+/// How far on from the history's newest minute a minute can be filed
+/// without more ado. Further on, the history would let go of minutes
+/// that the activity log may not have yet (see [`jumps`]).
+///
+/// Running, the history moves on a minute at a time, and the log is
+/// brought up to date every couple of minutes; the clock only jumps when
+/// the phone sets it: after the watch was off, above all.
+const JUMP: i64 = 15;
+// What's not in the log yet is no older than what a fetch may hold back,
+// a bucket (the log takes whole ones), and the minutes since the log was
+// last brought up to date; a minute filed `JUMP` on must not push that
+// out.
+const _: () = assert!(
+    sleep_hold::CAP
+        + JUMP
+        + 2 * crate::gb_buckets::MINUTES
+        + 2 * crate::snapshot::CHECKPOINT_MINUTES
+        <= HISTORY_MINUTES as i64
+);
 
 #[derive(Clone, Copy, Default)]
 pub struct Sample {
@@ -590,8 +616,8 @@ pub struct Sample {
     /// The heart rate measured during the minute, or 0 if none was (as in
     /// Gadgetbridge, which treats 0 as "not measured").
     pub heart_rate: u8,
-    /// Packed into the byte the struct would otherwise pad with (24 hours
-    /// of samples cost the same 8.6 KB either way): the minute's
+    /// Packed into the byte the struct would otherwise pad with (the
+    /// history's samples cost the same 5.2 KB either way): the minute's
     /// [`sleep::Kind`] (bits 0–3), whether the watch was worn (bits 4–5: 0
     /// unknown, 1 yes, 2 no, 3 in a workout, see [`Sample::exercise`]),
     /// whether the minute was recorded at all
@@ -626,11 +652,12 @@ impl Sample {
     /// Gadgetbridge (see [`Sample::gadgetbridge_kind`]).
     ///
     /// Kept as the fourth value of the two bits that say whether the watch
-    /// was worn, which had three: the byte has no bit to spare (a day of
-    /// samples is 8.6 KB of static RAM, and the `compare` build has ~100
-    /// bytes left), and its low four are the classifier's, which rewrites
-    /// the last hours' every minute. A workout's minute is never off the
-    /// wrist (see [`Sample::set_exercise`]), so nothing is lost by it.
+    /// was worn, which had three: the byte has no bit to spare (a byte
+    /// more a sample would be 870 of static RAM, of which the `compare`
+    /// build had ~100 left when this went in), and its low four are the
+    /// classifier's, which rewrites the last hours' every minute. A
+    /// workout's minute is never off the wrist (see
+    /// [`Sample::set_exercise`]), so nothing is lost by it.
     pub fn exercise(&self) -> bool {
         self.seen() && (self.flags >> 4) & 0x3 == 3
     }
@@ -743,7 +770,7 @@ impl Sample {
 }
 
 const _: () = assert!(size_of::<Sample>() == 6, "flags must fit in the padding");
-// The classifier's span is part of a day's history (with the minute before
+// The classifier's span is part of the history (with the minute before
 // it, for its context), as is what a Gadgetbridge fetch may hold back:
 // otherwise either would read the newest minutes' slots as old ones.
 const _: () = assert!(sleep::WINDOW + sleep::CONTEXT < HISTORY_MINUTES);
@@ -751,6 +778,11 @@ const _: () = assert!(sleep_hold::CAP < HISTORY_MINUTES as i64);
 
 /// A ring of per-minute samples, indexed by UTC minute. Minutes the watch
 /// didn't see (off, or before the phone set the clock) stay zero.
+///
+/// It holds the last [`HISTORY_MINUTES`]: what the sleep tracking works
+/// on. Older minutes are in the activity log in the SPI flash, for the
+/// phone (see [`crate::spill`]), and summed up in [`History::aged`], for
+/// the screens that show a day.
 pub struct History {
     samples: [Sample; HISTORY_MINUTES],
     /// The newest minute with a sample (UTC minutes since 1970).
@@ -759,6 +791,10 @@ pub struct History {
     /// after them (see [`sleep_hold::settles`]): neither the classifier
     /// nor the staging touches them again.
     settled: sleep_hold::Settled,
+    /// What's kept of the minutes the ring has let go of (see [`aged`]):
+    /// the sums of their hours, for the Today screen, and the older part
+    /// of the last sleep, for the Last night screen.
+    aged: aged::Aged<AGED_HOURS>,
 }
 
 impl History {
@@ -772,6 +808,7 @@ impl History {
             }; HISTORY_MINUTES],
             newest: None,
             settled: sleep_hold::Settled::NONE,
+            aged: aged::Aged::new(),
         }
     }
 
@@ -786,25 +823,61 @@ impl History {
         }
     }
 
-    /// The sample for `minute`, clearing any skipped minutes (and stale
-    /// samples from a day ago) on the way; or, if the clock went back,
-    /// the minutes after it (see [`crate::minute_ring`]).
+    /// The sample for `minute`, clearing any skipped minutes (and the
+    /// samples of the minutes the ring no longer reaches back to, which
+    /// [`aged`] takes in) on the way; or, if the clock went back, the
+    /// minutes after it (see [`crate::minute_ring`]).
     fn at(&mut self, minute: i64) -> &mut Sample {
         let (stale, newest) = minute_ring::file(self.newest, minute, HISTORY_MINUTES as i64);
-        if self.newest.is_some_and(|newest| minute < newest) {
-            info!(
-                "activity: clock went back; dropped {} minutes",
-                stale.end - stale.start
-            );
-            // What was settled may be among the minutes dropped, or reach
-            // past the newest now: start over, holding back as usual.
-            self.settled = sleep_hold::Settled::NONE;
+        // The common case by far is the minute under way, filed again at
+        // every poll: nothing below is for it.
+        if self.newest != Some(minute) {
+            // Whose hours the sums are by: the wearer's now. (Unknown,
+            // after the watch was off: UTC's, which are everyone's but
+            // for a few zones; see `aged`.)
+            let offset = clock::utc_offset_minutes().unwrap_or(0);
+            if self.newest.is_some_and(|newest| minute < newest) {
+                info!(
+                    "activity: clock went back; dropped {} minutes",
+                    stale.end - stale.start
+                );
+                // What was settled may be among the minutes dropped, or
+                // reach past the newest now: start over, holding back as
+                // usual.
+                self.settled = sleep_hold::Settled::NONE;
+                self.aged.back_to(minute, offset);
+            }
+            // The minutes the ring lets go of, before their slots are
+            // emptied for the new ones.
+            for old in minute_ring::let_go(self.newest, minute, HISTORY_MINUTES as i64) {
+                self.let_go(old, offset, self.samples[Self::slot(old)]);
+            }
         }
         for m in stale {
             self.samples[Self::slot(m)] = Sample::default();
         }
         self.newest = Some(newest);
         &mut self.samples[Self::slot(minute)]
+    }
+
+    /// Hands `minute`'s sample, which the ring is letting go of, to
+    /// [`aged`], if anything was recorded in it.
+    fn let_go(&mut self, minute: i64, offset: i16, sample: Sample) {
+        if sample.seen() || sample.heart_rate > 0 {
+            self.aged.take(
+                minute,
+                offset,
+                sample.steps,
+                sample.heart_rate,
+                sample.sleep(),
+            );
+        }
+    }
+
+    /// Whether filing a sample for `minute` would be a jump (see
+    /// [`jumps`]).
+    fn jumps(&self, minute: i64) -> bool {
+        self.newest.is_some_and(|newest| minute - newest > JUMP)
     }
 
     /// Samples from `since` (UTC minute) on, oldest first, skipping minutes
@@ -822,6 +895,11 @@ impl History {
     /// since boot: normally nothing has been, as the clock is unknown until
     /// the phone syncs, but after a reset that kept the clock, the activity
     /// task may already have recorded the minutes since.
+    ///
+    /// The flash holds days of minutes, and they're put back oldest first:
+    /// each one filed lets go of an older one, into [`aged`], as it would
+    /// have running. So the day's sums and the last sleep come back with
+    /// the history.
     fn restore(&mut self, minute: i64, sample: Sample) {
         match self.newest {
             Some(newest) if minute <= newest => {
@@ -830,10 +908,37 @@ impl History {
                     if !slot.seen() && slot.heart_rate == 0 {
                         *slot = sample;
                     }
+                } else {
+                    // Older than the ring reaches, as of a newest minute
+                    // recorded since boot: straight to where the ring's
+                    // oldest go.
+                    let offset = clock::utc_offset_minutes().unwrap_or(0);
+                    self.let_go(minute, offset, sample);
                 }
             }
             _ => *self.at(minute) = sample,
         }
+    }
+
+    /// The day so far, hour by hour, as of `utc_minute` for a wearer
+    /// `offset` minutes ahead of UTC: the ring's minutes since local
+    /// midnight, and the sums of those it has let go of since (see
+    /// [`aged`]). Not after `utc_minute`: when the clock went back, the
+    /// minutes after it stay in the ring until the next sample is filed
+    /// (see [`History::at`]).
+    fn day(&self, utc_minute: i64, offset: i16) -> crate::day::Day {
+        let midnight = crate::day::midnight(utc_minute, offset);
+        let mut day = crate::day::Day::default();
+        self.aged.add_to(&mut day, midnight, offset);
+        let samples = self.since(midnight).take_while(|&(m, _)| m <= utc_minute);
+        for (minute, sample) in samples {
+            day.add(
+                (minute - midnight) as usize,
+                sample.steps,
+                sample.heart_rate,
+            );
+        }
+        day
     }
 
     /// Marks the recorded minutes from `first` to the newest as part of a
@@ -928,18 +1033,31 @@ impl History {
     /// window that [`History::classify_sleep`] just rewrote as light. Once
     /// it's older, its sleep and its stages' inputs are final, and so are
     /// its stages; as they are once it's settled.
+    ///
+    /// With the part of it that the ring has let go of, by the afternoon
+    /// after a night; and with no sleep in the ring, the last one that it
+    /// let go of, for a day after its end (see [`aged::Aged::last_sleep`]).
+    ///
+    /// TODO: a sleep longer than the ring (14½ hours: none in a year of
+    /// one wearer's nights came within three) is restaged from where the
+    /// ring begins, as if it began there, while it's still under way; the
+    /// part before keeps the stages it left with.
     fn last_sleep(&mut self) -> Option<Sleep> {
         let newest = self.newest?;
         let oldest = newest - HISTORY_MINUTES as i64 + 1;
-        let (start, end, _) = sleep::last_sleep(HISTORY_MINUTES, |i| {
+        let recent = sleep::last_sleep(HISTORY_MINUTES, |i| {
             self.samples[Self::slot(oldest + i as i64)].sleep()
-        })?;
-        let (start, end) = (oldest + start as i64, oldest + end as i64);
-        if self.settled.restaged(newest, start, end) {
-            stages::stage(self, start, end);
-        }
-        let stages =
-            stages::Minutes::count((start..end).map(|m| self.samples[Self::slot(m)].sleep()));
+        })
+        .map(|(start, end, _)| {
+            let (start, end) = (oldest + start as i64, oldest + end as i64);
+            if self.settled.restaged(newest, start, end) {
+                stages::stage(self, start, end);
+            }
+            let stages =
+                stages::Minutes::count((start..end).map(|m| self.samples[Self::slot(m)].sleep()));
+            (start, end, stages)
+        });
+        let (start, end, stages) = self.aged.last_sleep(newest, recent)?;
         Some(Sleep {
             start_utc_minute: start,
             end_utc_minute: end,
@@ -1012,8 +1130,8 @@ pub fn light() -> bool {
 
 static LIGHT: AtomicBool = AtomicBool::new(false);
 
-/// The most recent sleep in the last 24 hours, for the UI; updated every
-/// minute.
+/// The most recent sleep, until a day after its end, for the UI; updated
+/// every minute.
 pub fn last_sleep() -> Option<Sleep> {
     LAST_SLEEP.lock(Cell::get)
 }
@@ -1084,11 +1202,42 @@ static TODAY: Mutex<CriticalSectionRawMutex, RefCell<Option<Today>>> =
 ///
 /// TODO: average the readings within a minute, for the continuous
 /// measurement while the clock face is showing.
+///
+/// Not while the clock has just jumped far ahead (see [`jumps`]): the
+/// activity task files the first minute after that, within a poll, once
+/// the log has what the jump pushes out of the history. A reading in
+/// those two seconds is dropped.
 pub fn record_heart_rate(bpm: u8) {
     let Some(utc_minute) = clock::now_utc_seconds().map(|s| s.div_euclid(60)) else {
         return;
     };
-    HISTORY.lock(|history| history.borrow_mut().at(utc_minute).heart_rate = bpm);
+    HISTORY.lock(|history| {
+        let mut history = history.borrow_mut();
+        if history.jumps(utc_minute) {
+            debug!("activity: a heart rate right after the clock jumped; dropped");
+        } else {
+            history.at(utc_minute).heart_rate = bpm;
+        }
+    });
+}
+
+/// Whether filing a sample for `utc_minute` would be a jump: so far on
+/// from the history's newest minute that the history would let go of
+/// minutes the activity log may not have yet (the last bucket, and what a
+/// fetch was holding back: a night under way when the battery ran out,
+/// say, with the charger found the evening after). Then
+/// [`crate::system_off::serve`] brings the log up to date first, and
+/// files the minute itself ([`skip_to`]).
+pub fn jumps(utc_minute: i64) -> bool {
+    HISTORY.lock(|history| history.borrow().jumps(utc_minute))
+}
+
+/// Moves the history on to `utc_minute`, with nothing recorded in it yet:
+/// after a jump (see [`jumps`]), once the log has what that lets go of.
+pub fn skip_to(utc_minute: i64) {
+    HISTORY.lock(|history| {
+        history.borrow_mut().at(utc_minute);
+    });
 }
 
 /// How much the wrist moved over the last few seconds (one poll of the
@@ -1353,47 +1502,23 @@ fn now_minute() -> Option<(i64, i16)> {
 }
 
 /// The history's steps from local midnight to `utc_minute` at `offset`:
-/// what the Today screen adds up. Not after `utc_minute`: when the clock
-/// went back, the minutes after it stay in the history until the next
-/// sample is filed (see [`History::at`]).
+/// what the Today screen adds up (see [`History::day`]), hour by hour.
 fn steps_since_midnight(utc_minute: i64, offset: i16) -> u32 {
-    let midnight = crate::day::midnight(utc_minute, offset);
-    HISTORY.lock(|history| {
-        history
-            .borrow()
-            .since(midnight)
-            .take_while(|&(minute, _)| minute <= utc_minute)
-            .map(|(_, sample)| u32::from(sample.steps))
-            .sum()
-    })
+    let day = HISTORY.lock(|history| history.borrow().day(utc_minute, offset));
+    day.hours.iter().map(|hour| u32::from(hour.steps)).sum()
 }
 
 /// Today's activity hour by hour since local midnight (see [`crate::day`]),
 /// for the Today screen, once the time is known. Computed afresh from the
-/// history when asked, rather than kept up to date in RAM, as the screen
-/// is seldom on.
+/// history when asked (see [`History::day`]), rather than kept up to date
+/// in RAM, as the screen is seldom on.
 ///
 /// TODO: a day with a change to or from summer time has an hour too many
 /// or too few; this files each minute under the offset in force now.
 pub fn today() -> Option<crate::day::Day> {
     let (utc_minute, offset) = now_minute()?;
-    let midnight = crate::day::midnight(utc_minute, offset);
-    let mut day = crate::day::Day::default();
-    HISTORY.lock(|history| {
-        // Up to now, as today's total counts (see `steps_since_midnight`).
-        let history = history.borrow();
-        let samples = history
-            .since(midnight)
-            .take_while(|&(m, _)| m <= utc_minute);
-        for (minute, sample) in samples {
-            day.add(
-                (minute - midnight) as usize,
-                sample.steps,
-                sample.heart_rate,
-            );
-        }
-    });
-    Some(day)
+    // Up to now, as today's total counts (see `steps_since_midnight`).
+    Some(HISTORY.lock(|history| history.borrow().day(utc_minute, offset)))
 }
 
 // ==============================================================================
@@ -1681,6 +1806,13 @@ pub async fn activity_task(i2c: Device) {
             continue;
         };
         let utc_minute = utc_second.div_euclid(60);
+        // The phone set the clock far ahead since this poll began (after
+        // `serve`, above, looked): the next poll's `serve` brings the log
+        // up to date before anything is filed there (see `jumps`). This
+        // poll's steps are in today's total, but in no minute.
+        if jumps(utc_minute) {
+            continue;
+        }
         let new_minute = minute != Some(utc_minute);
         if new_minute {
             (minute, movement_sum, movement_samples) = (Some(utc_minute), 0, 0);

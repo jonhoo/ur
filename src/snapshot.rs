@@ -11,7 +11,7 @@
 //! still being revised, minute by minute, which is why they're rewritten
 //! whole rather than appended. (Up to 0.11.3-rc.4 there was no log, and
 //! the record held everything the phone hadn't fetched, up to the day
-//! the history holds: 8.6 KB rewritten every two minutes by the time the
+//! the history held then: 8.6 KB rewritten every two minutes by the time the
 //! phone had been away for a day, and nothing older.)
 //!
 //! There are two kinds of record, in the same format:
@@ -23,7 +23,7 @@
 //!   for a reset nobody planned: a crash, or the watchdog. RAM can't carry
 //!   the history across one, as the bootloader, which runs at every
 //!   reset, overwrites all but the top few KB of our statics (see
-//!   `memory.x`), and the history alone is 8.6 KB.
+//!   `memory.x`), and the history alone is 5.2 KB.
 //!
 //! ## Checkpoints
 //!
@@ -53,7 +53,8 @@
 //!   any minute, so nothing restored can index out of bounds; what's
 //!   checked is that the record is whole (its checksum), sensibly long, and
 //!   from this side of the last planned reset and within a day of the
-//!   clock ([`newer_checkpoint`]).
+//!   clock ([`newer_checkpoint`]: a day, though the history holds less,
+//!   as what it can't hold of a record goes into the log).
 //! - A checkpoint is never retired: the next one supersedes it, holding
 //!   whatever it held that hasn't gone into the log since.
 //!
@@ -97,7 +98,13 @@
 pub const HEADER_BYTES: usize = 32;
 /// One minute's sample.
 pub const SAMPLE_BYTES: usize = 6;
-/// The most minutes a record holds: the whole in-RAM history, a day.
+/// The most minutes a record holds: a day, which was the whole in-RAM
+/// history up to 0.11.3-rc.4, whose records hold all of it that the phone
+/// hadn't fetched. A boot must still read those (after an update from
+/// such a build: see `system_off::restore`, which moves what the history
+/// no longer has room for into the activity log), so this stays, though
+/// what's saved now is at most the history's 14½ hours
+/// (`minute_ring::MINUTES`), and nearly always far less.
 pub const MAX_MINUTES: usize = 24 * 60;
 /// The whole record at its largest.
 pub const MAX_BYTES: usize = HEADER_BYTES + MAX_MINUTES * SAMPLE_BYTES;
@@ -292,9 +299,9 @@ pub fn erase_bytes(minutes: u16) -> u32 {
 /// - if the clock is known (`now`, UTC minutes since 1970: after a crash,
 ///   it's resumed), not ahead of it (it was saved before the reset, as of
 ///   the minute after its newest, and the clock resumes to within about a
-///   second of where it was), nor so old that none of its minutes fit in
-///   the history's day. Before the clock is known (after a power-on), any
-///   is, as with the planned record.
+///   second of where it was), nor a day old or more: no build's history
+///   ever held minutes that old. Before the clock is known (after a
+///   power-on), any is, as with the planned record.
 pub fn newer_checkpoint(
     as_of: u32,
     best: Option<u32>,

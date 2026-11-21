@@ -151,7 +151,7 @@
 //!   first fetch after it ends. So Gadgetbridge lags the watch by up to 5
 //!   minutes.
 //! - Nor is a bucket whose first minutes the watch has already dropped:
-//!   Gadgetbridge may have it whole. (The history keeps 24 hours, and
+//!   Gadgetbridge may have it whole. (The history keeps 14½ hours, and
 //!   the activity log in the SPI flash, which a fetch reads what's older
 //!   from, 11 days: see `crate::spill`.)
 //! - The log takes in whole buckets, and what the watch saves besides
@@ -188,13 +188,15 @@
 //! the watch's crystal has run fast, resends at most the last bucket the
 //! watch sent, whole.
 //!
-//! A clock set ahead needs nothing: the sync point is behind it, and the
-//! next fetch sends from there, the minutes before the jump at their
-//! times. But a jump of more than a day drops the history at the next
-//! minute the watch files (see [`crate::minute_ring`]), so what the phone
-//! hadn't fetched of the minutes not yet in the activity log (the bucket
-//! under way, and what a fetch was holding back) is lost, unless it
-//! fetches first.
+//! A clock set ahead needs nothing here: the sync point is behind it, and
+//! the next fetch sends from there, the minutes before the jump at their
+//! times. A jump far ahead (the watch was off for a day, say) has the
+//! history let go of minutes at the next one the watch files (see
+//! [`crate::minute_ring`]), and of those, the activity log may not have
+//! the newest yet: the bucket that was under way, and what a fetch was
+//! holding back. So the log takes them in first ([`loggable_end`]): by the
+//! new time, the bucket is over, and what was held is older than any hold
+//! lasts.
 //!
 //! TODO: a clock set back drops the history's minutes after the new time;
 //! a bucket sent before that and again after it would overwrite
@@ -218,6 +220,30 @@ const _: () = assert!(MINUTES > 2 && 15 % MINUTES == 0);
 /// The start of the bucket `minute` (UTC minutes since 1970) is in.
 pub fn start_of(minute: i64) -> i64 {
     minute.div_euclid(MINUTES) * MINUTES
+}
+
+/// The first minute the activity log doesn't take in yet (see
+/// `crate::spill`): the log holds what a fetch could send, whole buckets,
+/// so this is where a fetch would stop.
+///
+/// Given the history's newest minute, the first minute a fetch holds
+/// back as of it, if any (`sleep_hold::hold`), and the clock's minute
+/// `now`. Those are the same minute but after a jump of the clock (see
+/// the module docs' "A clock put right"), when the history hasn't filed
+/// `now` yet:
+///
+/// - Running, it's the start of the bucket under way, or of the first
+///   one held back.
+/// - By `now`, nothing older than `cap` minutes (`sleep_hold::CAP`) is
+///   held any more, as a fetch then sends it whatever its state; and if
+///   that's all there is, the bucket that was under way is over too.
+pub fn loggable_end(newest: i64, held_from: Option<i64>, now: i64, cap: i64) -> i64 {
+    let running = match held_from {
+        Some(from) => start_of(newest).min(start_of(from)),
+        None => start_of(newest),
+    };
+    let capped = start_of(now - cap + 1).min(start_of(newest) + MINUTES);
+    running.max(capped)
 }
 
 /// How many minutes past the one the phone asks from its copy may reach:

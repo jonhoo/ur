@@ -29,7 +29,9 @@ needs nothing special; LFS stores it.
   workout from ordinary activity),
   `on_time` (`power`'s hourly split), `fault` (what a HardFault's
   registers say),
-  `minute_ring` (`activity`'s history as the clock moves), `dfu_slot`
+  `minute_ring` (`activity`'s history as the clock moves), `aged` (what
+  it keeps of the minutes it lets go of, for the screens that show a
+  day), `dfu_slot`
   (where `dfu` erases and writes an update), `log_ring` (where
   `field_log`'s sectors are in the flash), `rtt_ring` (which bytes
   `field_log` reads of the log's buffer), and `bthome`'s
