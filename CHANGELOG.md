@@ -68,6 +68,7 @@ missing below were test builds for the dev kit.
 - Stop a sleeve or a folded arm playing, pausing, or skipping the phone's media: a double tap's two taps (and a tap-and-hold's tap and hold) must now start on the same spot (within a sixth of the screen's width of each other) and in the middle of the screen, a fifth of it away from every edge, whether the screen is off, on a glance, or on the clock face, where they used to count anywhere. Of the 27 media commands in a week's field logs, that turns away 24, and keeps the three that look meant; a deliberate double tap near the edge, or with its taps apart, no longer does anything (7e19b17)
 - Stop a brush at the screen's edge snoozing a ringing alarm or timer: a tap snoozes only if it starts away from the very edge (a tenth of the screen), as a tap that wakes a dark screen must (01b7876)
 - End a quiet night with two presses of the button up to 2 seconds apart, rather than half a second, which unhurried presses never made; a single press is no slower, as the first press still wakes the screen at once. In a quiet night, pressing again within 2 seconds to turn the screen off now ends the night instead (20d61bc)
+- Keep the logging build's (`ur-logging`) last log lines before it switches off or restarts for an update: the flush that writes them out could return before they were written when another part of the watch was using its storage at that moment, and they were lost. The `ur` build is unchanged (9cfb2dd)
 
 ### Security
 
