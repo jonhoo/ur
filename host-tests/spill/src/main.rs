@@ -429,6 +429,17 @@ mod tests {
                         "a fetch from {from} read {read:?}, not {expected:?}"
                     ));
                 }
+                // And where the reader says the log starts, when that's
+                // after `from`, it does: a fetch goes by it (it sends
+                // nothing from before the log's first whole bucket).
+                if let Some((_, first)) = block_on(spill::open(&mut flash, ring, from))
+                    && let Some(&earlier) = minutes.iter().find(|&&m| m >= from && m < first)
+                {
+                    return TestResult::error(format!(
+                        "a fetch from {from} was told the log starts at {first}, \
+                         but it has minute {earlier}"
+                    ));
+                }
             }
         }
         TestResult::passed()
@@ -614,6 +625,36 @@ mod tests {
         let (_, _, minutes) = scan(&mut flash);
         assert_eq!(minutes.last(), Some(&(NOON + 5 * 510 - 1)));
         assert!(minutes.windows(2).all(|pair| pair[1] == pair[0] + 1));
+    }
+
+    #[test]
+    fn a_clock_set_back_past_a_sectors_start_still_fetches_from_before_it() {
+        // Days with the clock a day ahead (the phone's was wrong), until
+        // the ring has come round; then it's put right, and the watch
+        // records on from the real time, in the newest sector.
+        let mut flash = Nor::new(3);
+        let ring = flash.ring;
+        let mut writer = Writer::EMPTY;
+        let ahead = NOON + 1440;
+        record(&mut flash, &mut writer, ahead..ahead + 4 * 510);
+        block_on(spill::truncate(&mut flash, ring, &mut writer, NOON)).expect("power");
+        record(&mut flash, &mut writer, NOON..NOON + 30);
+        // The sector began by saying its minutes start a day ahead, which
+        // is no longer so: a fetch from the real time must not be told
+        // that the log has nothing before then.
+        let (_, first) = block_on(spill::open(&mut flash, ring, NOON)).expect("a log");
+        assert!(first <= NOON, "told the log starts at {first}");
+        let minutes: Vec<u32> = (NOON..NOON + 30).collect();
+        assert_eq!(
+            fetch(&mut flash, NOON, NOON + 30),
+            buckets_of(&minutes, NOON, NOON + 30)
+        );
+        // Nor after a reset.
+        let (mut found, _, scanned) = scan(&mut flash);
+        assert_eq!(scanned, minutes);
+        record(&mut flash, &mut found, NOON + 30..NOON + 40);
+        let (_, first) = block_on(spill::open(&mut flash, ring, NOON)).expect("a log");
+        assert!(first <= NOON, "told the log starts at {first}");
     }
 
     #[test]

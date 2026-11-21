@@ -390,6 +390,18 @@ pub async fn truncate<F: Flash>(
         if !holds(flash, ring, sequence).await {
             break;
         }
+        // The newest sector began by saying that none of its minutes
+        // would be before a certain one, which a fetch goes by ([`open`]).
+        // If that's after `from`, the minutes appended next would make
+        // it wrong, so it's taken back too: the sector then doesn't say.
+        if sequence == writer.sequence
+            && let Entry::At(first) = read_entry(flash, ring, sequence, 1).await
+            && first > from
+        {
+            flash
+                .program(address(ring, sequence, 1), &[0; ENTRY])
+                .await?;
+        }
         let (mut at, mut older) = (0, false);
         for slot in 1..SLOTS {
             match read_entry(flash, ring, sequence, slot).await {
@@ -501,9 +513,9 @@ pub struct Reader {
 }
 
 /// A reader for a fetch of the minutes from `from` on, and a minute that
-/// none in the sector it starts in is before: at or before `from`, unless
-/// the log starts later, and then the log has nothing older (0 if its
-/// oldest sector doesn't say). `None` if there's no log.
+/// none it will read is before: at or before `from`, unless the log
+/// starts later, and then the log has nothing older (0 if it can't say:
+/// see below). `None` if there's no log.
 pub async fn open<F: Flash>(flash: &mut F, ring: Ring, from: u32) -> Option<(Reader, u32)> {
     let mut bytes = [0; ENTRY];
     // The newest sector's sequence plus one: 0 for none, to keep this
@@ -520,7 +532,10 @@ pub async fn open<F: Flash>(flash: &mut F, ring: Ring, from: u32) -> Option<(Rea
     }
     // From the newest sector back, to the first that starts at or before
     // `from`: the minutes from `from` on are in it or after it.
-    let (mut sequence, mut first) = (after, 0);
+    //
+    // `lowest` is the least of the minutes those sectors start with: none
+    // of their minutes is before it. 0 once one of them doesn't say.
+    let (mut sequence, mut lowest) = (after, u32::MAX);
     while sequence > 0 && after - sequence < ring.sectors {
         flash.read(address(ring, sequence - 1, 0), &mut bytes).await;
         if decode(&bytes) != Entry::Header(sequence - 1) {
@@ -528,14 +543,16 @@ pub async fn open<F: Flash>(flash: &mut F, ring: Ring, from: u32) -> Option<(Rea
         }
         sequence -= 1;
         // The writer starts every sector by saying which minute is next.
-        // One that doesn't start so (a reset cut that entry short) may
-        // hold any minute: reading may have to start there, but only an
-        // older sector can say it needn't start earlier still.
+        // One that doesn't start so (a reset cut that entry short, or it
+        // was taken back: see [`truncate`]) may hold any minute: reading
+        // may have to start there, but only an older sector can say it
+        // needn't start earlier still.
         flash.read(address(ring, sequence, 1), &mut bytes).await;
-        first = match decode(&bytes) {
+        let first = match decode(&bytes) {
             Entry::At(minute) => minute,
             _ => 0,
         };
+        lowest = lowest.min(first);
         if first != 0 && first <= from {
             break;
         }
@@ -547,7 +564,7 @@ pub async fn open<F: Flash>(flash: &mut F, ring: Ring, from: u32) -> Option<(Rea
             at: 0,
             slot: 1,
         },
-        first,
+        lowest,
     ))
 }
 
