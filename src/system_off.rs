@@ -345,29 +345,41 @@ async fn save(flash: &mut spi_flash::SpiFlash, start: u32, logged: Option<u32>) 
         // is retired below for being newer than it.
         return;
     }
-    // The planned record must be the newest there is, for the boot after
-    // it to restore: every checkpoint is of before it. But one can claim
-    // otherwise, saved while the clock was ahead (a phone's that was
-    // wrong, since put right): its minutes are in the record's future,
-    // and after System OFF, with the clock unknown, a boot can't tell.
-    // It would restore that one, and retire the record unread. So any
-    // such checkpoint is retired here instead. (A boot with the clock
-    // known, after a crash, turns them down itself: see
-    // `snapshot::newer_checkpoint`.)
-    if start == RECORD.start {
-        let as_of = first.saturating_add(u32::from(minutes));
-        let mut buffer = [0u8; CHUNK];
-        for slot in 0..snapshot::CHECKPOINT_SLOTS {
-            let start = CHECKPOINTS.start + slot * snapshot::SLOT_BYTES;
-            if let Some(header) = read_header(flash, start, &mut buffer).await
-                && header.as_of() > as_of
-            {
-                warn!(
-                    "snapshot: retiring a checkpoint from minute {}, after now",
-                    header.as_of()
-                );
-                consume(flash, start).await;
-            }
+    // The record just written is the newest there is: every other was
+    // saved before it. But a checkpoint can claim otherwise, saved while
+    // the clock was ahead (a phone's that was wrong, since put right): its
+    // minutes are in this record's future. A boot goes by the records'
+    // dates, so it would restore that one instead:
+    //
+    // - After System OFF, with the clock unknown, in place of the planned
+    //   record, which it would then retire unread.
+    // - After a crash, with the clock known, once the clock has all but
+    //   caught up with that date (see `snapshot::newer_checkpoint`, which
+    //   turns down a checkpoint dated ahead of the clock, give or take a
+    //   couple of minutes): in place of the newest checkpoint, and with
+    //   it go the minutes since the clock was put right that the log
+    //   doesn't have yet, a night under way among them. (A dev kit whose
+    //   tests had set its clock a few minutes ahead and back lost a walk
+    //   that way, at a reset as the clock passed those minutes.)
+    //
+    // So any such checkpoint is retired here, at every save: the history
+    // files a clock set back at once, and asks for a checkpoint as it
+    // does (`relog_from`), so they're gone within seconds of it. (32
+    // headers read, ~2 ms with the flash awake anyway, next to the save's
+    // own erase of ~50 ms.)
+    let as_of = first.saturating_add(u32::from(minutes));
+    let mut buffer = [0u8; CHUNK];
+    for slot in 0..snapshot::CHECKPOINT_SLOTS {
+        let other = CHECKPOINTS.start + slot * snapshot::SLOT_BYTES;
+        if other != start
+            && let Some(header) = read_header(flash, other, &mut buffer).await
+            && snapshot::from_a_clock_ahead(header.as_of(), as_of)
+        {
+            warn!(
+                "snapshot: retiring a checkpoint from minute {}, after now",
+                header.as_of()
+            );
+            consume(flash, other).await;
         }
     }
 }

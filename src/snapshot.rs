@@ -55,8 +55,11 @@
 //!   from this side of the last planned reset and within a day of the
 //!   clock ([`newer_checkpoint`]: a day, though the history holds less,
 //!   as what it can't hold of a record goes into the log).
-//! - A checkpoint is never retired: the next one supersedes it, holding
-//!   whatever it held that hasn't gone into the log since.
+//! - A checkpoint isn't retired once restored: the next one supersedes
+//!   it, holding whatever it held that hasn't gone into the log since.
+//!   The one kind that is retired is a checkpoint dated after a record
+//!   saved later ([`from_a_clock_ahead`]), which would otherwise pass
+//!   for the newest.
 //!
 //! The record is a 32-byte header followed by one 6-byte sample per minute
 //! (the in-RAM [`crate::activity::Sample`], verbatim) from the first minute
@@ -284,6 +287,32 @@ pub fn checkpoint_slot(newest: i64) -> u32 {
 /// How much a save of `minutes` erases: the record, to whole sectors.
 pub fn erase_bytes(minutes: u16) -> u32 {
     ((HEADER_BYTES + usize::from(minutes) * SAMPLE_BYTES) as u32).next_multiple_of(SECTOR_BYTES)
+}
+
+/// Whether a checkpoint found in its slot, as of `as_of` (see
+/// [`Header::as_of`]), was saved by a clock that was ahead, as a record
+/// just saved as of `saved` shows: it claims to be the newer of the two,
+/// and no record is newer than the one just saved.
+///
+/// The clock was ahead (a phone's that was wrong, since put right, taking
+/// the watch's with it both times), and is back where the checkpoint is
+/// in the future. Such a checkpoint is retired at the next save (see
+/// `system_off::save`), as a boot would otherwise take it for the newest
+/// ([`newer_checkpoint`] goes by the dates):
+///
+/// - with the clock unknown (after System OFF), whenever that is;
+/// - with the clock known (after a crash), while it's dated no more than
+///   the allowance ahead of the clock: in the minute or so before the
+///   clock reaches each such checkpoint's date, as the newest real one is
+///   then dated before it. With one every [`CHECKPOINT_MINUTES`] from the
+///   time the clock was ahead, that's any minute of the clock's catching
+///   up, the hour's worth that the slots hold. Restored, it would put
+///   back the minutes from before the clock was put right, and lose the
+///   ones since that the log doesn't have yet.
+///
+/// A record of the same minute is no newer (and may be this very save's).
+pub fn from_a_clock_ahead(as_of: u32, saved: u32) -> bool {
+    as_of > saved
 }
 
 /// Whether a checkpoint saved as of `as_of` (see [`Header::as_of`]), whose

@@ -483,6 +483,104 @@ mod tests {
         assert_eq!(boot(&planned, &slots[..7], Some(NOW)), Restored::Nothing);
     }
 
+    /// A checkpoint as `system_off::serve` saves it with the history's
+    /// newest minute at `newest`, into its slot; and, if `retiring`, with
+    /// the checkpoints that then claim to be newer retired, as
+    /// `system_off::save` does.
+    fn checkpoint(slots: &mut [Vec<u8>], newest: i64, retiring: bool) {
+        let as_of = newest as u32 + 1;
+        slots[checkpoint_slot(newest) as usize] = saved(as_of, 3);
+        if retiring {
+            for slot in slots.iter_mut() {
+                let header: [u8; HEADER_BYTES] = slot[..HEADER_BYTES].try_into().unwrap();
+                if Header::from_bytes(&header)
+                    .is_some_and(|header| from_a_clock_ahead(header.as_of(), as_of))
+                {
+                    *slot = consumed(slot.clone());
+                }
+            }
+        }
+    }
+
+    /// Whether a crash at any moment of the 80 minutes after a clock that
+    /// was `ahead` minutes ahead for `lasting` minutes is put right
+    /// restores the newest checkpoint there is (with the clock known, as
+    /// after a crash, and unknown, should the retained clock be lost
+    /// too), given whether a save retires the checkpoints dated after it.
+    fn survives_a_clock_put_right(ahead: i64, lasting: i64, retiring: bool) -> bool {
+        let mut slots = vec![erased(); CHECKPOINT_SLOTS as usize];
+        // An ordinary hour first, so every slot holds a checkpoint.
+        for minute in NOW - 70..NOW {
+            if checkpoint_due(minute) {
+                checkpoint(&mut slots, minute, retiring);
+            }
+        }
+        // The clock is ahead for a while: checkpoints dated ahead.
+        for minute in NOW + ahead..NOW + ahead + lasting {
+            if checkpoint_due(minute) {
+                checkpoint(&mut slots, minute, retiring);
+            }
+        }
+        // Put right: the history files the minute again, and asks for a
+        // checkpoint at once (`system_off::relog_from`), whatever the
+        // minute; then one whenever it's due.
+        let right = NOW + lasting;
+        let mut newest = right;
+        checkpoint(&mut slots, newest, retiring);
+        for now in right..right + 80 {
+            // (The minute's checkpoint is saved a couple of seconds in:
+            // a crash before that, and one after.)
+            for saved_yet in [false, true] {
+                if saved_yet && checkpoint_due(now) {
+                    newest = now;
+                    checkpoint(&mut slots, newest, retiring);
+                }
+                let expected = Restored::Checkpoint(checkpoint_slot(newest) as usize);
+                if boot(&[], &slots, Some(now)) != expected || boot(&[], &slots, None) != expected {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// A phone whose clock was ahead set the watch's ahead too, and the
+    /// checkpoints saved meanwhile are dated ahead. Once the clock is put
+    /// right, they'd pass for the newest: for a boot that doesn't know
+    /// the time, always; and for one that does (after a crash), as the
+    /// clock all but reaches each one's date, when it's within the
+    /// allowance for a clock resumed a little behind. Restored, it would
+    /// put back minutes from before the clock was put right, and lose
+    /// the ones since. So each save retires them.
+    #[test]
+    fn a_checkpoint_from_a_clock_that_was_ahead_is_never_restored() {
+        // By a few minutes (as a dev kit's tests had it, which then lost
+        // a walk to a reset 7 minutes after the clock was put right), by
+        // more than the slots' hour, and by days.
+        for ahead in [1, 2, 3, 5, 9, 10, 63, 64, 65, 200, 10 * 24 * 60] {
+            for lasting in [1, 2, 3, 7, 30, 64, 100] {
+                assert!(
+                    survives_a_clock_put_right(ahead, lasting, true),
+                    "{ahead} minutes ahead for {lasting}"
+                );
+            }
+        }
+        // Without retiring them, a crash restores one of them. (What
+        // this test is for: `newer_checkpoint` alone doesn't rule them
+        // out.)
+        assert!(!survives_a_clock_put_right(5, 7, false));
+        assert!(!survives_a_clock_put_right(10 * 24 * 60, 30, false));
+    }
+
+    /// A record of the same minute as the one just saved is no newer:
+    /// only one dated after it is from a clock that was ahead.
+    #[test]
+    fn a_save_retires_only_what_is_dated_after_it() {
+        assert!(from_a_clock_ahead(NOW as u32 + 1, NOW as u32));
+        assert!(!from_a_clock_ahead(NOW as u32, NOW as u32));
+        assert!(!from_a_clock_ahead(NOW as u32 - 1, NOW as u32));
+    }
+
     #[test]
     fn a_tie_keeps_the_first() {
         assert!(newer_checkpoint(100, None, None, None));
