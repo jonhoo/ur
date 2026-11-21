@@ -98,7 +98,7 @@ const CMD_FIFO_FLUSH: u8 = 0xB0;
 
 const CHIP_ID: u8 = 0x11;
 /// Far longer than any transfer here takes (the longest, 252 bytes of FIFO
-/// at 400 kHz, takes ~6 ms).
+/// at 250 kHz, takes ~9 ms).
 const I2C_TIMEOUT: Duration = Duration::from_millis(100);
 /// Feature-engine configuration: Bosch's BMA423 config file, which the
 /// BMA421 also runs. See `bma423_config.LICENSE` (BSD-3-Clause).
