@@ -812,8 +812,9 @@ pub fn on_clock_set(utc_seconds: i64) {
 /// hundreds of lines. The simulator's history has steps and heart rates,
 /// and the minutes of the last night (`last-night`) are light sleep; but
 /// it has no movement (so a stillness holds nothing back, and the minutes
-/// with steps are the ones up and about), no stages, nor `ble`'s 24-hour
-/// limit.
+/// with steps are the ones up and about), no stages, nor a limit to how
+/// far back it goes (`ble`'s is the history's 14½ hours, and then its
+/// log's).
 fn activity_fetch(watch: &mut Watch, since_ms: i64) {
     let send = |message: Outgoing| {
         let line = message.to_line();

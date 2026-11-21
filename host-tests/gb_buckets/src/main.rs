@@ -250,7 +250,7 @@ mod tests {
     }
 
     /// The watch's history at `now` (a UTC minute): what `full` holds of
-    /// its 24 hours, and the current minute's steps so far (half).
+    /// its 14½ hours, and the current minute's steps so far (half).
     fn history_at(full: &History, now: i64) -> History {
         let oldest = now - HISTORY + 1;
         let mut history: History = full.range(oldest..now).map(|(&m, &s)| (m, s)).collect();
@@ -1106,10 +1106,11 @@ mod tests {
         assert_eq!(lost_after(clock.right, &put), []);
     }
 
-    /// The phone's clock a day and a half ahead, and Gadgetbridge
-    /// fetching the moment it puts the watch's clock right, before the
-    /// watch has filed a sample by it: its history is a day and a half
-    /// ahead of the clock then, so all of it is about to go.
+    /// The phone's clock one and a half times the history's length ahead
+    /// (21¾ hours), and Gadgetbridge fetching the moment it puts the
+    /// watch's clock right, before the watch has filed a sample by it: its
+    /// history is that far ahead of the clock then, so all of it is about
+    /// to go.
     #[test]
     fn a_fetch_as_the_clock_is_put_right_from_days_ahead_loses_nothing() {
         let clock = WrongClock {
@@ -1254,13 +1255,13 @@ mod tests {
         assert_eq!(lost_before(clock.wrong, NOON + 15, &put), []);
     }
 
-    /// Set more than a day ahead, the clock files its next minute where
-    /// the whole history is over a day old (see `minute_ring`): what the
-    /// phone hadn't fetched before the jump is gone, unless Gadgetbridge
-    /// fetches as it sets the clock, before the watch files that minute.
-    /// (A known loss, not a bug in where fetches start: the history keeps
-    /// a day by the clock, and the watch can't tell a wrong clock from a
-    /// long time off the phone.)
+    /// Set twice the history's length ahead (29 hours), the clock files its
+    /// next minute where the whole history is older than the history holds
+    /// (see `minute_ring`): what the phone hadn't fetched before the jump
+    /// is gone, unless Gadgetbridge fetches as it sets the clock, before
+    /// the watch files that minute. (A known loss, not a bug in where
+    /// fetches start: the history keeps 14½ hours by the clock, and the
+    /// watch can't tell a wrong clock from a long time off the phone.)
     #[test]
     fn a_clock_set_days_ahead_keeps_what_was_unfetched_only_if_fetched_then() {
         let clock = |on_connect| WrongClock {
@@ -2147,8 +2148,8 @@ mod tests {
                 if let Some(hold) = hold {
                     fetch.hold(hold.from);
                 }
-                // A fetch a day or more after the last one ended (no other
-                // came in between) finds the history has dropped what
+                // A fetch the history's length or more after the last one
+                // ended (no other came in between) finds the history has dropped what
                 // came first, up to its first whole bucket; any other gap
                 // is the property's to catch.
                 let oldest = start_of(now_minute - HISTORY + MINUTES);
@@ -2282,7 +2283,8 @@ mod tests {
     /// updates) is the watch's final one, as are its steps, heart rate and
     /// movement; and it has every step from where the first fetch started
     /// to where the last ended, the night included, but for those the
-    /// watch's day of history dropped before a fetch came for them.
+    /// watch's history (14½ hours of it) dropped before a fetch came for
+    /// them.
     fn gets_the_settled_night(night: &Night, gaps: &[(u16, u8, bool)]) -> bool {
         let fetched = fetch_night(night, gaps);
         let full = fetched.watch.recorded();

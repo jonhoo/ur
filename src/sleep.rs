@@ -609,8 +609,8 @@ pub const SAME_NIGHT_GAP: usize = 45;
 /// are part of it; sleep still going on counts.
 ///
 /// The kinds come from a function rather than a slice so that the watch
-/// can read them straight out of its history, instead of copying a day's
-/// worth (1.4 KB) onto the stack first.
+/// can read them straight out of its history, instead of copying all
+/// of them (14½ hours' worth, 0.9 KB) onto the stack first.
 pub fn last_sleep(minutes: usize, kind: impl Fn(usize) -> Kind) -> Option<(usize, usize, usize)> {
     let end = (0..minutes).rev().find(|&i| kind(i).is_sleep())? + 1;
     let mut start = end - 1;
