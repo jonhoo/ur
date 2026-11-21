@@ -110,6 +110,11 @@ impl Display {
             idle: false,
         };
         display.command(SWRESET, &[]).await;
+        // What the `mipidsi` driver this one replaced waited, kept as
+        // margin that costs only boot time.
+        // TODO: the datasheet asks 5 ms before the next command (120 ms
+        // before SLPOUT, which comes last here anyway): wait that, if boot
+        // time ever matters.
         Timer::after_millis(150).await;
         // Configure everything while still asleep, and leave sleep last:
         // InfiniTime moved SLPOUT there to fix a rotation problem on the

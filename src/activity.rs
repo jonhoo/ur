@@ -339,6 +339,9 @@ impl Bma421 {
         // Soft reset, so every boot starts from the same state. (It also
         // zeroes the step counter; today's total survives in RAM instead.)
         self.write(REG_CMD, 0xB6).await?;
+        // Neither Bosch's driver (which waits nothing) nor InfiniTime
+        // (1 ms) waits longer than this: 5 ms is margin from chasing setup
+        // hangs, never shown to be needed.
         Timer::after_millis(5).await;
         // The reset can leave the I2C controller wedged: the next transfer, the
         // write to `REG_POWER_CONF` below, then hangs. That was nearly every
@@ -369,6 +372,8 @@ impl Bma421 {
             self.write_bytes(&staging[..=chunk.len()]).await?;
         }
         self.write(REG_INIT_CTRL, 0x01).await?;
+        // As Bosch's driver waits (`bma4_write_config_file`) for the
+        // feature engine to initialise, before its status means anything.
         Timer::after_millis(150).await;
         let mut status = [0];
         self.read(REG_INTERNAL_STATUS, &mut status).await?;

@@ -644,12 +644,15 @@ pub async fn heart_task(i2c: Device) {
         // session forward while we wait, so the due time is looked at
         // again every `RECHECK_SECS` while the wrist moves (while it's
         // still, nothing can, and `activity` wakes us when it starts
-        // moving); once due, every 3 s, as movement is only updated with
-        // each read of the accelerometer, and at once when it sees the
-        // wrist go still. (A wake left over from during the last session is
-        // stale: everything is looked at afresh.) A due session waits for
-        // calm only so long, though (see `heart_schedule::Schedule::start`),
-        // counted from when it was first found due.
+        // moving); once due, every 3 s, and at once when `activity` sees
+        // the wrist go calm, at the poll that makes it so: the timer only
+        // notices the wait for calm running out, and backstops a missed
+        // wake. (Nothing depends on the 3: it was the accelerometer's
+        // poll once, which is 2 s now.) A wake left over from during the
+        // last session is stale: everything is looked at afresh. A due
+        // session waits for calm only so long, though (see
+        // `heart_schedule::Schedule::start`), counted from when it was
+        // first found due.
         let mut due_since = None;
         let due = loop {
             WAKE.reset();

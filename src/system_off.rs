@@ -1195,6 +1195,10 @@ fn enter(button: bool) -> ! {
     if button {
         sense(13, Sense::High);
     }
+    // Clear SENSE matches latched before now (by embassy's GPIO waits).
+    // Belt and braces: in the default DETECT mode, which is all this
+    // firmware uses, the wake follows the pins' live levels, not LATCH;
+    // it would matter only under LDETECT.
     p0.latch().write_value(pac::gpio::regs::Latch(u32::MAX));
 
     // No RAM retention while off (the reset default, made explicit): see
