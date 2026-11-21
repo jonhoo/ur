@@ -1788,12 +1788,24 @@ async fn fetch_end(
         send(server, conn, no_tracks).await;
         LAST_NO_TRACKS.store(uptime, Ordering::Relaxed);
     }
-    match hold {
-        Some(hold) if held_sleep => info!(
-            "ble: sent {} buckets of activity; sleep held from minute {}",
-            sent, hold.from
+    // With what was held back, and why: a fetch that sends nothing (or
+    // not the last minutes) for that reads like one with nothing new
+    // otherwise. A stillness's hold is there at most fetches from a
+    // wearer sitting still, from a couple of dozen minutes back; so
+    // it's said only in the logging build, whose log is the one read
+    // afterwards (32 bytes of flash, which the other builds keep).
+    #[cfg(feature = "field-log")]
+    let held = hold.map(|hold| (hold.from, if hold.sleep { "sleep" } else { "a stillness" }));
+    #[cfg(not(feature = "field-log"))]
+    let held = hold
+        .filter(|hold| hold.sleep)
+        .map(|hold| (hold.from, "sleep"));
+    match held {
+        Some((from, why)) => info!(
+            "ble: sent {} buckets of activity; {=str} held from minute {}",
+            sent, why, from
         ),
-        _ => info!("ble: sent {} buckets of activity", sent),
+        None => info!("ble: sent {} buckets of activity", sent),
     }
     if let Some(fetch) = fetch.as_ref().filter(|_| complete) {
         // The phone now has everything before the bucket under way, or the
