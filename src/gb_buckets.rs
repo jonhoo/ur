@@ -186,7 +186,8 @@
 //! may stay (see [`crate::sleep_hold`]): the watch can't take back what it
 //! sent stamped wrong. A clock set back by seconds, as the phone does when
 //! the watch's crystal has run fast, resends at most the last bucket the
-//! watch sent, whole.
+//! watch sent, whole (with the steps of the seconds the clock took back,
+//! if they were in the minute after: see `minute_ring::carried`).
 //!
 //! A clock set ahead needs nothing here: the sync point is behind it, and
 //! the next fetch sends from there, the minutes before the jump at their
@@ -201,8 +202,8 @@
 //! TODO: a clock set back drops the history's minutes after the new time;
 //! a bucket sent before that and again after it would overwrite
 //! Gadgetbridge's steps with fewer (or more, the steps since). The phone
-//! only corrects the clock by seconds, unless its own was wrong, so this
-//! is a bucket at most.
+//! only corrects the clock by seconds, unless its own was wrong (and a
+//! correction by seconds keeps its steps: see `minute_ring::carried`).
 
 /// Minutes per bucket. Must be over 2 (see the module docs), and divide a
 /// day, so buckets line up with midnight in every time zone (whose UTC

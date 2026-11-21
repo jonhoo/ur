@@ -180,8 +180,9 @@ static RELOG: AtomicU32 = AtomicU32::new(0);
 /// Has the log take the minutes from `minute` on back, and in again as
 /// the history has them now, at [`serve`]'s next run: for minutes changed
 /// after they could be fetched, as a workout's first are, marked as
-/// exercise only once it's recognised (see `activity`). The log may have
-/// them already, as plain activity, and a fetch reads the log.
+/// exercise only once it's recognised (see `activity`), and the minutes
+/// a clock set back files again (`activity::History::at`). The log may
+/// have them already, as they were, and a fetch reads the log.
 ///
 /// What the phone has fetched by now stays as it got it: this is for the
 /// phone that hasn't.
@@ -592,6 +593,8 @@ async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64, n
     //
     // - A clock set back: the history has dropped the minutes after the
     //   new time, and files them again from there (see `minute_ring`).
+    //   It also asks (`relog_from`, so `back`), for the set-back of
+    //   seconds that the clock has made up again by now.
     // - A hold from before the log's end: a wearer gone still, whose last
     //   minutes awake may yet turn out the first of a sleep. Their kinds
     //   are being revised, so the copies in the log would go stale, and a

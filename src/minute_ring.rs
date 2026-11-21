@@ -20,6 +20,16 @@
 //! drops what's after the new time, and further back than the ring
 //! reaches, all of it.
 //!
+//! Except the smallest step back, into the minute before the newest
+//! ([`carried`]): that's no wrong clock put right, but the phone trimming
+//! a clock a few seconds ahead of its own, which it does at about one
+//! connection in six (the watch's crystal, and more often a time that
+//! took the phone some seconds to deliver the connection before). One
+//! time in ten or so that crosses back over the turn of a minute, with
+//! the first seconds of the new minute already filed: steps taken and
+//! perhaps a heart rate, really measured, seconds ago. Those aren't
+//! dropped with their minute but go into the one the clock is back in.
+//!
 //! Moving on, the ring lets go of its oldest minutes ([`let_go`]). They
 //! aren't lost: by then they're in the activity log in the SPI flash (see
 //! `crate::spill`), for the phone, and the little the watch itself still
@@ -94,4 +104,16 @@ pub fn let_go(newest: Option<i64>, minute: i64, len: i64) -> Range<i64> {
         }
         _ => minute..minute,
     }
+}
+
+/// The minute whose sample is carried into `minute`'s as that's filed,
+/// rather than dropped with the rest after it: the newest, if `minute` is
+/// the one right before it (see the module docs). Its steps were taken
+/// in the last seconds, which the clock now says were `minute`'s.
+///
+/// Not from further back: a clock that was minutes or hours ahead filed
+/// its samples under a time that wasn't, and the phone may have fetched
+/// them so; a pile of them in one minute would be no truer.
+pub fn carried(newest: Option<i64>, minute: i64) -> Option<i64> {
+    newest.filter(|&newest| newest.checked_sub(minute) == Some(1))
 }

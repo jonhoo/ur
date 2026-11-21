@@ -12,7 +12,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::minute_ring::{file, let_go};
+    use super::minute_ring::{carried, file, let_go};
 
     /// A day of minutes: what the firmware's ring had (it has
     /// `minute_ring::MINUTES` now; nothing here goes by the length).
@@ -242,6 +242,86 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ==========================================================================
+    // A clock trimmed by seconds
+    // ==========================================================================
+
+    /// A ring of step counts, filed as `History::at` files them: the
+    /// stale slots emptied, and the newest minute's steps carried into
+    /// the minute before it when the clock steps back into that.
+    struct Steps {
+        slots: Vec<u32>,
+        newest: Option<i64>,
+    }
+
+    impl Steps {
+        fn new() -> Self {
+            Self {
+                slots: vec![0; DAY as usize],
+                newest: None,
+            }
+        }
+
+        fn walk(&mut self, minute: i64, steps: u32) {
+            let slot = |m: i64| m.rem_euclid(DAY) as usize;
+            let carry = carried(self.newest, minute).map(|m| self.slots[slot(m)]);
+            let (stale, newest) = file(self.newest, minute, DAY);
+            for m in stale {
+                self.slots[slot(m)] = 0;
+            }
+            self.newest = Some(newest);
+            self.slots[slot(minute)] += steps + carry.unwrap_or(0);
+        }
+
+        fn total(&self) -> u32 {
+            self.slots.iter().sum()
+        }
+    }
+
+    /// The phone trims a clock that's a few seconds ahead, just after a
+    /// minute turned: 11:19:05 becomes 11:18:54 (a field log's, 11 s).
+    /// The steps of 11:19's first seconds are 11:18's now, and 11:19
+    /// starts again when it comes round; none are lost or counted twice.
+    #[test]
+    fn a_clock_trimmed_over_the_turn_of_a_minute_keeps_its_steps() {
+        let mut steps = Steps::new();
+        steps.walk(NOON - 1, 100);
+        steps.walk(NOON, 9);
+        // Back into the minute before.
+        steps.walk(NOON - 1, 2);
+        assert_eq!(steps.newest, Some(NOON - 1));
+        assert_eq!(steps.slots[(NOON - 1).rem_euclid(DAY) as usize], 111);
+        assert_eq!(steps.slots[NOON.rem_euclid(DAY) as usize], 0);
+        // And on again.
+        steps.walk(NOON, 7);
+        assert_eq!(steps.slots[NOON.rem_euclid(DAY) as usize], 7);
+        assert_eq!(steps.total(), 118);
+    }
+
+    /// Only the one step back carries: within the same minute nothing is
+    /// dropped to begin with, and from two minutes or more ahead (a
+    /// clock that was wrong, put right) the samples go, as before.
+    #[test]
+    fn only_the_minute_before_the_newest_carries() {
+        assert_eq!(carried(None, NOON), None);
+        assert_eq!(carried(Some(NOON), NOON), None);
+        assert_eq!(carried(Some(NOON), NOON + 1), None);
+        assert_eq!(carried(Some(NOON), NOON - 1), Some(NOON));
+        assert_eq!(carried(Some(NOON), NOON - 2), None);
+        assert_eq!(carried(Some(NOON), NOON - DAY), None);
+        assert_eq!(carried(Some(i64::MAX), i64::MIN), None);
+        // Nor does the ring let go of anything as the clock steps back:
+        // what's kept of older minutes (`aged`) neither gains nor loses.
+        assert!(let_go(Some(NOON), NOON - 1, DAY).is_empty());
+
+        let mut steps = Steps::new();
+        steps.walk(NOON - 2, 50);
+        steps.walk(NOON - 1, 20);
+        steps.walk(NOON, 9);
+        steps.walk(NOON - 2, 1);
+        assert_eq!(steps.total(), 51);
     }
 }
 

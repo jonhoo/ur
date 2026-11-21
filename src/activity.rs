@@ -826,7 +826,8 @@ impl History {
     /// The sample for `minute`, clearing any skipped minutes (and the
     /// samples of the minutes the ring no longer reaches back to, which
     /// [`aged`] takes in) on the way; or, if the clock went back, the
-    /// minutes after it (see [`crate::minute_ring`]).
+    /// minutes after it (see [`crate::minute_ring`]), but for what a
+    /// clock trimmed by seconds carries over.
     fn at(&mut self, minute: i64) -> &mut Sample {
         let (stale, newest) = minute_ring::file(self.newest, minute, HISTORY_MINUTES as i64);
         // The common case by far is the minute under way, filed again at
@@ -846,6 +847,15 @@ impl History {
                 // usual.
                 self.settled = sleep_hold::Settled::NONE;
                 self.aged.back_to(minute, offset);
+                // The activity log lets go of the minutes from here on,
+                // and takes them in again as they turn out. It would see
+                // for itself that the history's newest minute is before
+                // its end, but only if it looks before the clock has
+                // caught up: after a trim of seconds back over a bucket's
+                // end, it looks (every couple of minutes) at a history
+                // that's past that again, and kept the bucket as it was
+                // before these seconds' steps.
+                crate::system_off::relog_from(minute);
             }
             // The minutes the ring lets go of, before their slots are
             // emptied for the new ones.
@@ -853,11 +863,29 @@ impl History {
                 self.let_go(old, offset, self.samples[Self::slot(old)]);
             }
         }
+        // A clock trimmed by seconds, back over the turn of a minute: what
+        // the new minute's first seconds recorded isn't dropped with it
+        // (see `minute_ring::carried`). Both minutes are the ring's own,
+        // its newest two, so `aged` has neither and isn't touched (its
+        // `back_to` above does nothing this side of what it took in).
+        let carried =
+            minute_ring::carried(self.newest, minute).map(|m| self.samples[Self::slot(m)]);
         for m in stale {
             self.samples[Self::slot(m)] = Sample::default();
         }
         self.newest = Some(newest);
-        &mut self.samples[Self::slot(minute)]
+        let sample = &mut self.samples[Self::slot(minute)];
+        if let Some(carried) = carried {
+            // The steps, and a heart rate if this minute has none. Not
+            // the movement, a mean over the minute that the next poll
+            // works out afresh, nor the flags, which this minute has its
+            // own of.
+            sample.steps = sample.steps.saturating_add(carried.steps);
+            if sample.heart_rate == 0 {
+                sample.heart_rate = carried.heart_rate;
+            }
+        }
+        sample
     }
 
     /// Hands `minute`'s sample, which the ring is letting go of, to
