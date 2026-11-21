@@ -44,6 +44,7 @@ missing below were test builds for the dev kit.
 
 ### Fixed
 
+- Keep the activity the phone hasn't fetched across a crash soon after the watch's clock, having been a few minutes to an hour ahead, is put right (the phone's was wrong): the regular saves made while it was ahead were dated in the future and looked like the newest, so a crash while the clock caught up with them restored one of them and lost the minutes since. Each save now discards any that claim to be newer than it (41ab0db)
 - Keep the activity across a crash after an update or a switch-off made while the watch's clock was ahead (the phone's was wrong, and has been put right since): the save made then was dated in the future, and until the clock caught up with that date a crash restored none of the regular saves made since (da969bf)
 - Keep the activity's regular saves when the save made as the watch switches off (or before an update) fails to write: one of them that looked newer than it, from a clock the phone had since set back, was discarded all the same, leaving nothing to restore (dee63b2)
 - Keep the steps of the seconds the phone takes back when it trims the watch's clock: it sets the clock back by a few seconds at about one connection in six, and when that went back over the turn of a minute, the steps (and any heart rate) of the new minute's first seconds were dropped, and the steps of the seconds repeated never reached the phone if a 5-minute block had just ended. A new time zone or summer time never moved any of it: the history is kept in UTC (9619d6e)
