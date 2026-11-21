@@ -320,6 +320,31 @@ async fn save(flash: &mut spi_flash::SpiFlash, start: u32, logged: Option<u32>) 
     if let Err(e) = written {
         warn!("snapshot: saving at {=u32:#x} failed: {}", start, e);
     }
+    // The planned record must be the newest there is, for the boot after
+    // it to restore: every checkpoint is of before it. But one can claim
+    // otherwise, saved while the clock was ahead (a phone's that was
+    // wrong, since put right): its minutes are in the record's future,
+    // and after System OFF, with the clock unknown, a boot can't tell.
+    // It would restore that one, and retire the record unread. So any
+    // such checkpoint is retired here instead. (A boot with the clock
+    // known, after a crash, turns them down itself: see
+    // `snapshot::newer_checkpoint`.)
+    if start == RECORD.start {
+        let as_of = first.saturating_add(u32::from(minutes));
+        let mut buffer = [0u8; CHUNK];
+        for slot in 0..snapshot::CHECKPOINT_SLOTS {
+            let start = CHECKPOINTS.start + slot * snapshot::SLOT_BYTES;
+            if let Some(header) = read_header(flash, start, &mut buffer).await
+                && header.as_of() > as_of
+            {
+                warn!(
+                    "snapshot: retiring a checkpoint from minute {}, after now",
+                    header.as_of()
+                );
+                consume(flash, start).await;
+            }
+        }
+    }
 }
 
 /// Puts back what the flash holds of the history: the activity log,
@@ -400,7 +425,7 @@ pub async fn restore() -> Log {
                 Some(RECORD.start)
             } else {
                 warn!("snapshot: the saved activity is corrupt; dropped");
-                consume(flash).await;
+                consume(flash, RECORD.start).await;
                 None
             }
         }
@@ -772,16 +797,17 @@ async fn retire() {
     let mut flash = FLASH.lock().await;
     let flash = flash.as_mut().expect("set at boot");
     if flash.wake().await.is_ok() {
-        consume(flash).await;
+        consume(flash, RECORD.start).await;
         flash.sleep().await;
         info!("snapshot: the phone has the saved activity; record retired");
     }
 }
 
-/// Marks the record consumed: one word cleared in place, no erase.
-async fn consume(flash: &mut spi_flash::SpiFlash) {
+/// Marks the record at `start` consumed: one word cleared in place, no
+/// erase.
+async fn consume(flash: &mut spi_flash::SpiFlash, start: u32) {
     let consumed = snapshot::CONSUMED.to_le_bytes();
-    let address = RECORD.start + snapshot::CONSUMED_OFFSET;
+    let address = start + snapshot::CONSUMED_OFFSET;
     if let Err(e) = flash.program(address, &consumed).await {
         warn!("snapshot: retiring the record failed: {}", e);
     }
