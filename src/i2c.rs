@@ -100,6 +100,8 @@ pub async fn reset_held(_twim: &mut Twim<'static>) {
     // A stop completes within a byte time (~40 µs at 250 kHz) unless the
     // bus is stuck, in which case disabling the peripheral ends it anyway.
     Timer::after_micros(200).await;
+    // ENABLE: 0 is disabled; 6, below, is enabled as a TWIM (the product
+    // specification's value: the same peripheral as a plain TWI takes 5).
     r.enable()
         .write(|w| w.set_enable(twim::vals::Enable::from_bits(0)));
     free_bus().await;
