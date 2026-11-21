@@ -127,20 +127,27 @@ mod tests {
         // Where the linear 3.5–4.2 V percentage overstated it, and where
         // InfiniTime's curve had it stall (its plateau began at 3.776 V;
         // this cell's begins at ~3.83 V).
-        assert_eq!(charge_percent(3735), 18);
+        assert_eq!(charge_percent(3717), 19);
         assert_eq!(charge_percent(3756), 31);
         assert_eq!(charge_percent(3830), 57);
         assert_eq!(charge_percent(4000), 81);
         // The plateau: 26 points in 44 mV, and as many in the 170 above.
         assert!(charge_percent(3800) - charge_percent(3756) >= 18);
         assert!(charge_percent(3750) < 30);
+        // And it goes on at that slope to where the data ends, 3.717 V,
+        // rather than bending at 3.735 V as the first fit's guess did (18%
+        // there, where the night after the trip then counted 25%).
+        assert_eq!(charge_percent(3735), 24);
     }
 
     /// The sealed watch's two longest discharges from a full charge, as
     /// (hours on battery, mV at rest: the median of the 10-minute lines
     /// within 25 minutes), every six hours: the trip of 2026-11-16 to
-    /// 11-20, and 11-13 to 11-16 before it.
-    const TRIP: [(u32, u32); 18] = [
+    /// 11-20 with the night after it, and 11-13 to 11-16 before it. (The
+    /// trip's last two are 20 mV over what the watch logged: an update at
+    /// 105 hours rebooted it, and that boot reads 20 mV lower; see "each
+    /// boot reads a little differently" by the curve.)
+    const TRIP: [(u32, u32); 20] = [
         (0, 4181),
         (6, 4131),
         (12, 4095),
@@ -158,7 +165,9 @@ mod tests {
         (84, 3774),
         (90, 3767),
         (96, 3759),
-        (101, 3754),
+        (102, 3746),
+        (108, 3730),
+        (114, 3717),
     ];
     const BEFORE_THE_TRIP: [(u32, u32); 13] = [
         (0, 4178),
@@ -204,7 +213,7 @@ mod tests {
             "the discharge before strays {before:.1} points"
         );
         // And at the trip's rate, a charge lasts five to six days. (Below
-        // where the trip ended, 3.754 V, the curve is extrapolated, to
+        // where its readings end, 3.717 V, the curve is extrapolated, to
         // err short.)
         let (hours, mv) = TRIP[TRIP.len() - 1];
         let used = 100.0 - f64::from(charge_percent(mv));
