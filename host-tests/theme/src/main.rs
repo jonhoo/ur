@@ -59,7 +59,7 @@ mod tests {
     // RGB) is roughly even to the eye, so one threshold works for dark greens
     // and pale creams alike. About 2 is just noticeable side by side; 10 is
     // plainly different; 50 is red against green. The colours are measured as
-    // the panel gets them, RGB565, not as written in palette.rs.
+    // the panel gets them, RGB565, not as written in the schemes.
 
     /// A role's colour in a theme, in CIELAB (L*, a*, b*), from its RGB565.
     fn lab(theme: &Palette, color: Color) -> [f64; 3] {

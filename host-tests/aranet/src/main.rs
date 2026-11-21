@@ -672,7 +672,7 @@ mod tests {
         // Heard at home, and the phone there too: the sensors' place.
         scan(&mut nearby, 0, &[(KITCHEN, -60)]);
         nearby.located(home, 5 * MIN);
-        // Left, unheard since; the phone, an hour later, is across town.
+        // Left, unheard since; the phone, five minutes on, is across town.
         scan(&mut nearby, 15 * MIN, &[]);
         assert!(nearby.around(20 * MIN));
         assert!(nearby.located(across_town, 20 * MIN));

@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Host-side tests for `src/palette.rs` (included via `#[path]`): that colours
-# with different meanings stay apart in every theme. Not part of the
+# Host-side tests for Retro's colour schemes (`src/palette.rs` and
+# `src/themes/retro/schemes/`, included via `#[path]`): that colours with
+# different meanings stay apart in every scheme. Not part of the
 # firmware workspace: run `cargo test` from this directory.
 [workspace]
 
