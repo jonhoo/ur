@@ -589,7 +589,10 @@ and `src/spill.rs` for the log the rest is in):
 standing in for Gadgetbridge (with `scripts/gb-peer.py`, so the computer
 must be paired with the dev kit), it sets the clock, walks some steps,
 waits for a checkpoint, hard-faults the dev kit (input 26), checks the
-boot's log, and fetches the activity again, which must have the steps:
+boot's log, and fetches the activity again, which must have the steps.
+(Up to that fetch it walks a few steps a minute: a dev kit lying still,
+whose sensor takes a lit desk for skin, has its last 25 minutes or so
+held back, as they may yet turn out the start of a sleep.)
 
 ```sh
 RTT_SECS=3 cargo run --release --features debug-input
