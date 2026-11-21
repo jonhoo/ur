@@ -501,7 +501,8 @@ pub fn report_last_reset() {
         warn!("the previous run's panic handler didn't finish");
     }
     // The file name points into our own flash; same image (checked above),
-    // so it's still there.
+    // so it's still there. Our flash is the primary slot from `FLASH`'s
+    // origin to the slot's end (see `memory.x`).
     let in_flash = |address: usize| (0x8100..0x7C000).contains(&address);
     let file = if in_flash(crumb.file as usize) && crumb.file_len < 256 {
         // SAFETY: Same image, so this is the `&'static str` the panic
@@ -624,7 +625,7 @@ impl Breadcrumb {
 
 /// Bytes of a panic's message kept in a breadcrumb: enough for most plain
 /// ones (`explicit panic`, `SoftDevice Controller ASSERT`, …). A HardFault
-/// keeps its registers there instead (see [`FaultRegisters`]), which is
+/// keeps its registers there instead (see [`FAULT_WORDS`]), which is
 /// what sets the size.
 const MESSAGE: usize = 4 * FAULT_WORDS;
 
@@ -863,6 +864,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
             info.location()
                 .map_or(("?", 0), |location| (location.file(), location.line()))
         } else {
+            // `note_assert` took these from a `&'static str`, and stored
+            // the pointer last: one that's set has its length.
             let len = NORDIC_FILE_LEN.load(Ordering::Relaxed) as usize;
             let file = core::str::from_utf8_unchecked(core::slice::from_raw_parts(nordic, len));
             (file, NORDIC_LINE.load(Ordering::Relaxed))
@@ -1145,6 +1148,8 @@ static NORDIC_FILE_LEN: AtomicU32 = AtomicU32::new(0);
 static NORDIC_LINE: AtomicU32 = AtomicU32::new(0);
 
 fn note_assert(file: &'static str, line: u32) {
+    // The pointer last: the panic handler takes the length and line to go
+    // with a pointer that's set.
     NORDIC_FILE_LEN.store(file.len() as u32, Ordering::Relaxed);
     NORDIC_LINE.store(line, Ordering::Relaxed);
     NORDIC_FILE.store(file.as_ptr().cast_mut(), Ordering::Relaxed);
