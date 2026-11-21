@@ -909,7 +909,7 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   A reading is logged (and published) as it comes, `heart: N BPM after
   S s` for the session's first and `heart: N BPM` at `debug` for any
   later one; a paired session runs both phases whatever it has read, so
-  one that reads at 10 s still ends at 26. `tmp/led-paired/paired.py`
+  one that reads at 10 s still ends at 26. `scripts/led-paired.py`
   (not in the repository) compares the phases: which read, with McNemar's
   test and an interval; window quality; the pulse against the noise from
   the samples; and how many more pairs it needs.

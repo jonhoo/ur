@@ -1635,7 +1635,7 @@ impl Schedule {
 // 14-28 s; the second phase reads some of those, having 13-17 s of its
 // own, but not the ones whose only clean stretch straddles the switch.
 // The field log says how many: compare the paired sessions' readings with
-// those 44% (`tmp/led-paired/paired.py` does).
+// those 44% (`scripts/led-paired.py` does).
 //
 // What's kept of the experiment's safeguards: the bright drive is still
 // [`bright_start`]'s, so 20 mA rather than 30 where 30 would be expected
@@ -1662,7 +1662,7 @@ impl Schedule {
 // sessions that read within their first phase, 31% of the calm starts,
 // which run ~26 s rather than ~11; busy starts no longer at 30 mA give a
 // third of it back. It's a week or two's cost, not a standing one (see
-// `tmp/led-paired/paired.py` for how many sessions settle it).
+// `scripts/led-paired.py` for how many sessions settle it).
 //
 // TODO: take this out again once the field log has answered it, with the
 // arms, or with whichever of them lost.
