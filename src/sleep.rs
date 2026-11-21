@@ -13,7 +13,8 @@
 //!   a stir. The sleep is dated from the start of those minutes, not the
 //!   moment they qualified.
 //!   Within a night (after a wake of up to [`SAME_NIGHT_GAP`] minutes),
-//!   [`RESUME`] minutes of stillness are enough, fidgeting or not.
+//!   [`RESUME`] minutes of stillness are enough, [`RESUME_CALM`] of them
+//!   without a fidget (see "Lying awake after waking" below).
 //! - **Waking** is [`WAKE_RUN`] minutes of movement, [`MOVED`] of which
 //!   moved themselves (the smoothing spreads one twitch over three), or
 //!   walking (at least [`WAKE_STEPS`] steps in a minute). It's dated from
@@ -93,6 +94,46 @@
 //! nights, the rate is still 3.6 BPM over the resting rate ten minutes in.
 //! TODO: as a second opinion, should fidgeting alone let lying awake
 //! through: against a resting rate kept over several nights.
+//!
+//! # Lying awake after waking
+//!
+//! Falling asleep again within a night is quicker, and a false wake (a
+//! cluster of stirs) shouldn't cost 20 minutes of sleep, so [`RESUME`]
+//! minutes of stillness are enough then. They used to be enough fidgeting
+//! or not, which took lying awake for sleep just as the evenings above
+//! did: on 2026-11-21 a wearer woken by the alarm at 09:01 lay still but
+//! awake, a poll of [`FIDGET`] or more in every minute (2 to 25 of each
+//! minute's 30), and "fell asleep" at 09:20. That added 14 minutes to the
+//! night, and started a doze's quiet in which taps did nothing for 17
+//! minutes.
+//!
+//! So the stillness's first [`RESUME`] minutes must hold [`RESUME_CALM`]
+//! without a fidget. In the field logs (14 nights, 2026-11-08 to 21, nine
+//! of them with a Garmin alongside) sleep came back within a night 18
+//! times for real (by the Garmin where there was one, else by a heart
+//! rate back at the night's level and the hours of sleep that followed;
+//! one was a doze after an alarm), and those ten minutes had 4 to 10
+//! minutes without a fidget: 4 once, 5 twice, 6 or more otherwise. The
+//! false one had none. Asking 5 keeps all 18, one of them 4 minutes later
+//! (2026-11-13 at 07:38, to after its last settling movement); 6 moves
+//! three, by 3, 4 and 14 minutes, the last far enough to end that quiet
+//! night for 8 minutes; 1 to 4 move none.
+//!
+//! 5 rather than less, as that one false sleep, fidgeting every minute,
+//! is no measure of lying awake. The evenings are: judging every
+//! stillness in those logs by this rule, as if a wake had come just
+//! before it, the 7 on the wrist that the full rule keeps awake (and that
+//! weren't the night's own start) all pass for sleep asking up to 3 calm
+//! minutes, 4 asking 4, 2 asking 5, and none asking 6. So 5 doesn't
+//! keep out all lying awake, only most; it's as far as the nights' real
+//! sleep lets it go. Of the 10-minute spans within that sleep, 92% have 5
+//! or more such minutes (84% have 6); from any minute of it, the wait for
+//! ten that do is at most 9 minutes for 99 in 100. A wearer who drifts
+//! off again with a restless wrist is asleep those few minutes later, or,
+//! with [`SAME_NIGHT_GAP`] gone by, by the full rule.
+//!
+//! No pulse is asked here: the watch was on a sleeper's wrist minutes
+//! ago, and a watch taken off since is the desk's to find.
 //!
 //! The thresholds are first guesses in our movement units (Bangle.js'
 //! 8192-per-g; ~25 lying on a desk, hundreds when handled), to be tuned from
@@ -203,6 +244,16 @@ pub const CALM_MINUTES: usize = 14;
 /// [`SAME_NIGHT_GAP`]): falling back asleep in the night is quicker, and a
 /// false wake (a cluster of stirs) shouldn't cost 20 minutes of sleep.
 pub const RESUME: usize = 10;
+/// How many of the [`RESUME`] minutes that make sleep again must be
+/// without a fidget. Lying awake after an alarm had none; the field
+/// logs' 18 real returns to sleep had 4 to 10. 5 keeps them all (one, 4
+/// minutes later), and is the most that does without delaying a return
+/// by a quarter of an hour (see "Lying awake after waking" in the module
+/// docs).
+/// TODO: revisit with more mornings in the field logs: there's one false
+/// return to sleep to go by, and 6 would also keep out the two stretches
+/// of an evening's lying awake that 5 lets through.
+pub const RESUME_CALM: usize = 5;
 /// Minutes of movement that end sleep. Two stirs in a row already make
 /// five (see [`STIR`]), so this is one more.
 pub const WAKE_RUN: usize = 6;
@@ -321,7 +372,10 @@ pub fn classify(
             // The stillness is at least as long as the minutes asked
             // about, so they're all here.
             let falls_asleep = if same_night {
-                length >= RESUME
+                // Sooner than at the start of a night, but still only a
+                // wrist that mostly doesn't fidget: lying awake after the
+                // alarm is as still as dozing off again.
+                length >= RESUME && calm(&minutes[t..t + RESUME]) >= RESUME_CALM
             } else {
                 length >= ONSET && sleeper(&minutes[t..t + ONSET])
             };
@@ -398,9 +452,17 @@ pub fn classify(
 /// [`ONSET`] minutes old has been decided (as `crate::sleep_hold` takes
 /// for granted, in what it holds back). A later start within the same
 /// stillness may still pass: its minutes are others.
+///
+/// (A return to sleep within a night asks the same of its first
+/// [`RESUME`] minutes, with [`RESUME_CALM`] and no pulse, and so is
+/// decided once and for all too.)
 fn sleeper(minutes: &[Minute]) -> bool {
-    let calm = minutes.iter().filter(|minute| !minute.fidgeted).count();
-    calm >= CALM_MINUTES && minutes.iter().any(|minute| minute.pulse || moved(*minute))
+    calm(minutes) >= CALM_MINUTES && minutes.iter().any(|minute| minute.pulse || moved(*minute))
+}
+
+/// How many of `minutes` passed without a fidget.
+fn calm(minutes: &[Minute]) -> usize {
+    minutes.iter().filter(|minute| !minute.fidgeted).count()
 }
 
 /// How long before a pass's minutes the wearer was last asleep, for
@@ -470,7 +532,8 @@ pub const ONSET_SPAN: usize = ONSET + STIR + 2 + 1;
 /// a sleep may yet be found to have started that [`classify`] doesn't see
 /// yet: the first minute of the stillness they end with, which becomes
 /// sleep, dated from its start, once it has lasted [`ONSET`] minutes (or
-/// [`RESUME`]). Bridges stirs of up to [`STIR`] minutes, and a trailing
+/// [`RESUME`]), if they're calm enough; else perhaps from a later minute
+/// of it, which is after this one. Bridges stirs of up to [`STIR`] minutes, and a trailing
 /// one that may yet turn out to be a stir. A minute off the wrist ends
 /// the stillness, as an unseen one does, as in [`classify`]. `None` if the
 /// newest minutes aren't still.
@@ -610,10 +673,11 @@ pub fn last_sleep(minutes: usize, kind: impl Fn(usize) -> Kind) -> Option<(usize
 /// nothing here hears of touches. A minute or two of it is a stir at
 /// most. [`WAKE_RUN`] minutes of fidgeting with it are waking, which
 /// starts the [`QUIET_AWAKE`] count; settling then, [`RESUME`] still
-/// minutes are asleep again, well within it, and the night goes on. Only
-/// moving the wrist for about `WAKE_RUN + QUIET_AWAKE - RESUME` (18)
-/// minutes without settling ends it, as being up would. A wrist held
-/// still while reading counts as still, and so as asleep.
+/// minutes, [`RESUME_CALM`] of them without a fidget, are asleep again,
+/// well within it, and the night goes on. Only moving the wrist for
+/// about `WAKE_RUN + QUIET_AWAKE - RESUME` (18) minutes without settling
+/// ends it, as being up would, or lying there fidgeting for as long. A
+/// wrist held dead still while reading counts as asleep.
 ///
 /// A **nap** is quiet too, but ends sooner: sleep that starts in the
 /// daytime ([`nap_hours`]) ends after [`NAP_AWAKE`] minutes awake, not

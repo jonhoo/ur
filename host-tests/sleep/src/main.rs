@@ -1377,6 +1377,80 @@ mod tests {
         }
     }
 
+    /// Lying awake after the alarm isn't dozing off again: a wearer who
+    /// stops the alarm, stirs for a few minutes, and then lies still for
+    /// a quarter of an hour, the wrist fidgeting in every minute (as on
+    /// 2026-11-21, when this passed for sleep at ten minutes), stays
+    /// awake, adds nothing to the night, and starts no doze's quiet.
+    #[test]
+    fn lying_awake_after_the_alarm_is_not_sleep() {
+        for seed in 0..20 {
+            let mut rng = Rng::new(seed);
+            let (_, mut minutes) = build(
+                &mut rng,
+                &[
+                    (Truth::Active, 60),
+                    (Truth::DeepAsleep, 300),
+                    (Truth::Up, 8), // 00:00 the alarm, stopped
+                    (Truth::LyingAwake, 17),
+                    (Truth::Active, 120),
+                ],
+            );
+            for minute in &mut minutes[368..385] {
+                minute.fidgeted = true;
+            }
+            let (kinds, asleep) = firmware(&minutes, &[]);
+            assert!(
+                !kinds[360..].iter().any(|kind| kind.is_sleep()),
+                "seed {seed}:\n{}",
+                timeline(&kinds)
+            );
+            assert!(!asleep[368..].contains(&true), "seed {seed}");
+            let quiet = nights(&asleep, Some(360));
+            assert!(quiet[359], "seed {seed}: no night before the alarm");
+            assert!(!quiet[360..].contains(&true), "seed {seed}");
+        }
+    }
+
+    /// Dozing off again takes [`sleep::RESUME_CALM`] minutes without a
+    /// fidget among the stillness's first [`sleep::RESUME`], and no more:
+    /// with exactly that many, sleep is back from where the wrist went
+    /// still; with one fewer, from a minute later, once ten minutes from
+    /// there have them.
+    #[test]
+    fn sleep_comes_back_once_the_wrist_is_calm_enough() {
+        let fidgets = sleep::RESUME - sleep::RESUME_CALM;
+        for seed in 0..20 {
+            let mut rng = Rng::new(seed);
+            let (_, minutes) = build(
+                &mut rng,
+                &[
+                    (Truth::Active, 60),
+                    (Truth::DeepAsleep, 300),
+                    (Truth::Up, 8),
+                    (Truth::DeepAsleep, 60),
+                    (Truth::Active, 120),
+                ],
+            );
+            let back = |fidgeting: std::ops::Range<usize>| {
+                let mut minutes = minutes.clone();
+                for minute in &mut minutes[fidgeting] {
+                    minute.fidgeted = true;
+                }
+                let (kinds, _) = firmware(&minutes, &[]);
+                368 + kinds[368..]
+                    .iter()
+                    .position(|kind| kind.is_sleep())
+                    .expect("asleep again")
+            };
+            // Without a fidget: from the first still minute after the wake.
+            let still = back(0..0);
+            assert!((368..=369).contains(&still), "seed {seed}: {still}");
+            assert_eq!(back(still..still + fidgets), still, "seed {seed}");
+            assert_eq!(back(still..still + fidgets + 1), still + 1, "seed {seed}");
+        }
+    }
+
     /// An evening of TV, however still, isn't sleep.
     #[test]
     fn lounging_is_not_sleep() {
