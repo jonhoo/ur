@@ -217,6 +217,24 @@ pub fn unlogged_from(newest: i64, logged: Option<i64>, room: usize) -> i64 {
     }
 }
 
+/// Where the activity log will end (its last minute) once it has let go
+/// of the minutes from `back` on, if it's about to: it holds minutes up
+/// to `logged`, if any, and reaches `back`. `None` if it has nothing to
+/// let go of.
+///
+/// The log lets go of minutes whose samples have changed since they went
+/// in, or may yet (see `system_off::keep`). From then on they're in the
+/// history alone, and in the next record, which starts where the log ends
+/// ([`unlogged_from`]). So a record is saved first, by where the log
+/// will end, this: a reset between the two then finds them in the record
+/// (and, if the log hadn't let go yet, in the log as they were). The
+/// other way round, a reset in between finds them in neither, as the
+/// records from before start where the log ended then: a whole night,
+/// after a reset in the morning (see `system_off::serve`).
+pub fn taken_back(logged: Option<i64>, back: i64) -> Option<i64> {
+    logged.filter(|&logged| back <= logged).map(|_| back - 1)
+}
+
 impl Header {
     /// The minute the record was saved as of: the one after the newest
     /// minute the history had then. Every record runs to that minute (an

@@ -565,23 +565,26 @@ pub async fn restore() -> Log {
 // The activity log
 // ==============================================================================
 
-/// Brings the activity log up to date (see [`crate::spill`]), so that it
-/// holds what a fetch could send now and no more: takes back what no
-/// longer is that, notes the last fetch, and appends up to `at_once` of
-/// the minutes that newly are.
-///
-/// As of the clock's minute `now`, when it has jumped ahead of the
-/// history's newest (see `activity::jumps`); else as of that.
-async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64, now: Option<i64>) {
-    // Boot couldn't read the log (the flash didn't answer): find its end
-    // now, before anything is appended over it.
-    if writer.is_unread() {
-        (*writer, _) = spill::scan(flash, LOG, |_, _| ()).await;
-    }
-    let Some(newest) = activity::newest_minute() else {
-        return;
-    };
+/// What [`keep`] is to do to the activity log at this run of [`serve`]:
+/// worked out once, before anything is written, as a record may have to
+/// be saved first (see [`serve`]).
+#[derive(Clone, Copy)]
+struct Due {
+    /// The first minute the log doesn't take in yet: what a fetch would
+    /// send now ends here.
+    end: i64,
+    /// Where the log has to go back to, if it reaches past it: `end`, or
+    /// before it, where minutes have changed since they went in.
+    back: i64,
+    /// What [`RELOG`] asked for (taken from it), to put back should the
+    /// log not be taken back after all.
+    relog: u32,
+}
 
+/// What the log is due (see [`Due`]), with the history's newest minute
+/// at `newest`; as of the clock's minute `now`, when it has jumped ahead
+/// of that (see `activity::jumps`), else as of `newest`.
+fn due(newest: i64, now: Option<i64>) -> Due {
     // What a fetch would send now: the buckets that are over, before any
     // minute held back (see `gb_buckets::Fetch`). The hold is worked out
     // over the history with interrupts off, a millisecond or so; like the
@@ -595,12 +598,30 @@ async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64, n
     );
     // Where the log has to go back to, which is `end` unless minutes
     // before it have changed since they went in (see `relog_from`): those
-    // go straight back in below, as they are now.
+    // go straight back in, as they are now.
     let relog = RELOG.swap(0, Ordering::Relaxed);
     let back = match relog {
         0 => end,
         from => end.min(gb_buckets::start_of(i64::from(from))),
     };
+    Due { end, back, relog }
+}
+
+/// Brings the activity log up to date (see [`crate::spill`]), so that it
+/// holds what a fetch could send now and no more, as `due` has it: takes
+/// back what no longer is that, notes the last fetch, and appends up to
+/// `at_once` of the minutes that newly are. With the history's newest
+/// minute at `newest`.
+///
+/// Whatever it takes back must be in a record already: see [`serve`].
+async fn keep(
+    flash: &mut spi_flash::SpiFlash,
+    writer: &mut Log,
+    at_once: i64,
+    newest: i64,
+    due: Due,
+) {
+    let Due { end, back, relog } = due;
 
     // The log may reach past that, in two ways, and then lets go of every
     // bucket from there on, to take them in again when they can go (until
@@ -613,14 +634,14 @@ async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64, n
     // - A hold from before the log's end: a wearer gone still, whose last
     //   minutes awake may yet turn out the first of a sleep. Their kinds
     //   are being revised, so the copies in the log would go stale, and a
-    //   fetch (or a boot) would get the sleep's start as awake. The next
-    //   record has them, as it starts where the log ends.
+    //   fetch (or a boot) would get the sleep's start as awake. Or a
+    //   whole night: one settled and logged before a reset, which forgot
+    //   that it was settled (see `sleep_hold`), is held again at the
+    //   boot's first run, until the next minute's review settles it
+    //   again or its time is up.
     // - A workout recognised: its first minutes, marked as exercise after
     //   the fact (`back`, above).
-    if writer
-        .through()
-        .is_some_and(|logged| back <= i64::from(logged))
-    {
+    if snapshot::taken_back(writer.through().map(i64::from), back).is_some() {
         let from = minute32(back);
         debug!("spill: taking the log back to minute {}", from);
         if let Err(e) = spill::truncate(flash, LOG, writer, from).await {
@@ -868,8 +889,58 @@ pub async fn serve(log: &mut Log) {
                 false
             }
         };
+        let newest = activity::newest_minute();
+        // Where the record goes, if one is asked for (a checkpoint only
+        // once there's a history to save).
+        let mut record = match asked {
+            SAVE_ASKED => Some(RECORD.start),
+            CHECKPOINT_ASKED => newest.map(checkpoint_at),
+            _ => None,
+        };
         if awake {
-            // First the log, so that the record starts where it ends.
+            if asked == SAVE_ASKED {
+                // The new record replaces any restored one, and with
+                // the log holds all that's unsynced: nothing to
+                // retire after a fetch that ends meanwhile.
+                RECORD_STATE.store(NONE, Ordering::Relaxed);
+            }
+            // Boot couldn't read the log (the flash didn't answer): find
+            // its end now, before anything is appended over it.
+            if log.is_unread() {
+                (*log, _) = spill::scan(flash, LOG, |_, _| ()).await;
+            }
+        }
+        // The log, which is of the history: none without the time.
+        if awake && let Some(newest) = newest {
+            let due = due(newest, jump);
+
+            // The log first, so that the record starts where it ends.
+            // Unless the log is about to let go of minutes (see `keep`):
+            // then the record first, from where the log will end. Those
+            // minutes are in no record yet, as each starts where the log
+            // ended when it was saved, so a reset between the log letting
+            // go of them and the record's save would leave them in
+            // neither. That's a wearer's last few minutes before going
+            // still, mostly, but a whole night at the first run after a
+            // reset in the morning (the night was settled and logged, and
+            // the reset forgot the settling), and that record takes half
+            // a second to write: just when a watch that crashes at every
+            // boot would crash again.
+            //
+            // So whether or not a record was asked for (a fetch to note,
+            // or a jump, also bring the log up to date): a checkpoint
+            // then. Even after the planned save, when no checkpoint is
+            // otherwise started (see `SAVE`): the flash is awake for the
+            // log as it is, and is put back to sleep below.
+            //
+            // (Such a record holds minutes that the log has again by the
+            // time `keep` is done, those it appends. A boot reads the log
+            // first and keeps its copy of a minute, which is the same.)
+            if let Some(until) = snapshot::taken_back(log.through().map(i64::from), due.back) {
+                let start = record.take().unwrap_or(checkpoint_at(newest));
+                save(flash, start, Some(minute32(until))).await;
+            }
+
             // Before a planned reset, all there is: the record is what
             // an older build would restore, and has only a day. Before a
             // jump too: all that it pushes out.
@@ -878,7 +949,7 @@ pub async fn serve(log: &mut Log) {
                 (CHECKPOINT_ASKED, None) => SPILL_AT_ONCE,
                 _ => 0,
             };
-            keep(flash, log, at_once, jump).await;
+            keep(flash, log, at_once, newest, due).await;
         }
         // With no `await` since the log took them in. And whether or not
         // it could: a flash that doesn't answer mustn't stop the history's
@@ -890,26 +961,18 @@ pub async fn serve(log: &mut Log) {
                 minute
             );
             activity::skip_to(minute);
-        }
-        if awake {
-            let logged = log.through();
-            match asked {
-                SAVE_ASKED => {
-                    // The new record replaces any restored one, and with
-                    // the log holds all that's unsynced: nothing to
-                    // retire after a fetch that ends meanwhile.
-                    RECORD_STATE.store(NONE, Ordering::Relaxed);
-                    save(flash, RECORD.start, logged).await;
-                }
-                CHECKPOINT_ASKED => {
-                    if let Some(newest) = activity::newest_minute() {
-                        let slot = snapshot::checkpoint_slot(newest);
-                        let start = CHECKPOINTS.start + slot * snapshot::SLOT_BYTES;
-                        save(flash, start, logged).await;
-                    }
-                }
-                _ => {}
+            // A checkpoint is of the history as it is now, so in this
+            // minute's slot: the one worked out above may be the last
+            // checkpoint's, which a save cut short would then take with
+            // it.
+            if asked == CHECKPOINT_ASKED && record.is_some() {
+                record = Some(checkpoint_at(minute));
             }
+        }
+        // (A record saved above, before the log let go, is of just before
+        // the jump, as the checkpoint before it was.)
+        if awake && let Some(start) = record {
+            save(flash, start, log.through()).await;
         }
         flash.sleep().await;
     }
@@ -923,6 +986,12 @@ pub async fn serve(log: &mut Log) {
         }
         _ => {}
     }
+}
+
+/// Where the checkpoint goes for a history whose newest minute is
+/// `newest`: its slot (see [`snapshot::checkpoint_slot`]).
+fn checkpoint_at(newest: i64) -> u32 {
+    CHECKPOINTS.start + snapshot::checkpoint_slot(newest) * snapshot::SLOT_BYTES
 }
 
 /// Has [`serve`] save a checkpoint (see [`crate::snapshot`]) at its next

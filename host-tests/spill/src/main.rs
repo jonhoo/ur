@@ -754,4 +754,141 @@ mod tests {
             buckets_of(&minutes, NOON, NOON + 520)
         );
     }
+
+    // ==========================================================================
+    // The log letting go of minutes, and the record that must hold them
+    // ==========================================================================
+
+    use super::snapshot;
+
+    /// A record (the planned one, or a checkpoint) as far as this goes:
+    /// the minutes it holds, up to the one it was saved as of. Its save
+    /// is all or nothing (the header goes last: see `snapshot`).
+    #[derive(Clone, Copy)]
+    struct Record {
+        first: u32,
+        as_of: u32,
+    }
+
+    /// A checkpoint's room (`system_off::CHECKPOINT_ROOM`).
+    const ROOM: usize =
+        (snapshot::SLOT_BYTES as usize - snapshot::HEADER_BYTES) / snapshot::SAMPLE_BYTES - BUCKET;
+
+    /// Saves a record of the history up to `newest`, from where the log
+    /// ends (`logged`), if the power lasts.
+    fn save(flash: &mut Nor, records: &mut Vec<Record>, newest: u32, logged: Option<u32>) {
+        if flash.spend() {
+            let first = snapshot::unlogged_from(newest.into(), logged.map(i64::from), ROOM);
+            records.push(Record {
+                first: first as u32,
+                as_of: newest + 1,
+            });
+        }
+    }
+
+    /// One run of `system_off::serve` at which the log is due back to
+    /// `back`, with nothing new to take in (it's all held): the record
+    /// and the log's letting go, in the order `serve` has them
+    /// (`record_first`), or the other way round, as it was. Stops where
+    /// the power does.
+    fn serve(
+        flash: &mut Nor,
+        writer: &mut Writer,
+        records: &mut Vec<Record>,
+        newest: u32,
+        back: u32,
+        record_first: bool,
+    ) {
+        let ring = flash.ring;
+        let until = snapshot::taken_back(writer.through().map(i64::from), back.into());
+        if record_first && let Some(until) = until {
+            save(flash, records, newest, Some(until as u32));
+        }
+        if until.is_some() && block_on(spill::truncate(flash, ring, writer, back)).is_err() {
+            return;
+        }
+        if !(record_first && until.is_some()) {
+            save(flash, records, newest, writer.through());
+        }
+    }
+
+    /// The minutes a boot puts back: the log's, and the newest record's.
+    fn restored(flash: &mut Nor, records: &[Record]) -> Vec<u32> {
+        let (_, _, mut minutes) = scan(flash);
+        if let Some(record) = records.iter().max_by_key(|record| record.as_of) {
+            minutes.extend(record.first..record.as_of);
+        }
+        minutes.sort_unstable();
+        minutes.dedup();
+        minutes
+    }
+
+    /// The morning after a night, settled and all in the log, with the
+    /// last checkpoint holding only the bucket under way. Then a reset,
+    /// which forgets the settling: at the boot's first run the night is
+    /// held again, so the log is due back to the night's start (see
+    /// `system_off::keep`). Whether a second reset anywhere in that run
+    /// (the power going after any number of writes) leaves every minute
+    /// in the log or a record, given the run's order.
+    fn a_reset_while_the_log_lets_go_keeps_the_night(record_first: bool) -> bool {
+        let night = NOON - NOON % 5;
+        let logged = night + 8 * 60 + 45;
+        let newest = logged + 3;
+        let writes = {
+            let mut flash = Nor::new(4);
+            let mut writer = Writer::EMPTY;
+            record(&mut flash, &mut writer, night..logged);
+            let before = flash.programs;
+            let mut records = Vec::new();
+            serve(
+                &mut flash,
+                &mut writer,
+                &mut records,
+                newest,
+                night,
+                record_first,
+            );
+            // And the record's save.
+            flash.programs - before + 1
+        };
+        (0..=writes + 1).all(|fuel| {
+            let mut flash = Nor::new(4);
+            let mut writer = Writer::EMPTY;
+            record(&mut flash, &mut writer, night..logged);
+            // The last checkpoint before the first reset: from where the
+            // log ended.
+            let mut records = Vec::new();
+            save(&mut flash, &mut records, newest, writer.through());
+            assert_eq!(records[0].first, logged);
+
+            flash.fuel = Some(fuel);
+            serve(
+                &mut flash,
+                &mut writer,
+                &mut records,
+                newest,
+                night,
+                record_first,
+            );
+            flash.power_on();
+            restored(&mut flash, &records) == (night..=newest).collect::<Vec<_>>()
+        })
+    }
+
+    #[test]
+    fn a_reset_while_the_log_lets_go_of_a_night_loses_none_of_it() {
+        assert!(a_reset_while_the_log_lets_go_keeps_the_night(true));
+        // The log first, as it was: a reset before the record is saved
+        // finds the night in neither. (What this test is for.)
+        assert!(!a_reset_while_the_log_lets_go_keeps_the_night(false));
+    }
+
+    #[test]
+    fn a_log_with_nothing_to_let_go_of_needs_no_record_first() {
+        assert_eq!(snapshot::taken_back(None, 100), None);
+        assert_eq!(snapshot::taken_back(Some(99), 100), None);
+        // From its last minute on, or further back.
+        assert_eq!(snapshot::taken_back(Some(100), 100), Some(99));
+        assert_eq!(snapshot::taken_back(Some(700), 100), Some(99));
+    }
 }
