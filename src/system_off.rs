@@ -553,7 +553,12 @@ pub async fn log_open(from: u32) -> Option<(spill::Reader, u32)> {
 }
 
 /// The log's next bucket for a fetch (see [`spill::bucket`]), its
-/// minutes' samples in `out`.
+/// minutes' samples in `want.out`.
+///
+/// After a bucket, the flash is left awake for the next (a wake and a
+/// sleep per bucket were a third of each read's time): the fetch reads on
+/// until one of these says there's no more, which puts it to sleep, or
+/// calls [`log_close`] if it stops before.
 pub async fn log_bucket(
     want: &mut spill::Want<'_, { gb_buckets::MINUTES as usize }>,
 ) -> spill::Read {
@@ -562,8 +567,18 @@ pub async fn log_bucket(
         return spill::Read::End;
     };
     let read = spill::bucket(flash, LOG, want).await;
-    flash.sleep().await;
+    if !matches!(read, spill::Read::Bucket(_)) {
+        flash.sleep().await;
+    }
     read
+}
+
+/// Puts the flash back to sleep after a fetch that stopped reading the
+/// log part-way (see [`log_bucket`]).
+pub async fn log_close() {
+    if let Some(flash) = FLASH.lock().await.as_mut() {
+        flash.sleep().await;
+    }
 }
 
 /// The header of a fresh record at `start` (see [`Header::from_bytes`]),

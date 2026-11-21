@@ -1565,6 +1565,10 @@ async fn send_activity(server: &Server<'_>, conn: &GattConnection<'_, '_, Pool>,
         // would only keep the phone waiting for the end.
         if !send(server, conn, message).await {
             complete = false;
+            // The log's reads left the flash awake for the next.
+            if log.is_some() {
+                crate::system_off::log_close().await;
+            }
             break;
         }
         sent += 1;
@@ -1723,8 +1727,11 @@ fn make_room_for_bond(stack: &Stack<'_, Controller, Pool>, conn: &GattConnection
 /// (it logs `no memory for packets`, or an error processing ACL data).
 /// Sending the buckets from `serve`'s loop, between events, would fix
 /// that. It matters more since a fetch can be of a week (see
-/// `crate::spill`): 2016 buckets, which a dev kit sent to a computer at
-/// 40 ms each, 80 s in all (a day's 288 took 12 s).
+/// `crate::spill`), 2016 buckets: a dev kit sent a computer 5 ms a
+/// bucket over a new connection (half of that reading the log), 10 s
+/// for a week, but 40 ms a bucket, 80 s for a week, over one that had
+/// been up for 20 minutes (at whatever interval the computer had by
+/// then; a build without the log wasn't timed over such a link).
 const PACKET_POLL: Duration = Duration::from_millis(10);
 
 /// Sends one message, split into notifications that fit the MTU, waiting

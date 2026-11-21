@@ -568,6 +568,10 @@ pub async fn open<F: Flash>(flash: &mut F, ring: Ring, from: u32) -> Option<(Rea
     ))
 }
 
+fn as_entry(bytes: &[u8]) -> &[u8; ENTRY] {
+    bytes.try_into().expect("ENTRY bytes")
+}
+
 /// What [`bucket`] found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Read {
@@ -604,61 +608,74 @@ pub async fn bucket<F: Flash, const N: usize>(
     ring: Ring,
     want: &mut Want<'_, N>,
 ) -> Read {
-    let mut bytes = [0; ENTRY];
-    flash
-        .read(address(ring, want.reader.sequence, 0), &mut bytes)
-        .await;
-    if decode(&bytes) != Entry::Header(want.reader.sequence) {
-        return Read::Lost;
+    {
+        let mut header = [0; ENTRY];
+        flash
+            .read(address(ring, want.reader.sequence, 0), &mut header)
+            .await;
+        if decode(&header) != Entry::Header(want.reader.sequence) {
+            return Read::Lost;
+        }
     }
     let mut found = Read::End;
-    loop {
+    // A few entries at a read: each read is most of a millisecond, with
+    // the phone waiting, and a bucket is up to N entries and a couple
+    // more (a week's fetch is 2016 buckets).
+    const AT_ONCE: u16 = 4;
+    let mut bytes = [0; AT_ONCE as usize * ENTRY];
+    'log: loop {
         let reader = &mut *want.reader;
         if reader.slot >= SLOTS {
             let next = reader.sequence.wrapping_add(1);
-            flash.read(address(ring, next, 0), &mut bytes).await;
-            if decode(&bytes) != Entry::Header(next) {
+            flash
+                .read(address(ring, next, 0), &mut bytes[..ENTRY])
+                .await;
+            if decode(as_entry(&bytes[..ENTRY])) != Entry::Header(next) {
                 break;
             }
             let reader = &mut *want.reader;
             (reader.sequence, reader.slot, reader.at) = (next, 1, 0);
         }
         let reader = &mut *want.reader;
+        let entries = AT_ONCE.min(SLOTS - reader.slot);
+        let read = &mut bytes[..usize::from(entries) * ENTRY];
         flash
-            .read(address(ring, reader.sequence, reader.slot), &mut bytes)
+            .read(address(ring, reader.sequence, reader.slot), read)
             .await;
         let reader = &mut *want.reader;
-        match decode(&bytes) {
-            Entry::Blank => break,
-            Entry::At(minute) => reader.at = minute,
-            Entry::Sample(sample) if reader.at != 0 => {
-                let minute = reader.at;
-                // Left for the next call, or the next fetch.
-                if minute >= want.end
-                    || matches!(found, Read::Bucket(first) if minute >= first + N as u32)
-                {
-                    break;
-                }
-                reader.at += 1;
-                if minute >= want.from && recorded(&sample) {
-                    let first = match found {
-                        Read::Bucket(first) => first,
-                        _ => {
-                            want.out = [None; N];
-                            minute - minute % N as u32
+        for entry in read.as_chunks::<ENTRY>().0 {
+            match decode(entry) {
+                Entry::Blank => break 'log,
+                Entry::At(minute) => reader.at = minute,
+                Entry::Sample(sample) if reader.at != 0 => {
+                    let minute = reader.at;
+                    // Left for the next call, or the next fetch.
+                    if minute >= want.end
+                        || matches!(found, Read::Bucket(first) if minute >= first + N as u32)
+                    {
+                        break 'log;
+                    }
+                    reader.at += 1;
+                    if minute >= want.from && recorded(&sample) {
+                        let first = match found {
+                            Read::Bucket(first) => first,
+                            _ => {
+                                want.out = [None; N];
+                                minute - minute % N as u32
+                            }
+                        };
+                        found = Read::Bucket(first);
+                        // In order, so never before the bucket's first.
+                        if let Some(place) = want.out.get_mut((minute - first) as usize) {
+                            *place = Some(sample);
                         }
-                    };
-                    found = Read::Bucket(first);
-                    // In order, so never before the bucket's first.
-                    if let Some(place) = want.out.get_mut((minute - first) as usize) {
-                        *place = Some(sample);
                     }
                 }
+                Entry::Void => reader.at = 0,
+                _ => {}
             }
-            Entry::Void => reader.at = 0,
-            _ => {}
+            reader.slot += 1;
         }
-        reader.slot += 1;
     }
     found
 }
