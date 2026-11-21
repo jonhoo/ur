@@ -172,6 +172,26 @@ pub type Log = spill::Writer;
 /// [`keep`]).
 static NOTE: AtomicBool = AtomicBool::new(false);
 
+/// The first minute the log should let go of at [`keep`]'s next run and
+/// take in again, or 0: see [`relog_from`].
+static RELOG: AtomicU32 = AtomicU32::new(0);
+
+/// Has the log take the minutes from `minute` on back, and in again as
+/// the history has them now, at [`serve`]'s next run: for minutes changed
+/// after they could be fetched, as a workout's first are, marked as
+/// exercise only once it's recognised (see `activity`). The log may have
+/// them already, as plain activity, and a fetch reads the log.
+///
+/// What the phone has fetched by now stays as it got it: this is for the
+/// phone that hasn't.
+pub fn relog_from(minute: i64) {
+    let minute = minute32(minute).max(1);
+    let _ = RELOG.try_update(Ordering::Relaxed, Ordering::Relaxed, |from| {
+        (from == 0 || minute < from).then_some(minute)
+    });
+    checkpoint();
+}
+
 /// A minute as the log has them: UTC minutes since 1970, in 32 bits.
 pub fn minute32(minute: i64) -> u32 {
     minute.clamp(0, i64::from(u32::MAX)) as u32
@@ -493,6 +513,14 @@ async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64) {
     if let Some(hold) = activity::gadgetbridge_hold() {
         end = end.min(gb_buckets::start_of(hold.from));
     }
+    // Where the log has to go back to, which is `end` unless minutes
+    // before it have changed since they went in (see `relog_from`): those
+    // go straight back in below, as they are now.
+    let relog = RELOG.swap(0, Ordering::Relaxed);
+    let back = match relog {
+        0 => end,
+        from => end.min(gb_buckets::start_of(i64::from(from))),
+    };
 
     // The log may reach past that, in two ways, and then lets go of every
     // bucket from there on, to take them in again when they can go (until
@@ -505,14 +533,20 @@ async fn keep(flash: &mut spi_flash::SpiFlash, writer: &mut Log, at_once: i64) {
     //   are being revised, so the copies in the log would go stale, and a
     //   fetch (or a boot) would get the sleep's start as awake. The next
     //   record has them, as it starts where the log ends.
+    // - A workout recognised: its first minutes, marked as exercise after
+    //   the fact (`back`, above).
     if writer
         .through()
-        .is_some_and(|logged| end <= i64::from(logged))
+        .is_some_and(|logged| back <= i64::from(logged))
     {
-        let from = minute32(end);
+        let from = minute32(back);
         debug!("spill: taking the log back to minute {}", from);
         if let Err(e) = spill::truncate(flash, LOG, writer, from).await {
             warn!("spill: taking back failed: {}", e);
+            // To try again at the next run.
+            if relog != 0 {
+                RELOG.store(relog, Ordering::Relaxed);
+            }
             return;
         }
     }

@@ -1834,6 +1834,10 @@ pub async fn activity_task(i2c: Device) {
                             .borrow_mut()
                             .exercised_since(utc_minute - minutes as i64)
                     });
+                    // Those the phone hasn't fetched are mostly in the
+                    // activity log already, as they were: it takes them
+                    // in again, for the fetch that reads them there.
+                    crate::system_off::relog_from(utc_minute - minutes as i64);
                 }
                 match (was, now) {
                     (None, Some(kind)) => info!(

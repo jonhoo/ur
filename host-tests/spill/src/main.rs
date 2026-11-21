@@ -658,6 +658,83 @@ mod tests {
     }
 
     #[test]
+    fn minutes_taken_back_go_in_again_as_they_are_then() {
+        // Twenty minutes of a walk, logged as plain activity (worn: the
+        // flags' bits 4 and 5 say 1). Then the watch recognises a
+        // workout, marks its last ten minutes as exercise (those bits
+        // say 3: see `activity::Sample::exercise`), and has the log take
+        // them in again, from their bucket's start.
+        const WORN: u8 = 0x40 | 0x10;
+        const EXERCISE: u8 = 0x40 | 0x30;
+        let walk = |minute: u32, flags: u8| [(minute % 200) as u8, 0, 9, 0, 0, flags];
+        let mut flash = Nor::new(4);
+        let ring = flash.ring;
+        let mut writer = Writer::EMPTY;
+        let start = NOON - NOON % 5;
+        for minute in start..start + 20 {
+            block_on(spill::append(
+                &mut flash,
+                ring,
+                &mut writer,
+                minute,
+                &walk(minute, WORN),
+            ))
+            .expect("power");
+        }
+        block_on(spill::truncate(&mut flash, ring, &mut writer, start + 10)).expect("power");
+        for minute in start + 10..start + 20 {
+            let sample = walk(minute, EXERCISE);
+            block_on(spill::append(
+                &mut flash,
+                ring,
+                &mut writer,
+                minute,
+                &sample,
+            ))
+            .expect("power");
+        }
+        let expected: Vec<(u32, [u8; SAMPLE])> = (start..start + 20)
+            .map(|minute| {
+                (
+                    minute,
+                    walk(minute, if minute < start + 10 { WORN } else { EXERCISE }),
+                )
+            })
+            .collect();
+
+        // A boot reads each minute once, the later ones as exercise, flags
+        // and all: the log keeps a sample's six bytes as they are.
+        let mut read = Vec::new();
+        block_on(spill::scan(&mut flash, ring, |minute, bytes| {
+            read.push((minute, *bytes))
+        }));
+        assert_eq!(read, expected);
+
+        // And so does a fetch.
+        let (mut reader, _) = block_on(spill::open(&mut flash, ring, start)).expect("a log");
+        let mut fetched = Vec::new();
+        let mut from = start;
+        loop {
+            let mut want = Want {
+                reader: &mut reader,
+                from,
+                end: start + 20,
+                out: [None; BUCKET],
+            };
+            let Read::Bucket(first) = block_on(spill::bucket(&mut flash, ring, &mut want)) else {
+                break;
+            };
+            fetched.extend(
+                (first..)
+                    .zip(want.out)
+                    .filter_map(|(m, bytes)| Some((m, bytes?))),
+            );
+            from = first + BUCKET as u32;
+        }
+        assert_eq!(fetched, expected);
+    }
+
+    #[test]
     fn a_clock_set_back_takes_the_later_minutes_back() {
         let mut flash = Nor::new(4);
         let ring = flash.ring;
