@@ -781,9 +781,10 @@ impl UiLoop {
             let daytime = board.daytime();
             app.set_daytime(daytime);
             // Into or out of the dim white-on-black look (a glance, a quiet
-            // notification, the hidden puzzle) with the panel lit: go dark for the redraw.
-            // Otherwise the old frame (often a light theme, at full
-            // backlight) flashes up while the new one is drawn over it.
+            // notification, the hidden puzzle) with the panel lit: go dark
+            // for the redraw. Otherwise the old frame (often a light theme,
+            // at full backlight) flashes up while the new one is drawn over
+            // it.
             let relighting = self.panel_awake && app.dim() != self.was_dim;
             if relighting {
                 board.backlight(brightness::Level::OFF);

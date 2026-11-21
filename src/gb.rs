@@ -593,8 +593,8 @@ fn phone_event(kind: &str, object: Object<'_>, bitmaps: &mut bool) -> Option<Pho
         // "eta":"11:55"}`: the next turn while the phone navigates, every
         // field optional; `{"t":"nav"}` when navigation ends (see `route`).
         "nav" => {
-            // Decoded at a size `text` is already used with (each size is
-            // another copy of it), then copied over, with
+            // Decoded at one size for both fields (each size `text` is
+            // used with is another copy of it), then copied over, with
             // Google Maps' no-break spaces (between number and unit), which
             // the font lacks, as plain ones.
             fn spaced<const N: usize>(
