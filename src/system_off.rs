@@ -341,6 +341,9 @@ async fn save(flash: &mut spi_flash::SpiFlash, start: u32, logged: Option<u32>) 
     .await;
     if let Err(e) = written {
         warn!("snapshot: saving at {=u32:#x} failed: {}", start, e);
+        // With no record written, the checkpoints are all there is: none
+        // is retired below for being newer than it.
+        return;
     }
     // The planned record must be the newest there is, for the boot after
     // it to restore: every checkpoint is of before it. But one can claim
