@@ -12,6 +12,13 @@ missing below were test builds for the dev kit.
 
 ## [Unreleased]
 
+This will be 0.12.0. Its candidates began as 0.11.3-rc.1 to rc.5, but
+what they add grew into a minor release: workouts, heart rate readings
+taken when the wrist goes still, and a week and more of activity kept
+on the watch until the phone fetches it, kept in a new area of the
+watch's storage that going back to 0.11.2 discards. So the candidates
+continue as 0.12.0-rc.1 on.
+
 ### Added
 
 - Take a heart rate from two strongly periodic readings in a row that agree, rather than waiting for a third, as long as the wrist isn't walking (a swinging arm can look like a slow pulse) (5d4d89a)
