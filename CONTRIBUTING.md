@@ -846,8 +846,10 @@ Some host-test crates replay decoded logs, to tune against real wrists:
     the rules went by: the last three minutes' steps (a walk is three at
     80 or more), and how many of the last ten moved hard (an effort is
     eight). `workout: now KIND (…)` when one turns into the other, and
-    `workout: over (…)` when it ends (three minutes under 40 steps, or
-    five without hard movement; `; asleep` if that's what ended it).
+    `workout: over (…)` when it ends (three minutes under 40 steps; or,
+    for an effort, five quiet minutes in a row or ten with none moving
+    hard, which reads `0/10 min moving`; `; asleep` if that's what ended
+    it).
   - **The session through it:** `heart: workout session (KIND)` when the
     sensor goes on for it (there's no `heart: due` line: the schedule
     didn't start it), and `heart: workout session over after S s` when

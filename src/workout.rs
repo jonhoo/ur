@@ -19,10 +19,31 @@
 //!   for minutes with none (see [`WALK_STEPS`]).
 //! - **Effort without steps** (weights, carrying, housework) is the wrist
 //!   moving hard for most of ten minutes (see [`EFFORT_MOVEMENT`]). This
-//!   one is a weaker sign, and it's untested on what it's meant for: the
-//!   one strength session of those two weeks (2026-11-12, the Garmin at
-//!   90-118) fell in a stretch the field log doesn't cover. Its false
-//!   starts are cheap (some LED time), so it errs towards starting.
+//!   one is a weaker sign: it can't tell a strength session from an
+//!   evening of busy hands, and it has seen one strength session
+//!   (2026-11-22, 26 minutes by the training app's record). What started
+//!   the effort there was the nine hard minutes of arriving and setting
+//!   up, a minute before the first set. The lifting alone wouldn't have:
+//!   9 of its 27 minutes were hard, the rest at 600-1900, since a wrist
+//!   that holds a bar hardly moves and the rests are longer than the
+//!   sets. So an effort is started by a busy stretch and kept by the odd
+//!   hard minute after it (see [`EFFORT_LAPSE_MINUTES`]).
+//!
+//! An effort's false starts aren't cheap unless they end. The sensor is
+//! on for every minute of a workout (that day's `power:` lines: 1128 s of
+//! LED in an hour that held 17 minutes of one, 210-270 s in the hours
+//! without), and the battery's reading fell a point for every ten minutes
+//! or so of it, twice that day: from 98% to 94% over an effort of 36
+//! minutes, and from 87% to 80% over one of 68, against a point an hour
+//! between the two. That second one was the strength session, still
+//! going 40 minutes after it when the log was fetched: moving about at
+//! home kept the wrist at 1000-1800, never quiet for five minutes in a
+//! row, which was all that ended an effort then. So the start errs
+//! towards starting, and the end mustn't err towards going on.
+//!
+//! TODO: that point per ten minutes is about three times what
+//! `heart`'s "Through a workout" and docs/power-plan.md reckon from an
+//! estimated ~2.8 mA; measure a continuous session's draw on the dev kit.
 //!
 //! The heart rate itself isn't part of the rule: a reading is exactly what
 //! a moving wrist rarely gives, so a rule that waited for an elevated one
@@ -135,22 +156,70 @@ pub const EFFORT_MOVEMENT: u16 = 2000;
 /// most LED for what it's sure of. Five of six starts twice as often for
 /// a median of 90.
 ///
-/// TODO: tune on a field log that has a strength session in it (the rule
-/// has never seen one); reps may well show up as bursts between rests
-/// rather than as eight busy minutes.
+/// TODO: a strength session that starts from a calm wrist wouldn't be
+/// found: the one seen (2026-11-22, see the module's docs) had 9 hard
+/// minutes in 27, in bursts between rests, and it was the busy stretch
+/// before it that made eight of ten, only just (with the minutes cut 15
+/// or 20 s later than the watch cut them, no effort starts until the
+/// wearer has packed up and left). A rule for bursts would need more sessions to set it by,
+/// and would start on more housework; a manual start is the sure way.
 pub const EFFORT_MINUTES: usize = 8;
 
-/// A minute's mean movement below which an effort has let up.
+/// A minute's mean movement below which the wrist has gone quiet.
 pub const EFFORT_END_MOVEMENT: u16 = 1000;
 
-/// Minutes below [`EFFORT_END_MOVEMENT`] in a row that end an effort:
-/// longer than a rest between sets.
+/// Quiet minutes (below [`EFFORT_END_MOVEMENT`]) in a row that end an
+/// effort: the wearer has sat down. Longer than a rest between sets,
+/// which had one or two such minutes at a time on 2026-11-22.
 pub const EFFORT_END_MINUTES: usize = 5;
+
+/// Minutes in a row without one at [`EFFORT_MOVEMENT`] that end an effort,
+/// however much the wrist still moves: the hard minutes have stopped
+/// coming.
+///
+/// Why not quiet alone: after a workout the wearer is up and about, at
+/// 1000-1800 a minute, and that is what the rests between sets look like
+/// too (on 2026-11-22: 600-1900 in the session, 540-1640 in the 19
+/// minutes after the wearer had left it). Only the hard minutes differ:
+/// as the watch cut the minutes, one came at least every fifth minute
+/// through the session, and one in the 34 minutes after the leaving.
+///
+/// Ten, the whole [`WINDOW`], because where the minutes are cut matters:
+/// as the watch cut them, the session's longest stretch without a hard
+/// minute was 4, but cut 4 s earlier a minute at 2028 becomes one at
+/// 1914, and the stretch 9. Replayed at 30 cuts 2 s apart, with an effort
+/// under way as the session began, it lasted the session at 10 of them
+/// with five minutes, 23 with seven or eight, 26 with nine, and all 30
+/// with ten. An effort that ends in a session doesn't start again (see
+/// [`EFFORT_MINUTES`]), so the session's readings are lost, which costs
+/// more than the minutes of LED: with ten the effort ends ten minutes
+/// after its last hard minute (the 8 minutes of packing up and leaving,
+/// at 2700-6300, are as hard as any and count as part of it), 19 after
+/// the training app's end, where it had run on for 40 and more.
+///
+/// On the earlier logs (2026-11-13 to 22, 8.8 days, 18 efforts) no effort
+/// starts that didn't, and none splits in two; four end sooner (152
+/// minutes to 47; 70 and more to 46; 66 to 21; 57 to 55), and the
+/// efforts' minutes go from 668 to 492. Seven minutes would make that
+/// 381, and lose the session at 7 cuts of the 30. Counting a minute as
+/// hard from 1800 lasted it at all 30 cuts with seven, for 414 minutes,
+/// but that is a second threshold, set by one session and with a minute
+/// to spare (as ten has here).
+///
+/// The heart rate is no help here either, though a workout has plenty of
+/// readings: it was mostly 76-109 through the session and still 75-98
+/// for the 19 minutes of moving about that followed, under 80 only once
+/// the wearer sat down, which the quiet minutes say too.
+pub const EFFORT_LAPSE_MINUTES: usize = 10;
 
 const _: () = assert!(WALK_MINUTES <= WINDOW && WALK_END_MINUTES <= WINDOW);
 const _: () = assert!(EFFORT_MINUTES <= WINDOW && EFFORT_END_MINUTES <= WINDOW);
+const _: () = assert!(EFFORT_LAPSE_MINUTES <= WINDOW);
 // What ends a workout can't also start it, or it would never end.
 const _: () = assert!(WALK_END_STEPS < WALK_STEPS && EFFORT_END_MOVEMENT < EFFORT_MOVEMENT);
+// Nor may an effort lapse in the minute it starts: the minutes that lapse
+// it leave too few others in the window to start one.
+const _: () = assert!(WINDOW - EFFORT_LAPSE_MINUTES < EFFORT_MINUTES);
 
 /// Whether a workout is under way, given whether one was (`current`) and
 /// the last [`WINDOW`] finished minutes, oldest first (a minute the watch
@@ -181,10 +250,15 @@ pub fn detect(current: Option<Kind>, recent: &[Minute; WINDOW], asleep: bool) ->
         {
             None
         }
+        // Quiet, or no longer working hard (see `EFFORT_LAPSE_MINUTES` for
+        // why quiet alone doesn't do).
         Some(Kind::Effort)
             if last(EFFORT_END_MINUTES)
                 .iter()
-                .all(|m| m.movement < EFFORT_END_MOVEMENT) =>
+                .all(|m| m.movement < EFFORT_END_MOVEMENT)
+                || last(EFFORT_LAPSE_MINUTES)
+                    .iter()
+                    .all(|m| m.movement < EFFORT_MOVEMENT) =>
         {
             None
         }

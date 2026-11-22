@@ -321,6 +321,150 @@ mod tests {
     }
 
     #[test]
+    fn an_effort_lapses_when_the_hard_minutes_stop_coming() {
+        // Up and about after it, never quiet: over ten minutes after the
+        // last hard one.
+        let day = [repeat(LIFTING, 10), repeat(POTTERING, 30)].concat();
+        let said = run(&day);
+        assert!(said[7..19].iter().all(|&kind| kind == Some(Kind::Effort)));
+        assert!(said[19..].iter().all(Option::is_none));
+        // One hard minute in ten keeps it going, and one alone afterwards
+        // doesn't start it again.
+        let mut day = repeat(LIFTING, 10);
+        for _ in 0..3 {
+            day.extend(repeat(POTTERING, 9));
+            day.push(LIFTING);
+        }
+        day.extend(repeat(POTTERING, 12));
+        day.push(LIFTING);
+        day.extend(repeat(POTTERING, 5));
+        let said = run(&day);
+        assert!(said[7..49].iter().all(|&kind| kind == Some(Kind::Effort)));
+        assert!(said[49..].iter().all(Option::is_none));
+    }
+
+    // ------------------------------------------------------------------
+    // The strength session of 2026-11-22
+    // ------------------------------------------------------------------
+    //
+    // The one strength session a field log has (0.12.0-rc.1, the sealed
+    // watch): each minute's mean movement and steps from 19:12 UTC, 85
+    // minutes, as this crate's replay gathers them from the log.
+    //
+    // - 19:19-19:27 (from index 7): arriving and setting up, nine hard
+    //   minutes. The watch said Effort as 19:26 ended.
+    // - 19:27:44-19:54:13 (15 to 42): the session, by the training app's
+    //   record. Sets and rests: 9 minutes of 27 are hard.
+    // - 19:55-20:02 (43 to 50): packing up and leaving, all hard.
+    // - 20:03 on (51): moving about at 540-1900 with one hard minute
+    //   (20:22, index 70), then sitting down at 20:28 (76). The watch,
+    //   which then ended an effort only on five quiet minutes in a row,
+    //   was still measuring at 20:36, where the log ends.
+
+    /// The session's first minute, and its last.
+    const SESSION: std::ops::RangeInclusive<usize> = 15..=42;
+    /// The last hard minute of leaving.
+    const LEFT: usize = 50;
+
+    /// As the watch cut the minutes. The longest stretch without a hard
+    /// minute in the session is 4.
+    #[rustfmt::skip]
+    const STRENGTH: [(u16, u16); 85] = [
+        (893, 16), (378, 0), (779, 0), (1515, 8), (1233, 0), (1085, 0),
+        (1232, 6), (3103, 30), (3535, 26), (2647, 26), (2753, 64), (4621, 74),
+        (4987, 128), (3944, 56), (5459, 52), (2567, 56), (1784, 22), (879, 10),
+        (1794, 28), (2028, 10), (900, 0), (1050, 0), (1040, 16), (806, 6),
+        (2057, 12), (2565, 46), (1246, 40), (600, 0), (2450, 28), (2212, 36),
+        (1120, 12), (2613, 12), (1777, 6), (616, 0), (2674, 38), (1486, 10),
+        (1645, 30), (1513, 40), (2601, 24), (1890, 28), (1749, 42), (1325, 6),
+        (2285, 30), (2834, 80), (4034, 38), (6310, 42), (3608, 66), (4440, 116),
+        (2672, 80), (2934, 18), (3247, 2), (1164, 22), (1189, 0), (1238, 20),
+        (782, 0), (1236, 0), (539, 0), (1635, 24), (1463, 18), (1186, 6),
+        (867, 0), (1011, 0), (803, 0), (1049, 12), (1094, 8), (1431, 16),
+        (1581, 0), (1506, 0), (980, 0), (1078, 14), (4356, 42), (1349, 28),
+        (1857, 12), (1865, 18), (1854, 26), (1101, 26), (555, 0), (679, 0),
+        (416, 0), (247, 0), (1455, 0), (268, 0), (317, 0), (315, 0),
+        (313, 0),
+    ];
+
+    /// The same polls with each minute cut 4 s earlier, which is as
+    /// likely a place for the watch's clock to put them: the borderline
+    /// minutes fall the other way (2028 becomes 1914, 2057 becomes 1773),
+    /// and the session's first nine minutes have no hard one.
+    #[rustfmt::skip]
+    const STRENGTH_CUT_EARLIER: [(u16, u16); 85] = [
+        (969, 22), (418, 0), (783, 0), (1419, 8), (1315, 0), (990, 0),
+        (1243, 6), (3070, 30), (3410, 26), (2826, 24), (2357, 58), (4720, 72),
+        (5026, 132), (4033, 60), (5293, 52), (2861, 58), (1918, 22), (793, 10),
+        (1781, 28), (1914, 10), (961, 0), (1177, 0), (988, 16), (790, 6),
+        (1773, 10), (2793, 48), (1409, 40), (476, 0), (2432, 28), (2248, 30),
+        (1099, 18), (2662, 12), (1858, 6), (542, 0), (2649, 34), (1508, 14),
+        (1575, 30), (1579, 40), (2568, 24), (1885, 22), (1677, 48), (1328, 6),
+        (2393, 30), (2767, 74), (3749, 38), (6400, 44), (3650, 62), (4504, 116),
+        (2747, 88), (2956, 12), (3205, 8), (1224, 22), (1204, 0), (1283, 20),
+        (727, 0), (1280, 0), (469, 0), (1770, 24), (1187, 18), (1421, 6),
+        (840, 0), (1044, 0), (836, 0), (1033, 12), (1078, 8), (1368, 16),
+        (1558, 0), (1516, 0), (1075, 0), (1024, 14), (4393, 42), (1254, 28),
+        (1937, 12), (1801, 18), (1837, 26), (1237, 26), (537, 0), (692, 0),
+        (412, 0), (182, 0), (1477, 0), (312, 0), (320, 0), (313, 0),
+        (314, 0),
+    ];
+
+    fn strength(minutes: &[(u16, u16)]) -> Vec<Option<Kind>> {
+        let minutes: Vec<Minute> = minutes
+            .iter()
+            .map(|&(movement, steps)| Minute { steps, movement })
+            .collect();
+        run(&minutes)
+    }
+
+    #[test]
+    fn the_strength_session_starts_as_the_watch_started_it() {
+        for minutes in [&STRENGTH, &STRENGTH_CUT_EARLIER] {
+            let said = strength(minutes);
+            // Not on the way in; as 19:26 ends, a minute before the first
+            // set. Never a walk: 128 steps came in one minute, not three.
+            assert!(said[..14].iter().all(Option::is_none));
+            assert_eq!(said[14], Some(Kind::Effort));
+            assert!(!said.contains(&Some(Kind::Walk)));
+        }
+    }
+
+    #[test]
+    fn the_strength_session_lasts_through_its_rests() {
+        for minutes in [&STRENGTH, &STRENGTH_CUT_EARLIER] {
+            let said = strength(minutes);
+            assert!(
+                said[SESSION].iter().all(|&kind| kind == Some(Kind::Effort)),
+                "{said:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_strength_session_ends_ten_minutes_after_the_wearer_leaves() {
+        for minutes in [&STRENGTH, &STRENGTH_CUT_EARLIER] {
+            let said = strength(minutes);
+            // Packing up is as hard as lifting, and part of it; then ten
+            // minutes of moving about, none of them quiet enough to have
+            // ended it before.
+            assert!(
+                said[*SESSION.end()..LEFT + EFFORT_LAPSE_MINUTES]
+                    .iter()
+                    .all(|&kind| kind == Some(Kind::Effort))
+            );
+            // And over from there on: the hard minute at 20:22 doesn't
+            // start another.
+            assert!(
+                said[LEFT + EFFORT_LAPSE_MINUTES..]
+                    .iter()
+                    .all(Option::is_none),
+                "{said:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_walk_takes_over_from_an_effort_and_hands_back() {
         // Working, then a walk, then working on: one workout throughout.
         let day = [

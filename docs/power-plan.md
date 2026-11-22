@@ -408,8 +408,9 @@ tries when due alone made 330).
 
 From 0.11.3-rc.5 the sensor stays on through a workout (`workout`;
 `heart`'s "Through a workout"): three minutes at a walking pace, or
-eight minutes of ten with the wrist moving hard, until the wrist has let
-up for three or five minutes. A moving wrist only reads in its pauses,
+eight minutes of ten with the wrist moving hard, until three minutes
+without walking, or (for hard movement) five quiet minutes in a row or
+ten with none of them hard. A moving wrist only reads in its pauses,
 and a sensor that's already on catches a pause of ~14 s where a session
 needs ~18 s; the sealed watch's logs of 2026-11-07 to 20 held 18 such
 pauses in walks and 90 in efforts, where sessions read 4 and 18 times.
@@ -422,7 +423,19 @@ never measured), that's ~3.2 mAh a day, ~2% of the battery (~5.5 mAh on
 a trip's days, ~13 on that busiest one), on top of the schedule's own,
 and outside its budget: a workout's session is charged to `LED_BUDGET` as one
 session, however long it runs. Nothing caps a workout's length but the
-wrist: it needs steps or hard movement to go on. The level control can
+wrist: it needs steps or hard movement to go on. (Until 0.12.0-rc.1 an
+effort needed only not to go quiet, and one ran on for 40 minutes and
+more after a strength session, on 2026-11-22; with the end rule since,
+the efforts' minutes over the logs of 2026-11-13 to 22 fall by a quarter,
+668 to 492 in 8.8 days. The figures above are from before it.)
+
+That same day says the estimate is low: the battery's reading fell a
+point for every ten minutes or so of a workout's session (98% to 94%
+over 36 minutes, 87% to 80% over 68, nearly all of it at the lowest
+drive level), against a point an hour between the two. That's about
+three times what ~2.8 mA would take, so a day's 68 minutes would be
+nearer 7% than 2%. TODO: measure a continuous session's draw on the dev
+kit. The level control can
 raise the drive (30 mA at level 2, which the sealed watch's wrist is
 sometimes at), and then the LED's share is up to 2.4× that.
 
