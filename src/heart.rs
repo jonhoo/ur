@@ -105,7 +105,9 @@ fn held() -> bool {
 // What it costs is LED time: ~68 minutes a day on those logs (117 on the
 // days of a trip, 280 on the busiest), ~3.2 mAh at the ~2.8 mA a session
 // draws, some 2% of the battery, which the user would rather spend than
-// lose the readings (see docs/power-plan.md).
+// lose the readings (see docs/power-plan.md). The battery's own reading
+// on the first days of workouts says about three times that: a point per
+// ten minutes of one (see `workout`'s TODO on measuring it).
 // It isn't charged to the schedule's budget beyond one session's worth
 // (`heart_schedule::SESSION_RESERVE`): the budget is there to bound what
 // a day of failing tries can cost, and a workout bounds itself (it needs

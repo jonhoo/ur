@@ -161,8 +161,9 @@ pub const EFFORT_MOVEMENT: u16 = 2000;
 /// minutes in 27, in bursts between rests, and it was the busy stretch
 /// before it that made eight of ten, only just (with the minutes cut 15
 /// or 20 s later than the watch cut them, no effort starts until the
-/// wearer has packed up and left). A rule for bursts would need more sessions to set it by,
-/// and would start on more housework; a manual start is the sure way.
+/// wearer has packed up and left). A rule for bursts would need more
+/// sessions to set it by, and would start on more housework; a manual
+/// start is the sure way.
 pub const EFFORT_MINUTES: usize = 8;
 
 /// A minute's mean movement below which the wrist has gone quiet.
