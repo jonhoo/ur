@@ -129,10 +129,11 @@ mod tests {
         // this cell's begins at ~3.83 V).
         assert_eq!(charge_percent(3717), 19);
         assert_eq!(charge_percent(3756), 31);
-        assert_eq!(charge_percent(3830), 57);
+        assert_eq!(charge_percent(3830), 56);
         assert_eq!(charge_percent(4000), 81);
-        // The plateau: 26 points in 44 mV, and as many in the 170 above.
-        assert!(charge_percent(3800) - charge_percent(3756) >= 18);
+        // The plateau: 25 points in the 74 mV under 3.83 V, and as many
+        // in the 170 above.
+        assert!(charge_percent(3800) - charge_percent(3756) >= 17);
         assert!(charge_percent(3750) < 30);
         // And it goes on at that slope to where the data ends, 3.717 V,
         // rather than bending at 3.735 V as the first fit's guess did (18%
@@ -140,14 +141,28 @@ mod tests {
         assert_eq!(charge_percent(3735), 24);
     }
 
+    #[test]
+    fn the_curve_has_the_knee_where_the_run_to_empty_found_it() {
+        // The plateau's slope holds to ~3.67 V, where 7% is left; the
+        // guess before the run had it hold to 3.64 V (3%).
+        assert_eq!(charge_percent(3665), 7);
+        assert_eq!(charge_percent(3640), 5);
+        // From there the voltage falls fast, so the last points take
+        // many millivolts each: 100 mV over the switch-off is 1%.
+        assert_eq!(charge_percent(3620), 4);
+        assert_eq!(charge_percent(3500), 1);
+        assert_eq!(charge_percent(3454), 0);
+    }
+
     /// The sealed watch's two longest discharges from a full charge, as
     /// (hours on battery, mV at rest: the median of the 10-minute lines
     /// within 25 minutes), every six hours: the trip of 2026-11-16 to
-    /// 11-20 with the night after it, and 11-13 to 11-16 before it. (The
-    /// trip's last two are 20 mV over what the watch logged: an update at
+    /// 11-20 with the day and two nights after it, to the switch-off for
+    /// an empty battery at 135.8 hours; and 11-13 to 11-16 before it. (The
+    /// trip's last six are 20 mV over what the watch logged: an update at
     /// 105 hours rebooted it, and that boot reads 20 mV lower; see "each
     /// boot reads a little differently" by the curve.)
-    const TRIP: [(u32, u32); 20] = [
+    const TRIP: [(u32, u32); 24] = [
         (0, 4181),
         (6, 4131),
         (12, 4095),
@@ -168,6 +183,10 @@ mod tests {
         (102, 3746),
         (108, 3730),
         (114, 3717),
+        (120, 3685),
+        (126, 3668),
+        (132, 3545),
+        (136, 3420),
     ];
     const BEFORE_THE_TRIP: [(u32, u32); 13] = [
         (0, 4178),
@@ -205,19 +224,21 @@ mod tests {
         // weighted by load and to all six discharges, which is why the
         // one before the trip isn't closer. (InfiniTime's curve strayed
         // 5.9 and 5.7 points: it stalled from 3.83 V, then caught up.)
+        // The trip strays most at 114 hours (2.6 points over the line):
+        // its last day at home was busier than the days away, so the
+        // charge fell faster by the clock from there.
         let trip = strays(&TRIP);
-        assert!(trip <= 2.5, "the trip strays {trip:.1} points");
+        assert!(trip <= 3.0, "the trip strays {trip:.1} points");
         let before = strays(&BEFORE_THE_TRIP);
         assert!(
             before <= 5.0,
             "the discharge before strays {before:.1} points"
         );
-        // And at the trip's rate, a charge lasts five to six days. (Below
-        // where its readings end, 3.717 V, the curve is extrapolated, to
-        // err short.)
+        // And the trip's readings end where the watch switched off, at
+        // 0%, after five to six days.
         let (hours, mv) = TRIP[TRIP.len() - 1];
-        let used = 100.0 - f64::from(charge_percent(mv));
-        let days = f64::from(hours) * 100.0 / used / 24.0;
+        assert_eq!(charge_percent(mv), 0);
+        let days = f64::from(hours) / 24.0;
         assert!((5.0..6.5).contains(&days), "{days:.1} days a charge");
     }
 

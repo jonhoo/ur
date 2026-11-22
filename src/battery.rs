@@ -36,11 +36,29 @@
 // with it lit), which this margin absorbs; a reading high by 100 mV
 // shuts down at ~5% left, which costs little.
 //
-// TODO: no watch of ours has reached this in the field yet (the sealed
-// watch's lowest logged reading is 3.69 V, 2026-11-21), so neither the
-// threshold nor the save under a nearly empty cell's sag is checked
-// against a real cell's knee; the first log of a run to empty should be
-// read for both.
+// Those figures are a generic cell's. The sealed watch has run into the
+// threshold once, from a full charge, on 2026-11-22 (135.8 hours on
+// battery, the last 31 in one boot of the logging build), and its log
+// bears the threshold out:
+//
+// - The knee is at ~3.65 V as that boot read it, 8.5 hours before the
+//   switch-off. From there the fall steepens steadily, with no cliff:
+//   2 mV an hour on the plateau, 25 from 3.60 V to 3.50 V, 37 from 3.50 V
+//   to 3.40 V, 44 over the last hour (asleep, so at a light load).
+// - The last 100 mV held 2.7 hours, about 2% of a charge: this cell has
+//   less at 3.5 V than the 5% above, and so probably less at 3.4 V than
+//   the 2–3%. What's below 3.40 V stays unmeasured, as the watch
+//   switched off there.
+// - The save worked: 4.3 s from the decision to System OFF, and the boot
+//   on the charger 2.2 hours later put the saved minutes back. (How far
+//   the voltage sagged under it isn't logged.)
+//
+// So nothing in it argues for moving the threshold. Lower would buy an
+// hour or two at most, at a voltage falling 44 mV an hour and steepening
+// towards the regulator's limit, out of a reserve that's smaller than
+// assumed; higher would give up 2.7 hours per 100 mV for margin the run
+// didn't need. A boot that reads 20 mV off switches off half an hour
+// sooner or later.
 //
 // This goes by the smoothed voltage itself, not [`Battery::percent`]: the
 // percentage deliberately lags (see below), and switching off must not.
@@ -68,40 +86,37 @@ const IMPLAUSIBLE_MV: u32 = 2500;
 // time weighted by the hour's metered load (the `power:` lines), against
 // the voltage at rest (the median of the 10-minute `battery:` lines
 // within 25 minutes, which drops the sag of a lit screen or LED), over
-// the sealed watch's six discharges of 2026-11-07 to 11-21, aligned by
-// voltage on the longest, the trip of 11-16 to 11-20 and the night after
-// it (115 hours, from a full charge to 3717 mV). They agree within
-// ~3 hours of each other, and the fit's residual is 1.3 points.
-// (`tmp/rc4/battery-curve` has the scripts.)
+// the sealed watch's six discharges of 2026-11-07 to 11-22, aligned by
+// voltage on the longest, which ran from a full charge to the switch-off
+// at `CRITICAL_MV`: the trip of 11-16 to 11-20, and the day and two
+// nights after it (135.8 hours). They agree within ~3 hours of each
+// other, and the fit's residual is 1.2 points. (`tmp/rc4/battery-curve`,
+// `tmp/battery-bottom` and `tmp/battery-empty` have the scripts.)
 //
 // - Full: the watch settles at 4.14–4.15 V within hours of a full charge
 //   (4.18 V as it comes off), so 100% is at 4.15 V.
-// - 4.15 V to 3.717 V is measured: 102 hours at the mean load. The cell
-//   flattens from ~3.83 V, and below 3.80 V it falls at a steady
-//   ~0.45 h/mV as far as the data goes (0.15 h/mV at the top, 0.3 at
-//   3.81 V). The curve this replaces (InfiniTime's, 3.776 V 48%, 3.979 V
-//   79%) had the plateau start 50 mV lower, so the percentage stalled
-//   through 3.83–3.78 V (55% to 42% in 31 hours) and then made up for it.
-//   The last 39 mV of that are the evening and night after the trip
-//   (2026-11-20 and 21, to 114 hours on battery): the first fit ended at
-//   3.756 V, and bent there into a guess that turned out up to 9 points
-//   under the charge the logs then counted (18% at 3.735 V, where they
-//   say 25%). (`tmp/battery-bottom` has those scripts.)
-// - **Below 3.717 V is extrapolated**: no discharge of this watch has
-//   gone lower. A charge is taken to last 126.5 hours at the mean load
-//   (5.3 days), so 24 are left there, and 3.717 V is 19%. That total was
-//   set when the data ended at 3.756 V, as 40 hours below it, where the
-//   evidence spans ~28 to ~56 hours: InfiniTime's curve says 38% is left
-//   at 3.756 V at rest; the same curve read 30 mV higher (it fits the dev
-//   kit's run to flat of 2026-11-10 under a steady load, which sags the
-//   voltage about that much) says 23%; a generic LiPo table says ~26%.
-//   The 15 hours measured since neither stretch nor shrink it: the
-//   voltage kept the plateau's slope, with no knee yet. The shape below
-//   is InfiniTime's (a slope to ~3.62 V, then the knee), moved up 25 mV.
-//   So it errs low: if the cell holds more, the last fifth falls slower
-//   than the rest, which is the safe way to be wrong.
+// - A charge lasts 125.4 hours at the mean load (5.2 days), and that is
+//   now measured. The two fits before this one had to assume it, as their
+//   data ended at 3.756 V and then 3.717 V: 126.5 hours, from InfiniTime's
+//   curve and a generic LiPo table, whose answers spanned 28 hours. It
+//   was 1% long, so the points above 3.717 V moved by a point at most.
+// - 4.15 V to ~3.67 V is the plateau. The cell flattens from ~3.83 V, and
+//   from 3.80 V it falls at ~0.4 h/mV (0.3 to 0.55; 0.15 at the top) for
+//   52 hours. InfiniTime's curve, which the first fit replaced (3.776 V
+//   48%, 3.979 V 79%), had the plateau start 50 mV lower, so the
+//   percentage stalled through 3.83–3.78 V (55% to 42% in 31 hours) and
+//   then made up for it.
+// - The knee is at ~3.67 V, with 7% left: 9 hours at the mean load, in
+//   which the voltage falls ever faster (0.07 h/mV to 3.62 V, 0.03 below;
+//   see "Critically low" above for the run's last hours). The guess this
+//   replaces (InfiniTime's shape moved up 25 mV: 3.640 V 3%) had the knee
+//   25 mV too low and read up to 3 points under from there down to
+//   3.45 V; it was meant to err low, and did.
 // - Empty: 0% is at `CRITICAL_MV`, where the watch saves and switches off:
-//   "0%" should mean it's about to.
+//   "0%" should mean it's about to. The run's last 31 hours are in a boot
+//   that reads 20 mV under the trip's (see below), which the fit takes
+//   out, so that boot's switch-off is at 3.42 V here, and the curve's
+//   last 20 mV are its last slope carried on (half an hour).
 //
 // The voltages are as the trip's boot read them, and **each boot reads a
 // little differently**: across the twelve reboots on battery in the field
@@ -111,13 +126,13 @@ const IMPLAUSIBLE_MV: u32 = 2500;
 // constant voltage lower (4.185–4.188 V against 4.200–4.202 V). That's
 // the SAADC's offset calibration at boot (`adc.calibrate()`), it seems,
 // landing differently each time. On the plateau 10 mV is 3–5 points, so
-// the percentage can step by that much across an update (the night's
+// the percentage can step by that much across an update (the run's last
 // boot reads 20 mV under the trip's: 3.738 V before the update, 3.718 V
 // after, and the fit takes that step out).
 //
-// TODO: a run from full to `CRITICAL_MV` at the sealed watch's own load
-// would fit the part below 3.717 V, and say how long a charge lasts,
-// which sets every percentage above it too (they'd all scale).
+// TODO: below 3.717 V the fit is one discharge of one cell. A second run
+// to `CRITICAL_MV` would say how well the knee and the total repeat, and
+// one some months on how the cell's ageing moves them.
 //
 // TODO: make a boot's reading repeatable (calibrate the SAADC more than
 // once and keep a middle result, or not at all, with a fixed offset):
@@ -126,16 +141,17 @@ const IMPLAUSIBLE_MV: u32 = 2500;
 
 /// Open-circuit voltage (mV) against charge (%), for the PineTime's cell at
 /// its light load, piecewise linear between the points; see above.
-const CHARGE_CURVE: [(u16, u8); 9] = [
+const CHARGE_CURVE: [(u16, u8); 10] = [
     (CRITICAL_MV as u16, 0),
-    // Extrapolated, up to here.
-    (3640, 3),
-    // Measured, from here.
+    // The knee.
+    (3620, 4),
+    (3665, 7),
+    // The plateau.
     (3717, 19),
     (3756, 31),
-    (3780, 43),
-    (3800, 49),
-    (3830, 57),
+    (3780, 42),
+    (3800, 48),
+    (3830, 56),
     (4000, 81),
     (4150, 100),
 ];
