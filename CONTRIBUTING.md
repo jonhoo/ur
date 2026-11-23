@@ -445,6 +445,21 @@ behaviour) both run the host tests unchanged. Neither found anything in
 November 2026; Miri can't run `ppg` (libm's x86 square root is inline
 assembly) and takes over 15 minutes on `gb`, `mcuboot` and `sleep`.
 
+### Coverage
+
+`scripts/coverage.sh OUT` measures line and branch coverage of the
+firmware's modules (src/) through every host-test crate and the
+simulator, and of the simulator (sim/src/) through its tests, merged
+into one report: `OUT/html/index.html`, line by line, and
+`OUT/summary.md`, each file least covered first, with the functions no
+test reaches, and the files of src/ that no test builds at all (the
+hardware's). It needs [cargo-llvm-cov] and the nightly verify.yml pins,
+with `llvm-tools`; `scripts/coverage.sh OUT host-tests/alarm` does just
+one crate. It's for finding what's untested, not a target: no number
+fails it.
+
+[cargo-llvm-cov]: https://github.com/taiki-e/cargo-llvm-cov
+
 ## A dev kit
 
 A PineTime dev kit is a PineTime with its SWD port exposed. With a debug
