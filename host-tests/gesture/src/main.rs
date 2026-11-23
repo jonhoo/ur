@@ -90,6 +90,55 @@ mod tests {
         );
         // Mostly sideways is sideways.
         assert_eq!(touch((120, 120), (60, 90), 150).gesture, Gesture::SwipeLeft);
+        // Exactly as far sideways as up or down is up or down, as
+        // `any_touch_is_told_apart_as_documented` has it.
+        for (to, swipe) in [
+            ((120 - far, 120 - far), Gesture::SwipeUp),
+            ((120 + far, 120 - far), Gesture::SwipeUp),
+            ((120 - far, 120 + far), Gesture::SwipeDown),
+            ((120 + far, 120 + far), Gesture::SwipeDown),
+        ] {
+            assert_eq!(touch((120, 120), to, 150).gesture, swipe, "to {to:?}");
+        }
+    }
+
+    /// Only a drag is one: no touch's own event is, whatever it was.
+    #[test]
+    fn only_a_drag_is_a_drag() {
+        let _clock = clock();
+        let far = SWIPE_DISTANCE;
+        let tap = touch((120, 120), (120, 120), 80);
+        let swipe = touch((120, 120), (120, 120 + far), 150);
+        let long_press = touch((120, 120), (120, 120), LONG_PRESS.as_millis());
+        for event in [tap, swipe, long_press] {
+            assert!(!event.is_drag(), "{:?}", event.gesture);
+        }
+        let mut tracking = Tracking::new((120, 120));
+        tracking.moved_to((120, 120 + 3 * far));
+        let drag = tracking.drag().expect("on its way down");
+        assert!(drag.is_drag());
+        assert!(!tracking.release().is_drag());
+    }
+
+    /// A touch's times are the clock's as the touch saw it: it started
+    /// when the finger landed, and ended as long after as it was held,
+    /// wrapping with the milliseconds since boot.
+    #[test]
+    fn a_touch_is_timed_as_it_happened() {
+        let _clock = clock();
+        // Well into the run, so that a touch at boot (0) proves nothing.
+        wait(12_345);
+        let landed = embassy_time::Instant::now();
+        let tap = touch((120, 120), (120, 120), 80);
+        assert_eq!(tap.start_ms, landed.as_millis() as u32);
+        assert_eq!(millis(landed), tap.start_ms);
+        assert_eq!(tap.end_ms(), tap.start_ms + 80);
+        // A touch across the wrap, 49 days after boot, ends after it.
+        let across = Touch {
+            start_ms: u32::MAX - 9,
+            ..tap
+        };
+        assert_eq!(across.end_ms(), 70);
     }
 
     #[test]
