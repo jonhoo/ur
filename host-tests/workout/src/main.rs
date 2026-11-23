@@ -410,7 +410,9 @@ mod tests {
         (314, 0),
     ];
 
-    fn strength(minutes: &[(u16, u16)]) -> Vec<Option<Kind>> {
+    /// What [`detect`] says of a field log's minutes, each its mean
+    /// movement and its steps.
+    fn replay(minutes: &[(u16, u16)]) -> Vec<Option<Kind>> {
         let minutes: Vec<Minute> = minutes
             .iter()
             .map(|&(movement, steps)| Minute { steps, movement })
@@ -421,7 +423,7 @@ mod tests {
     #[test]
     fn the_strength_session_starts_as_the_watch_started_it() {
         for minutes in [&STRENGTH, &STRENGTH_CUT_EARLIER] {
-            let said = strength(minutes);
+            let said = replay(minutes);
             // Not on the way in; as 19:26 ends, a minute before the first
             // set. Never a walk: 128 steps came in one minute, not three.
             assert!(said[..14].iter().all(Option::is_none));
@@ -433,7 +435,7 @@ mod tests {
     #[test]
     fn the_strength_session_lasts_through_its_rests() {
         for minutes in [&STRENGTH, &STRENGTH_CUT_EARLIER] {
-            let said = strength(minutes);
+            let said = replay(minutes);
             assert!(
                 said[SESSION].iter().all(|&kind| kind == Some(Kind::Effort)),
                 "{said:?}"
@@ -444,7 +446,7 @@ mod tests {
     #[test]
     fn the_strength_session_ends_ten_minutes_after_the_wearer_leaves() {
         for minutes in [&STRENGTH, &STRENGTH_CUT_EARLIER] {
-            let said = strength(minutes);
+            let said = replay(minutes);
             // Packing up is as hard as lifting, and part of it; then ten
             // minutes of moving about, none of them quiet enough to have
             // ended it before.
@@ -465,8 +467,8 @@ mod tests {
     }
 
     #[test]
-    fn a_walk_takes_over_from_an_effort_and_hands_back() {
-        // Working, then a walk, then working on: one workout throughout.
+    fn a_walk_takes_over_from_an_effort_which_starts_afresh_after_it() {
+        // Working, then a walk, then working on.
         let day = [
             repeat(LIFTING, 10),
             repeat(WALKING, 10),
@@ -475,11 +477,104 @@ mod tests {
         .concat();
         let said = run(&day);
         assert_eq!(said[9], Some(Kind::Effort));
-        assert_eq!(said[12], Some(Kind::Walk));
-        // The walk's steps stop, but the wrist is still at it (the walk's
-        // own minutes moved enough to count).
-        assert_eq!(said[22], Some(Kind::Effort));
-        assert!(said[7..].iter().all(Option::is_some));
+        assert!(said[12..22].iter().all(|&kind| kind == Some(Kind::Walk)));
+        // The walk's steps have stopped for three minutes. Its own
+        // minutes moved hard enough to count, and don't: three of lifting
+        // aren't an effort yet.
+        assert!(said[22..27].iter().all(Option::is_none), "{said:?}");
+        // Eight are, as from a desk.
+        assert!(said[27..].iter().all(|&kind| kind == Some(Kind::Effort)));
+    }
+
+    #[test]
+    fn a_walk_then_hard_work_without_steps_becomes_an_effort() {
+        // Walking to the gym, then lifting: the effort is found by its
+        // own minutes, eight after the walking, with the walk over three
+        // minutes after its steps.
+        let day = [repeat(DESK, 5), repeat(WALKING, 15), repeat(LIFTING, 30)].concat();
+        let said = run(&day);
+        assert!(said[7..22].iter().all(|&kind| kind == Some(Kind::Walk)));
+        assert!(said[22..27].iter().all(Option::is_none), "{said:?}");
+        assert!(said[27..].iter().all(|&kind| kind == Some(Kind::Effort)));
+        // A walk that slows to a stop-and-go shuffle and never pauses
+        // (so it's still under way) hands over directly once that's so.
+        let shuffling = Minute {
+            steps: 50,
+            movement: 2600,
+        };
+        let day = [
+            repeat(WALKING, 10),
+            repeat(shuffling, 8),
+            repeat(LIFTING, 5),
+        ]
+        .concat();
+        let said = run(&day);
+        assert!(said[2..20].iter().all(|&kind| kind == Some(Kind::Walk)));
+        assert!(said[20..].iter().all(|&kind| kind == Some(Kind::Effort)));
+    }
+
+    #[test]
+    fn hard_minutes_count_from_the_last_run_of_walking() {
+        let window =
+            |minutes: &[Minute]| -> [Minute; WINDOW] { minutes.try_into().expect("ten minutes") };
+        // No walking: all of them.
+        assert_eq!(hard_since_walking(&[LIFTING; WINDOW]), 10);
+        assert_eq!(hard_since_walking(&[DESK; WINDOW]), 0);
+        // A minute or two at pace is crossing a room, and counts as the
+        // hard minute it is.
+        let crossing = [repeat(LIFTING, 4), repeat(WALKING, 2), repeat(LIFTING, 4)].concat();
+        assert_eq!(hard_since_walking(&window(&crossing)), 10);
+        // Three in a row is a walk: only what follows it counts.
+        let walked = [repeat(LIFTING, 3), repeat(WALKING, 3), repeat(LIFTING, 4)].concat();
+        assert_eq!(hard_since_walking(&window(&walked)), 4);
+        // The last such run, and a walk to the window's end leaves none.
+        let twice = [
+            repeat(WALKING, 3),
+            repeat(LIFTING, 2),
+            repeat(WALKING, 4),
+            [LIFTING].to_vec(),
+        ]
+        .concat();
+        assert_eq!(hard_since_walking(&window(&twice)), 1);
+        assert_eq!(hard_since_walking(&[WALKING; WINDOW]), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // The walk of 2026-11-23
+    // ------------------------------------------------------------------
+    //
+    // A walk home on the sealed watch (0.12.0-rc.2): each minute's mean
+    // movement and steps from 15:05 UTC, 45 minutes, as this crate's
+    // replay gathers them from the log. Walking from 15:12 (index 7) to
+    // 15:32 (27), slowing over the next two minutes, then sitting down.
+    //
+    // The watch found it as 15:16 ended, and as 15:34 did said `workout:
+    // now Effort (steps 20, 20, 20; 9/10 min moving)`: seven of the walk's
+    // minutes and two of slowing down. That effort kept the heart rate's
+    // sensor on for another four minutes, until five quiet ones.
+    #[rustfmt::skip]
+    const WALK_HOME: [(u16, u16); 45] = [
+        (864, 0), (675, 0), (842, 0), (751, 0), (675, 0), (406, 0),
+        (1566, 0), (4805, 48), (4838, 68), (4985, 120), (5905, 128), (5620, 128),
+        (5776, 126), (5767, 140), (6316, 148), (6328, 156), (6327, 146), (5641, 126),
+        (6090, 142), (6169, 148), (6663, 144), (5674, 130), (5431, 130), (5638, 128),
+        (5765, 132), (5563, 122), (5611, 124), (3875, 92), (2638, 20), (4819, 20),
+        (848, 20), (384, 0), (128, 0), (513, 0), (259, 0), (84, 0),
+        (998, 8), (1832, 12), (1624, 12), (275, 0), (46, 0), (50, 0),
+        (159, 0), (151, 0), (79, 0),
+    ];
+
+    #[test]
+    fn the_walk_home_ends_as_a_walk() {
+        let said = replay(&WALK_HOME);
+        assert!(said[..11].iter().all(Option::is_none));
+        // From its third minute at pace until three minutes after its
+        // last, and then nothing: no effort made of its own minutes.
+        assert!(
+            said[11..30].iter().all(|&kind| kind == Some(Kind::Walk)),
+            "{said:?}"
+        );
+        assert!(said[30..].iter().all(Option::is_none), "{said:?}");
     }
 
     #[test]

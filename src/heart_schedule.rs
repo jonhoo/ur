@@ -58,10 +58,13 @@
 //! looking, so `heart` measures right away), but their readings count as
 //! measurements, and their LED time comes out of the budget.
 //!
-//! Nor is a workout's session (see [`crate::workout`], and `heart`'s
-//! "Through a workout"): the sensor stays on through it, as for the clock
-//! face, because what this schedule waits for (a calm wrist) and does
-//! about failure (back off) both lose exercise altogether. The schedule
+//! Nor is the session of a workout of hard work (an effort; see
+//! [`crate::workout`], and `heart`'s "Through a workout"): the sensor
+//! stays on through it, as for the clock face, because what this schedule
+//! waits for (a calm wrist) and does about failure (back off) both lose
+//! its pauses. (A walk is this schedule's like any other minutes: a wrist
+//! that swings at pace has no pauses to catch, and a sensor left on
+//! through two walks of twenty minutes read nothing.) The schedule
 //! hears of it as a watched session that cost one session's LED
 //! ([`SESSION_RESERVE`]), whose reading, if it had one in its last half
 //! minute, is never a resting one; and it carries on from there, most

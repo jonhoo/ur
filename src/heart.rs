@@ -27,9 +27,10 @@
 //! - while Gadgetbridge's live activity asks for it (see [`crate::live`]
 //!   and [`crate::heart_reading::set_live`]), continuously too, for as long
 //!   as it asks, and
-//! - through a workout (see [`crate::workout`], and "Through a workout"
-//!   below), continuously as well: a moving wrist reads in its pauses,
-//!   and only a sensor that's already on catches those;
+//! - through a workout of hard work (an effort; see [`crate::workout`],
+//!   and "Through a workout" below), continuously as well: a moving wrist
+//!   reads in its pauses, and only a sensor that's already on catches
+//!   those. Not through a walk, which has none: the schedule carries on;
 //!
 //! but never on the charger (see `heart_schedule`'s "The charger"): no
 //! session starts while its power is present, and one under way stops
@@ -70,14 +71,22 @@ use crate::ppg::{Consensus, Conversions, Ppg, Rejection};
 
 /// Whether to measure continuously, rather than when the schedule says:
 /// someone's waiting for a reading (looking at the clock face, or at
-/// Gadgetbridge's live chart), or a workout is under way.
+/// Gadgetbridge's live chart), or an effort is under way.
 fn watching() -> bool {
     crate::heart_reading::watching() || held()
 }
 
 /// Whether a workout, and nothing else, keeps the sensor on.
 fn held() -> bool {
-    !crate::heart_reading::watching() && activity::workout().is_some()
+    !crate::heart_reading::watching() && effort()
+}
+
+/// Whether the workout under way, if any, is one to measure through: an
+/// effort, and not a walk (see "Through a workout"). Asked afresh wherever
+/// it matters, as either may take over from the other mid-session: the
+/// session then ends, or stays on, as for a workout starting or ending.
+fn effort() -> bool {
+    activity::workout() == Some(crate::workout::Kind::Effort)
 }
 
 // ==============================================================================
@@ -97,28 +106,49 @@ fn held() -> bool {
 // wrist, see `ppg::Consensus`), and ~18 s from a session that must first
 // see three calm polls, then warm up. The logs' walks held 18 calm
 // stretches of 14 s and their efforts 90; 8 and 57 of those lasted 18 s.
-// So through a workout the sensor simply stays on, as it does while
+// So through an effort the sensor simply stays on, as it does while
 // someone looks at the clock face, and takes every pause there is, the
-// first minutes of recovery included (a workout only ends some minutes
+// first minutes of recovery included (an effort only ends some minutes
 // after the wrist lets up).
 //
-// What it costs is LED time: ~68 minutes a day on those logs (117 on the
-// days of a trip, 280 on the busiest), ~3.2 mAh at the ~2.8 mA a session
-// draws, some 2% of the battery, which the user would rather spend than
-// lose the readings (see docs/power-plan.md). The battery's own reading
-// on the first days of workouts says about three times that: a point per
-// ten minutes of one (see `workout`'s TODO on measuring it).
+// Through a walk it doesn't, though it did up to 0.12.0-rc.2: a walk that
+// keeps its pace has no pauses. On the sealed watch (2026-11-23) two
+// walks of twenty minutes at 110-150 steps a minute kept the sensor on
+// for 1382 s and 1501 s, and no window of either read while the wearer
+// walked: aperiodic, unsteady, or locked onto the arm's swing at half the
+// cadence (55-65 BPM, see `workout::swing`). So a walk is left to the
+// schedule, which waits for calm as ever and so takes what pauses fall
+// when a reading is due, and costs what it costs on any other minutes.
+// What follows is of efforts, and "a workout's session" is an effort's.
+//
+// TODO: reading through a walk takes a motion-aware estimator (the
+// accelerometer's cadence, to look past the swing's and the steps' peaks
+// in the PPG), not LED time; see `workout`'s "Walks aren't measured
+// through".
+//
+// What it costs is LED time: ~68 minutes a day on those logs with walks
+// measured through too (117 on the days of a trip, 280 on the busiest),
+// ~3.2 mAh at the ~2.8 mA a session draws, some 2% of the battery, which
+// the user would rather spend than lose the readings (see
+// docs/power-plan.md). The battery's own reading on the first days of
+// workouts says about three times that: a point per ten minutes of one
+// (see `workout`'s TODO on measuring it). Efforts alone are about half
+// of a day's workout minutes: over the logs of 2026-11-13 to 23 (9.8
+// days), 36 minutes a day against the walks' 29, under the rules as they
+// are now.
 // It isn't charged to the schedule's budget beyond one session's worth
 // (`heart_schedule::SESSION_RESERVE`): the budget is there to bound what
-// a day of failing tries can cost, and a workout bounds itself (it needs
-// steps or hard movement to go on). A watch that isn't on a wrist (in a
-// bag, on a walk) ends its session within seconds for want of skin, and
-// looks again every [`WORKOUT_RETRY`].
+// a day of failing tries can cost, and an effort bounds itself (it needs
+// hard movement to go on). A watch that isn't on a wrist (in a bag that's
+// being shaken about) ends its session within seconds for want of skin,
+// and looks again every [`WORKOUT_RETRY`].
 //
 // Two things keep hundreds of windows on a moving wrist from making a
 // wrong reading where a 30 s session's eleven didn't: the windows that
 // agree must be recent ([`AGREE_WITHIN`]), and one at the arm's swing is
-// left out ([`crate::workout::swing`]).
+// left out ([`crate::workout::swing`]; in a walk, so of the schedule's
+// sessions and the clock face's now, and of an effort's only once a walk
+// has taken over and it is ending).
 //
 // In the logging build, such a session's samples are logged for its first
 // [`WORKOUT_TRACE_CHECKS`] seconds only: an hour of them would be ~330 KB
@@ -128,16 +158,20 @@ fn held() -> bool {
 /// How long after a workout's session found no skin (or lost the sensor)
 /// to look again, while the workout lasts. A watch really off the wrist
 /// costs a few seconds of LED each time; one that only shifted (the
-/// sealed watch said "not on a wrist" twice mid-walk, 2026-11-20) is
-/// measured again for the rest of its workout.
+/// sealed watch said "not on a wrist" twice mid-walk, 2026-11-20, when
+/// walks were measured through) is measured again for the rest of its
+/// workout.
 const WORKOUT_RETRY: u8 = 120;
 
 /// Level checks (seconds) of a workout's session whose samples the
 /// logging build logs (see "Through a workout" above).
 ///
 /// TODO: with a reference worn alongside (a chest strap, or the Garmin
-/// again), whole walks of samples would be what a motion-tolerant
-/// estimator is developed on; log them all then.
+/// again), whole walks of samples would be what a motion-aware estimator
+/// is developed on (see `workout`'s "Walks aren't measured through").
+/// Walks have no session of their own to log any more, so that would
+/// take a logging build that measures through them again, and logs it
+/// all.
 const WORKOUT_TRACE_CHECKS: u8 = 120;
 
 /// Windows (one every ~2 s) without an accepted one after which the
@@ -824,17 +858,21 @@ pub async fn heart_task(i2c: Device) {
                 ),
             }
         }
-        // A workout's session (or one looked at during a workout): said
+        // An effort's session (or one looked at during an effort): said
         // here, as it has no `due` line, and ends on a line of its own.
+        // Not a walk's: it has none, and the schedule's sessions through
+        // it are sessions like any other.
         let workout = activity::workout();
-        if let Some(kind) = workout {
+        let effort = workout == Some(crate::workout::Kind::Effort);
+        if let Some(kind) = workout.filter(|_| effort) {
             info!("heart: workout session ({})", kind);
         }
         // Movement from here on counts towards the next session.
         let before = Before {
             active_polls: activity::take_active_polls(),
             // A workout's reading is never a resting one, steps or none
-            // (see `heart_schedule::RESTING_STEPLESS_POLLS`).
+            // (see `heart_schedule::RESTING_STEPLESS_POLLS`), a walk's
+            // included: its last minutes count none.
             stepless_polls: if workout.is_some() {
                 0
             } else {
@@ -906,10 +944,10 @@ pub async fn heart_task(i2c: Device) {
         }
         // Rounded up: the budget should err on the side of caution.
         let led_seconds = started.elapsed().as_millis().div_ceil(1000) as u32;
-        // A session that a workout was part of, at its start or its end:
+        // A session that an effort was part of, at its start or its end:
         // its length says how long the sensor was on for it.
-        let workout = workout.is_some() || activity::workout().is_some();
-        if workout {
+        let effort = effort || self::effort();
+        if effort {
             info!("heart: workout session over after {} s", led_seconds);
         }
         match outcome {
@@ -940,9 +978,9 @@ pub async fn heart_task(i2c: Device) {
         // At the lowest drive, `spent` is `led_seconds`, short of the
         // moments around the LED's switching on and off.
         let spent = spent.max(led_seconds);
-        // A workout's session costs the budget one session's worth,
+        // An effort's session costs the budget one session's worth,
         // however long it ran (see "Through a workout").
-        let spent = if workout {
+        let spent = if effort {
             spent.min(heart_schedule::SESSION_RESERVE)
         } else {
             spent
@@ -992,9 +1030,9 @@ pub async fn heart_task(i2c: Device) {
         //
         // On the charger, the wait below looks after it instead.
         //
-        // A workout does look again, every `WORKOUT_RETRY`, for as long as
+        // An effort does look again, every `WORKOUT_RETRY`, for as long as
         // nobody's watching: nobody is there to look away, and a watch
-        // that shifted on the wrist mid-walk is worth another try.
+        // that shifted on the wrist mid-set is worth another try.
         let mut waited = 0u8;
         while watching() && !on_charger() {
             Timer::after_secs(1).await;

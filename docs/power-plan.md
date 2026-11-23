@@ -410,7 +410,9 @@ From 0.11.3-rc.5 the sensor stays on through a workout (`workout`;
 `heart`'s "Through a workout"): three minutes at a walking pace, or
 eight minutes of ten with the wrist moving hard, until three minutes
 without walking, or (for hard movement) five quiet minutes in a row or
-ten with none of them hard. A moving wrist only reads in its pauses,
+ten with none of them hard. From 0.12.0-rc.3 only through the second
+kind, an effort; see "Not through walks" below, which the figures here
+are from before. A moving wrist only reads in its pauses,
 and a sensor that's already on catches a pause of ~14 s where a session
 needs ~18 s; the sealed watch's logs of 2026-11-07 to 20 held 18 such
 pauses in walks and 90 in efforts, where sessions read 4 and 18 times.
@@ -438,6 +440,32 @@ nearer 7% than 2%. TODO: measure a continuous session's draw on the dev
 kit. The level control can
 raise the drive (30 mA at level 2, which the sealed watch's wrist is
 sometimes at), and then the LED's share is up to 2.4× that.
+
+#### Not through walks
+
+On 2026-11-23 the sealed watch (0.12.0-rc.2) measured through two walks
+of about twenty minutes at 110–150 steps a minute: 1382 s and 1501 s of
+LED, and not one reading while the wearer walked. Every window was
+aperiodic, unsteady, or locked onto the arm's swing at half the cadence
+(55–65 BPM), which is rejected as not the pulse. A walk that keeps its
+pace has no pauses to read in, so those 40 minutes (some four points of
+battery, at the rate above) bought the first walk's recovery, eight
+readings, and nothing else.
+
+So from 0.12.0-rc.3 a walk starts no session: the schedule carries on
+through it, and its wait for calm takes a pause when a reading is due.
+Only an effort keeps the sensor on. Each walk also ended as an effort
+(its own minutes move hard enough to count as one) and ran on for 4–5
+minutes; the hard minutes that start an effort are now counted from
+after the last three minutes in a row at walking pace. Replayed over
+the logs of 2026-11-13 to 23 (9.8 days), workouts are 645 minutes where
+they were 722, and the sensor is on for the efforts' 356 of them, 36 a
+day, against 29 a day of walks that it no longer is: about half the
+continuous LED time, some 3 points of battery a day at a point per ten
+minutes.
+
+Heart rate through a walk needs a motion-aware estimator rather than
+LED time (TODO; see `workout`'s "Walks aren't measured through").
 
 The logging build's longer sessions (0.11.0 to 0.11.3-rc.2, ~2 mAh a
 day) are gone; it still logs the accelerometer's samples through every

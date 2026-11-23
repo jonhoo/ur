@@ -1954,7 +1954,8 @@ pub async fn activity_task(i2c: Device) {
             LAST_SLEEP.lock(|s| s.set(summary));
 
             // And whether the minutes just finished make a workout (see
-            // `workout`), which the heart rate is measured through. After
+            // `workout`), which the heart rate is measured through if it's
+            // an effort. After
             // the sleep revision, as asleep is never one. The minute under
             // way isn't looked at: it has seen one poll.
             let recent = HISTORY.lock(|history| {
@@ -1975,12 +1976,9 @@ pub async fn activity_task(i2c: Device) {
                 WORKOUT.store(workout::Kind::bits(now), Ordering::Relaxed);
                 // What the rules went by, so a field log shows why: the
                 // last three minutes' steps (a walk's rule), and how many
-                // of the ten moved hard (an effort's).
+                // of the ten moved hard since any walking (an effort's).
                 let [.., a, b, c] = recent;
-                let working = recent
-                    .iter()
-                    .filter(|m| m.movement >= workout::EFFORT_MOVEMENT)
-                    .count() as u8;
+                let working = workout::hard_since_walking(&recent) as u8;
                 // The minutes that made it one were part of it: three of
                 // walking, or the ten an effort is judged over. (A fetch
                 // may have sent some already, as plain activity; they stay
@@ -2012,8 +2010,9 @@ pub async fn activity_task(i2c: Device) {
                         "workout: started, {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving)",
                         kind, a.steps, b.steps, c.steps, working
                     ),
-                    // A walk within an effort, or the effort a walk ends
-                    // in: the same workout.
+                    // A walk within an effort, or (rarely: its last
+                    // minutes must make one by themselves) the effort a
+                    // walk ends in: the same workout.
                     (Some(_), Some(kind)) => info!(
                         "workout: now {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving)",
                         kind, a.steps, b.steps, c.steps, working
@@ -2027,8 +2026,9 @@ pub async fn activity_task(i2c: Device) {
                         if asleep { "; asleep" } else { "" }
                     ),
                 }
-                // Starts the heart rate's continuous session, or lets the
-                // one under way end, without waiting out its timer.
+                // Starts the heart rate's continuous session (an effort's),
+                // or lets the one under way end, without waiting out its
+                // timer.
                 crate::heart::wake();
             }
             // Every couple of minutes, the SPI flash is brought up to

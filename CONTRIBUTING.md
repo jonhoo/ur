@@ -844,27 +844,33 @@ Some host-test crates replay decoded logs, to tune against real wrists:
   - **Detection:** `workout: started, KIND (steps A, B, C; N/10 min
     moving)` as a minute ends, `KIND` being `Walk` or `Effort`, with what
     the rules went by: the last three minutes' steps (a walk is three at
-    80 or more), and how many of the last ten moved hard (an effort is
-    eight). `workout: now KIND (…)` when one turns into the other, and
+    80 or more), and how many of the last ten moved hard since any
+    walking, three minutes in a row at that pace (an effort is eight; a
+    walk's own minutes don't count, so its end reads `N/10` with `N` at
+    most 3). `workout: now KIND (…)` when one turns into the other, and
     `workout: over (…)` when it ends (three minutes under 40 steps; or,
     for an effort, five quiet minutes in a row or ten with none moving
     hard, which reads `0/10 min moving`; `; asleep` if that's what ended
     it).
-  - **The session through it:** `heart: workout session (KIND)` when the
+  - **The session through it**, if it's an effort (a walk has none
+    since 0.12.0-rc.3: the schedule's sessions carry on through it,
+    with their usual lines): `heart: workout session (Effort)` when the
     sensor goes on for it (there's no `heart: due` line: the schedule
     didn't start it), and `heart: workout session over after S s` when
-    it goes off. In between, `heart: N BPM after S s` for its first
+    it goes off, which a walk taking over makes it do. In between,
+    `heart: N BPM after S s` for its first
     reading and, at `debug`, `heart: N BPM` for each one after (one
     every 2 s while the wrist is calm), and each window's verdict as for
-    any session (`heart: window rejected: walking (N BPM)` is one left
-    out as the arm's swing, see `workout::swing`). Its samples are only
+    any session. (`heart: window rejected: walking (N BPM)`, in any
+    session during a walk, is one left
+    out as the arm's swing, see `workout::swing`.) Its samples are only
     logged for its first two minutes: `heart: workout session; samples
     no longer logged` marks where they stop. If it finds no skin, it
     ends as any session does (`heart: not on a wrist`), and another
     starts two minutes later.
 
   So, from a log alone: how many workouts a day and how long; whether a
-  known workout was found, and how late; readings a workout, and where
+  known workout was found, and how late; readings an effort, and where
   in it they fell (its pauses, its last minutes); and, from the windows'
   verdicts, what kept the rest from reading.
 

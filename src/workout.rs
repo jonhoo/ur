@@ -1,6 +1,8 @@
-//! Telling a workout from ordinary activity, by the minute, so that the
-//! heart rate can be measured through it (see `heart`, which measures
-//! continuously for as long as [`detect`] says one is under way).
+//! Telling a workout from ordinary activity, by the minute, so that its
+//! minutes can be marked as exercise, and the heart rate measured through
+//! the kind that can be (see `heart`, which measures continuously for as
+//! long as [`detect`] says an effort is under way, and not through a walk:
+//! see "Walks aren't measured through" below).
 //!
 //! Why it's needed: the heart rate's schedule waits for a calm wrist and
 //! backs off when a session fails, which suits a desk and loses exercise
@@ -30,7 +32,7 @@
 //!   hard minute after it (see [`EFFORT_LAPSE_MINUTES`]).
 //!
 //! An effort's false starts aren't cheap unless they end. The sensor is
-//! on for every minute of a workout (that day's `power:` lines: 1128 s of
+//! on for every minute of one (that day's `power:` lines: 1128 s of
 //! LED in an hour that held 17 minutes of one, 210-270 s in the hours
 //! without), and the battery's reading fell a point for every ten minutes
 //! or so of it, twice that day: from 98% to 94% over an effort of 36
@@ -59,11 +61,45 @@
 //! for one, and measuring continuously catches them all, where a session
 //! that first waits for calm needs ~18 s. The same logs held 18 such
 //! stretches inside walks and 90 inside efforts, where sessions read 4 and
-//! 18 times. (And at the walk's end: the workout runs on for
-//! [`WALK_END_MINUTES`], through the first minutes of recovery.)
+//! 18 times.
 //!
-//! A workout's minutes also reach Gadgetbridge as exercise (see
-//! `activity::Sample::gadgetbridge_kind`).
+//! # Walks aren't measured through
+//!
+//! An effort has those pauses (the rests between sets: 118 readings in
+//! the strength session's 46 minutes). A walk that keeps its pace has
+//! none, and up to 0.12.0-rc.2 the sensor stayed on through walks all the
+//! same. On the sealed watch, 2026-11-23, two walks of some twenty
+//! minutes at 110-150 steps a minute were found three minutes in, and
+//! their sessions (1382 s and 1501 s of LED) took no reading while the
+//! wearer walked: of ~1180 windows, the ones that weren't aperiodic or
+//! unsteady had locked onto the arm's swing at half the cadence (55-65
+//! BPM), which [`swing`] rightly leaves out. Some forty minutes of LED,
+//! at a point of battery for every ten, for the eight readings of the
+//! first walk's recovery.
+//!
+//! So a walk starts no session of its own (user, 2026-11-23): the heart
+//! rate's schedule carries on through it as through any other minutes,
+//! with its own wait for calm, which takes a pause at a crossing or the
+//! walk's end when a reading is due or overdue (see `heart_schedule`'s
+//! "Seeking calm"). What that gives up is the readings of pauses the
+//! schedule isn't looking in: the 18 calm stretches above were in 12 days
+//! of walks.
+//!
+//! TODO: heart rate through a walk needs a motion-aware estimator, not
+//! more LED time: one that takes the cadence from the accelerometer (the
+//! step rate, and the swing at half of it) and looks past those peaks in
+//! the PPG's spectrum for the pulse's, or cancels them. The field result
+//! above is what says so: 40 minutes of continuous windows, none usable.
+//! It would need walks recorded against a reference to be built on (see
+//! `heart`'s `WORKOUT_TRACE_CHECKS`), and a way to tell the pulse from
+//! the step rate when the two are within 10 BPM, as they were on the
+//! walks with the Garmin.
+//!
+//! A walk is still a workout in every other way: its minutes reach
+//! Gadgetbridge as exercise (as an effort's do; see
+//! `activity::Sample::gadgetbridge_kind`), a reading during one never
+//! counts as a resting one, and [`swing`] guards the schedule's sessions
+//! through it.
 //!
 //! TODO: no manual start or stop (user, 2026-11-21: not for now). It
 //! would be the sure way to cover what the effort rule can't tell from
@@ -73,7 +109,8 @@
 //! it runs in host tests (`host-tests/workout`), whose binary replays a
 //! field log's minutes through it.
 
-/// What kind of workout is under way; for the log, and for [`swing`].
+/// What kind of workout is under way; for the log, for `heart` (which
+/// measures through an effort only), and for [`swing`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(target_os = "none", derive(defmt::Format))]
 #[repr(u8)]
@@ -133,10 +170,11 @@ pub const WALK_MINUTES: usize = 3;
 pub const WALK_END_STEPS: u16 = 40;
 
 /// Minutes of pause in a row that end a walk: long enough for a red
-/// light or a shop's queue not to, and for the first minutes of recovery
-/// to be measured, when the wrist is at last still and the heart rate
-/// still near what it was (it falls ~20-30 BPM in the first minute or
-/// two).
+/// light or a shop's queue not to.
+///
+/// (While walks were measured through, this also kept the sensor on for
+/// the first minutes of recovery. Now the schedule's wait for calm takes
+/// those, if a reading is due.)
 pub const WALK_END_MINUTES: usize = 3;
 
 /// A minute's mean movement that counts as the wrist working hard. At a
@@ -229,20 +267,17 @@ const _: () = assert!(WINDOW - EFFORT_LAPSE_MINUTES < EFFORT_MINUTES);
 /// Asleep, never: turning over isn't effort, and the night's schedule is
 /// its own (walking wakes the sleep classifier at once).
 ///
-/// A walk takes over from an effort, as the better description; and a
-/// walk that ends where an effort would start (the wrist still working)
-/// carries on as one.
+/// A walk takes over from an effort, as the better description. When it
+/// ends, an effort only follows if the minutes since the walking would
+/// start one by themselves (see [`hard_since_walking`]): the walk's own
+/// minutes move as hard as any effort's, and aren't one.
 pub fn detect(current: Option<Kind>, recent: &[Minute; WINDOW], asleep: bool) -> Option<Kind> {
     if asleep {
         return None;
     }
     let last = |minutes: usize| &recent[WINDOW - minutes..];
     let walking = last(WALK_MINUTES).iter().all(|m| m.steps >= WALK_STEPS);
-    let working = recent
-        .iter()
-        .filter(|m| m.movement >= EFFORT_MOVEMENT)
-        .count()
-        >= EFFORT_MINUTES;
+    let working = hard_since_walking(recent) >= EFFORT_MINUTES;
     let current = match current {
         Some(Kind::Walk)
             if last(WALK_END_MINUTES)
@@ -274,6 +309,61 @@ pub fn detect(current: Option<Kind>, recent: &[Minute; WINDOW], asleep: bool) ->
     }
 }
 
+/// How many of `recent`'s minutes count towards starting an effort: those
+/// at [`EFFORT_MOVEMENT`] or more since the wearer last walked, which is
+/// the last [`WALK_MINUTES`] in a row at [`WALK_STEPS`] or more (what
+/// [`detect`] calls walking). With no such run among them, all ten count.
+///
+/// Why: a walk's minutes are at 3000-6000, well over [`EFFORT_MOVEMENT`],
+/// so counting them let a walk end as an effort: as its steps stopped,
+/// the last ten minutes still held seven of walking, and one hard minute
+/// of slowing down made eight. On 2026-11-23 both of the day's walks did
+/// (`workout: now Effort (steps 20, 20, 20; 9/10 min moving)`), and ran
+/// on for 4 and 5 minutes with the sensor on, until five quiet ones ended
+/// them; on the earlier logs such tails lasted 17 and 30 minutes, kept
+/// going by the odd hard minute.
+///
+/// Why this rule and not a simpler one:
+///
+/// - Leaving out every minute at [`WALK_STEPS`] or more, in a run or not,
+///   ends those walks the same, but changes efforts that no walk was
+///   near: hard work has the odd minute of crossing a room at pace.
+///   Replayed over the logs of 2026-11-13 to 23, two efforts no longer
+///   start (of 21 and 27 minutes), and both of 2026-11-22 start a minute
+///   later, the strength session among them, whose start had no minute to
+///   spare (see [`EFFORT_MINUTES`]).
+/// - Counting only since the last single minute at walking pace loses
+///   that strength session altogether: one minute of 128 steps sits in
+///   the middle of the nine hard ones that started it.
+///
+/// This one changes nothing unless three walking minutes in a row are
+/// among the last ten, which is to say unless a walk was under way in
+/// them. On those logs no effort that wasn't a walk's tail starts or ends
+/// differently. Of the six walks that ended as efforts, four now simply
+/// end; one is followed 21 minutes later by an effort of its own (its
+/// hard minutes came after the walk); and one still hands over: its last
+/// eleven minutes were stop-and-go (22-114 steps, never three at pace)
+/// and then stepless, all but one of them hard, which is an effort by
+/// any reading of the rule.
+///
+/// The price: hard work straight after a walk (walking to the gym, then
+/// lifting) takes its own eight minutes of ten to be found, where the
+/// walk's minutes used to vouch for it at once; and an effort that a walk
+/// interrupts doesn't resume as the walk ends, but is found afresh. Up to
+/// eight minutes of an effort's readings, against a tail on every walk.
+pub fn hard_since_walking(recent: &[Minute; WINDOW]) -> usize {
+    // Where the last run of walking ends, as an index into `recent`: the
+    // minutes from there on are the ones since.
+    let walked = recent
+        .windows(WALK_MINUTES)
+        .rposition(|run| run.iter().all(|m| m.steps >= WALK_STEPS))
+        .map_or(0, |run| run + WALK_MINUTES);
+    recent[walked..]
+        .iter()
+        .filter(|m| m.movement >= EFFORT_MOVEMENT)
+        .count()
+}
+
 /// A heart rate below which a window measured while walking isn't
 /// trusted (see [`swing`]).
 pub const SWING_BPM: f32 = 70.0;
@@ -288,13 +378,15 @@ pub const SWING_BPM: f32 = 70.0;
 /// one walk, sessions read 58-60 BPM against a Garmin's 97, and two of the
 /// four windows accepted in 80 walked sessions were at 51 and 57. A few
 /// minutes into a walk the heart rate is nowhere near that (the Garmin's
-/// lowest median over a walk was 87), so nothing true is lost. Measuring
-/// through a whole walk makes hundreds of windows where a session made
-/// eleven, and three of them agreeing on the swing would put a resting
-/// rate in the middle of a workout.
+/// lowest median over a walk was 87), so nothing true is lost. The two
+/// walks measured through on 2026-11-23 bear it out: the windows that
+/// were periodic at all were at 55-65, half the cadence, and three of
+/// them agreeing would have put a resting rate in the middle of a walk.
+/// Walks aren't measured through since (see the module's docs), but the
+/// schedule's sessions and looks at the clock face still fall in them.
 ///
-/// Once the steps stop, anything goes again: recovery is what the pauses
-/// are measured for.
+/// Once the steps stop, anything goes again: a pause is when a walk's
+/// heart rate can be read at all.
 ///
 /// TODO: a run's arms swing at 75-90, which this doesn't cover; the logs
 /// have no run to judge by. With the accelerometer's samples (the logging
