@@ -203,15 +203,44 @@ mod tests {
 }
 
 /// Kani proofs (`cargo kani` here, one at a time with `--harness`).
-///
-/// TODO: a proof that any samples `pack_samples` packs unpack (as
-/// `scripts/expand_log.py` does) to themselves. Kani 0.68 finds a
-/// counterexample to it that the same inputs, run concretely, don't
-/// reproduce; that looks like a Kani modelling bug, and is being looked
-/// into apart from this.
 #[cfg(kani)]
 mod proofs {
     use super::log_pack::*;
+
+    /// Any four samples or fewer pack into the room the docs ask for
+    /// ([`PACKED_PER_SAMPLE`] bytes each), and unpack, as
+    /// `scripts/expand_log.py` does (and `tests::unpack`), to themselves:
+    /// no difference is cut, and nothing written can be mistaken for an
+    /// [`ESCAPE`] or the reverse.
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn any_samples_round_trip() {
+        let samples: [u16; 4] = kani::any();
+        let n: usize = kani::any();
+        kani::assume(n <= 4);
+        let mut out = [0u8; 4 * PACKED_PER_SAMPLE];
+        let len = pack_samples(&samples[..n], &mut out);
+        let mut back = [0u16; 4];
+        let (mut i, mut k) = (0, 0);
+        while i < len {
+            if out[i] == ESCAPE {
+                back[k] = u16::from_le_bytes([out[i + 1], out[i + 2]]);
+                i += 3;
+            } else {
+                assert!(k > 0, "a difference before any sample");
+                back[k] = (i32::from(back[k - 1]) + i32::from(out[i] as i8)) as u16;
+                i += 1;
+            }
+            k += 1;
+        }
+        assert_eq!(i, len);
+        assert_eq!(k, n);
+        for j in 0..n {
+            assert_eq!(back[j], samples[j]);
+        }
+        kani::cover!(n == 4 && len == 3 + 3, "every difference fits a byte");
+        kani::cover!(n == 4 && len == 4 * 3, "none does");
+    }
 
     /// What `still` promises: every sample within 8 (half of
     /// `STILL_AXIS_RANGE`) of the middle it gives, on each axis, for any
