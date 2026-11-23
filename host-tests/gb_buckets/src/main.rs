@@ -13,6 +13,7 @@
 #[allow(dead_code)]
 mod gb_buckets;
 #[path = "../../../src/minute_ring.rs"]
+#[allow(dead_code)]
 mod minute_ring;
 #[path = "../../../src/sleep.rs"]
 #[allow(dead_code)]

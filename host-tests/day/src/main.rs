@@ -2,7 +2,9 @@
 //! hour, for the Today screen, and which steps today's total counts.
 //! `cargo test` runs them.
 
+// Used by the tests only.
 #[path = "../../../src/day.rs"]
+#[allow(dead_code)]
 mod day;
 
 fn main() {
