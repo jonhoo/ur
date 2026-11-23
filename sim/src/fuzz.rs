@@ -2,10 +2,12 @@
 //!
 //! `--devkit` checks the simulator against a dev kit along a script someone
 //! wrote. This writes the scripts: random ones, from a seed, of what a dev
-//! kit can be made to do (touches, the button, waits, test notifications,
-//! the battery, and, with this computer as its phone,
-//! Gadgetbridge's lines, connecting and disconnecting, and a BTHome
-//! thermometer), each run starting from random settings in its storage. The
+//! kit can be made to do (touches, double taps and retries among them, the
+//! button, waits, test notifications, the battery and the charger, sleep
+//! tracking saying the wearer is asleep, and, with this computer as its
+//! phone, Gadgetbridge's lines, the clock set back and ahead among them,
+//! connecting and disconnecting, and a BTHome thermometer), each run
+//! starting from random settings in its storage. The
 //! follower (`devkit.rs`) runs each, and checks every step: the frame, what
 //! the dev kit's UI got from the phone and sent it, and, now and then, what
 //! it saved and boots with.
@@ -1407,10 +1409,36 @@ struct Context {
     advertising: bool,
     /// A call ringing, to end.
     calling: bool,
-    /// The local time last set, in seconds since 1970, and the seconds
-    /// of waits since (roughly), for alarms just ahead.
-    local: Option<i64>,
+    /// The clock as the phone last set it (UTC seconds since 1970, and
+    /// the zone's offset in hours), and the seconds of waits since
+    /// (roughly): for alarms just ahead, and to set it relative to now.
+    clock: Option<(i64, f64)>,
     waited: f64,
+    /// The charger's lines as last faked (`battery MV LINES`), or `None`
+    /// for the dev kit's own (as after a reset).
+    charger: Option<Charger>,
+}
+
+/// What the charger's lines say (see `script`'s `battery`).
+#[derive(Clone, Copy, PartialEq)]
+enum Charger {
+    Unplugged,
+    Charging,
+    Charged,
+}
+
+impl Context {
+    /// The clock now (UTC seconds), as far as the waits since it was set
+    /// go, and its zone (hours).
+    fn now(&self) -> Option<(i64, f64)> {
+        self.clock
+            .map(|(utc, zone)| (utc + self.waited as i64, zone))
+    }
+
+    /// The local time now, in seconds since 1970.
+    fn local_now(&self) -> Option<i64> {
+        self.now().map(|(utc, zone)| utc + zone_seconds(zone))
+    }
 }
 
 /// `count` random steps; with `phone`, this computer is the dev kit's
@@ -1437,8 +1465,9 @@ fn generate_spliced(
         connected: false,
         advertising: false,
         calling: false,
-        local: None,
+        clock: None,
         waited: 0.0,
+        charger: None,
     };
     let mut steps = Vec::new();
     if phone {
@@ -1533,6 +1562,12 @@ fn action(rng: &mut Rng, context: &mut Context) -> Step {
         (1, 36), // a GPS fix
         (2, 37), // pairing, an update, both connections in use
         (1, 38), // a timer's length, the smart alarm
+        // (A new weight changes which byte picks which: the fuzzer's
+        // corpus then makes other scripts than it did; see sim/README.md.)
+        (8, 40), // two touches: a double tap, a retry, a tap and hold
+        (4, 41), // the charger
+        (if connected { 4 } else { 0 }, 42), // the phone setting the clock
+        (if connected { 1 } else { 0 }, 43), // a doze, and its end
     ];
     let total: u64 = choices.iter().map(|(w, _)| w).sum();
     let mut pick = rng.below(total);
@@ -1613,6 +1648,10 @@ fn action(rng: &mut Rng, context: &mut Context) -> Step {
         13 => {
             context.connected = false;
             context.calling = false;
+            // A dev kit forgets what was injected (its own charger's
+            // lines again; the simulator alone, which leaves `reset` out,
+            // keeps them, but then any line is right).
+            context.charger = None;
             vec!["reset".into(), "wait 2s".into()]
         }
         14 => vec!["check-storage".into()],
@@ -1662,7 +1701,18 @@ fn action(rng: &mut Rng, context: &mut Context) -> Step {
         20 => {
             context.connected = !context.connected;
             if context.connected {
-                vec!["connect".into(), set_time(rng, context)]
+                // As Gadgetbridge does on connecting: mostly the phone's
+                // own time, which the watch's has drifted a little from
+                // meanwhile; now and then one far from it (another phone,
+                // or one whose clock was changed while away).
+                let time = match context.now() {
+                    Some((utc, zone)) if rng.chance(0.7) => {
+                        let drift = rng.range(0, 60) as i64 - 30;
+                        set_clock(context, utc + drift, zone)
+                    }
+                    _ => set_time(rng, context),
+                };
+                vec!["connect".into(), time]
             } else {
                 context.calling = false;
                 vec!["disconnect".into()]
@@ -1722,11 +1772,9 @@ fn action(rng: &mut Rng, context: &mut Context) -> Step {
             let mut alarms = Vec::new();
             for _ in 0..rng.below(5) {
                 // Now and then one just ahead, to ring.
-                let (h, m) = match context.local {
+                let (h, m) = match context.local_now() {
                     Some(local) if rng.chance(0.4) => {
-                        let at = (local + context.waited as i64 + 60 * rng.range(1, 3) as i64)
-                            .rem_euclid(86_400)
-                            / 60;
+                        let at = (local + 60 * rng.range(1, 3) as i64).rem_euclid(86_400) / 60;
                         (at / 60, at % 60)
                     }
                     _ => (rng.below(24) as i64, rng.below(60) as i64),
@@ -1792,16 +1840,26 @@ fn action(rng: &mut Rng, context: &mut Context) -> Step {
                 format!("heart {}", rng.range(35, 210))
             },
         ),
-        32 => host_only(
-            context,
+        32 => {
             if rng.chance(0.4) {
-                format!("asleep {}", if rng.chance(0.5) { "on" } else { "off" })
-            } else if rng.chance(0.3) {
-                format!("light-sleep {}", if rng.chance(0.5) { "on" } else { "off" })
+                // A dev kit can be told this one too (its input 21): its
+                // quiet night, which a dev kit on a desk never sleeps
+                // into.
+                vec![format!(
+                    "asleep {}",
+                    if rng.chance(0.5) { "on" } else { "off" }
+                )]
             } else {
-                format!("movement {}", rng.below(4000))
-            },
-        ),
+                host_only(
+                    context,
+                    if rng.chance(0.3) {
+                        format!("light-sleep {}", if rng.chance(0.5) { "on" } else { "off" })
+                    } else {
+                        format!("movement {}", rng.below(4000))
+                    },
+                )
+            }
+        }
         33 => host_only(
             context,
             format!("temperature {}", rng.range(0, 60) as i64 - 10),
@@ -1898,8 +1956,269 @@ fn action(rng: &mut Rng, context: &mut Context) -> Step {
                 vec!["bthome-temp off".into()]
             }
         }
+        40 => two_touches(rng, context),
+        41 => charger(rng, context),
+        42 => phone_clock(rng, context),
+        43 => doze(rng, context),
         _ => unreachable!("only the choices above"),
     }
+}
+
+/// Two touches close together, as `wake::after` tells them apart by the
+/// time between the first's lift and the second's start: a pair (a
+/// double tap, or a tap and hold) within `DOUBLE_TAP_MS` (300), a retry
+/// after a light tap within `RETRY_TAP_MS` (1500), and neither after;
+/// the wearer's own fell at 16-185 ms and 566-1277 ms. Often from the
+/// screen off or a glance, where the first tap's weight matters (light,
+/// deliberate from 40 ms, heavy from 75), and mostly near each other,
+/// where a pair must be. A dev kit's two taps over its probe are ~0.3 s
+/// apart at best, so its pairs are slower than asked (the follower
+/// replays them as they were): `double` is its quick one.
+fn two_touches(rng: &mut Rng, context: &mut Context) -> Step {
+    let mut path = Vec::new();
+    match rng.below(3) {
+        0 => {}
+        // The screen off: it times out 10 s after the last input.
+        1 => {
+            let ms = rng.range(10_200, 12_000);
+            context.waited += ms as f64 / 1000.0;
+            path.push(format!("wait {ms}ms"));
+        }
+        _ => {
+            path.push("glance".into());
+            path.push(format!("wait {}ms", rng.range(50, 900)));
+        }
+    }
+    // Inside the edges where, with the screen off, touches do nothing.
+    let (x, y) = (rng.range(4, 75) as i64, rng.range(4, 75) as i64);
+    let held = |rng: &mut Rng| match rng.below(3) {
+        0 => rng.range(20, 39),
+        1 => rng.range(40, 74),
+        _ => rng.range(75, 150),
+    };
+    let first_held = held(rng);
+    // On the simulator alone, now and then a first tap the UI handles
+    // late, as when it was drawing a wake (`tap X,Y MS LATE`); a dev
+    // kit's taps are as late as its UI makes them.
+    let late = if rng.chance(0.25) {
+        rng.range(50, 400)
+    } else {
+        0
+    };
+    let first = if context.host && late > 0 {
+        format!("tap {x},{y} {first_held} {late}")
+    } else {
+        format!("tap {x},{y} {first_held}")
+    };
+    // Mostly within `PAIR_RADIUS` (13) of the first.
+    let (nx, ny) = if rng.chance(0.85) {
+        let off = |rng: &mut Rng, at: i64| (at + rng.range(0, 30) as i64 - 15).clamp(0, 79);
+        (off(rng, x), off(rng, y))
+    } else {
+        (rng.below(80) as i64, rng.below(80) as i64)
+    };
+    let mut wait = |ms: u64| {
+        context.waited += ms as f64 / 1000.0;
+        format!("wait {ms}ms")
+    };
+    // The second tap, `gap` ms after the first's lift: as a tap's touch
+    // starts its length before it's handled (`Touch::ended_now`), the
+    // wait between the two is the gap and the second's length.
+    let mut second = |rng: &mut Rng, path: &mut Step, gap: u64| {
+        let held = held(rng);
+        path.push(wait(gap + held));
+        path.push(format!("tap {nx},{ny} {held}"));
+    };
+    let kind = rng.below(6);
+    if kind == 0 {
+        path.push(format!("double {x},{y}"));
+        return path;
+    }
+    path.push(first);
+    match kind {
+        // A pair: on the simulator alone, the second within 300 ms.
+        1 => {
+            let gap = if rng.chance(0.7) {
+                rng.range(0, 299)
+            } else {
+                0
+            };
+            second(rng, &mut path, gap);
+        }
+        // Too late for a pair, too soon for a retry (none of the
+        // wearer's fell here).
+        2 => {
+            let gap = rng.range(300, 566);
+            second(rng, &mut path, gap);
+        }
+        // A retry.
+        3 => {
+            let gap = rng.range(566, 1500);
+            second(rng, &mut path, gap);
+        }
+        // Too late for either.
+        4 => {
+            let gap = rng.range(1500, 2500);
+            second(rng, &mut path, gap);
+        }
+        // A tap and hold: the hold a long press from 0.6 s.
+        _ => {
+            let gap = rng.range(0, 200);
+            path.push(wait(gap));
+            path.push(format!("press {nx},{ny}"));
+            let held = rng.range(300, 1500);
+            path.push(wait(held));
+            path.push("lift".into());
+        }
+    }
+    path
+}
+
+/// The charger, as its lines say (`battery MV LINES`; a dev kit's input
+/// 25): set on it, charging, done, lifted off, and a wobbly cradle's
+/// moments off it. What the UI does there: the plug-in wake, the charge
+/// screen, the full charge's screen (`battery::FullCharge`), and, every
+/// five minutes, a charge glance (`battery::ChargeGlances`).
+fn charger(rng: &mut Rng, context: &mut Context) -> Step {
+    use Charger::{Charged, Charging, Unplugged};
+    let line = |rng: &mut Rng, low: u64, high: u64, lines: Charger| {
+        let lines = match lines {
+            Unplugged => "unplugged",
+            Charging => "charging",
+            Charged => "charged",
+        };
+        format!("battery {} {lines}", rng.range(low, high))
+    };
+    let mut step = Vec::new();
+    // Off it, and back on as it was: a wobbly cradle.
+    let wobble = |rng: &mut Rng, step: &mut Step, back: Charger| {
+        step.push(line(rng, 3700, 4150, Unplugged));
+        step.push(format!("wait {}ms", rng.range(100, 900)));
+        step.push(line(rng, 3700, 4200, back));
+    };
+    let now = match context.charger {
+        None | Some(Unplugged) => {
+            if rng.chance(0.8) {
+                step.push(line(rng, 3500, 4150, Charging));
+                Charging
+            } else {
+                // Set on it full.
+                step.push(line(rng, 4100, 4210, Charged));
+                Charged
+            }
+        }
+        Some(Charging) => match rng.below(4) {
+            // Done.
+            0 => {
+                step.push(line(rng, 4150, 4210, Charged));
+                Charged
+            }
+            // Further along.
+            1 => {
+                step.push(line(rng, 3600, 4200, Charging));
+                Charging
+            }
+            2 => {
+                step.push(line(rng, 3700, 4150, Unplugged));
+                Unplugged
+            }
+            _ => {
+                wobble(rng, &mut step, Charging);
+                Charging
+            }
+        },
+        Some(Charged) => match rng.below(4) {
+            0 | 1 => {
+                step.push(line(rng, 4000, 4210, Unplugged));
+                Unplugged
+            }
+            // A sag, which the charger tops up.
+            2 => {
+                step.push(line(rng, 4050, 4180, Charging));
+                Charging
+            }
+            _ => {
+                wobble(rng, &mut step, Charged);
+                Charged
+            }
+        },
+    };
+    context.charger = Some(now);
+    // Long enough on it for a charge glance: too long for a dev kit's
+    // real time, so for the simulator alone.
+    if rng.chance(0.15) {
+        let s = rng.range(300, 330);
+        context.waited += s as f64;
+        step.extend(host_only(context, format!("wait {s}s")));
+    }
+    step
+}
+
+/// A doze (`sleep::Night`): asleep in the morning, up (an alarm, or a
+/// double press), and asleep again before noon. It ends after 7 minutes
+/// awake rather than a night's 22, at noon, or by hand; or it's left
+/// going, for the steps after it. Needs the phone, to set the clock to a
+/// morning; and on a dev kit, ~15 s of real time.
+fn doze(rng: &mut Rng, context: &mut Context) -> Step {
+    let Some((utc, zone)) = context.now() else {
+        return vec![set_time(rng, context)];
+    };
+    let local = utc + zone_seconds(zone);
+    let midnight = local.div_euclid(DAY) * DAY - zone_seconds(zone);
+    // Between 05:00 and 11:30.
+    let morning = midnight + rng.range(5 * 3600, 11 * 3600 + 1800) as i64;
+    let mut step = vec![set_clock(context, morning, zone)];
+    step.extend(["asleep on".into(), "wait 2s".into()]);
+    context.waited += 2.0;
+    if rng.chance(0.5) {
+        step.push("button 2".into());
+    } else {
+        // A phone alarm at the next minute, a few seconds off, and the
+        // button to stop it ringing.
+        let at = (morning.div_euclid(60) + 1) * 60;
+        step.push(set_clock(context, at - rng.range(2, 6) as i64, zone));
+        let of_day = (at + zone_seconds(zone)).rem_euclid(DAY) / 60;
+        step.push(format!(
+            r#"gb GB({{"t":"alarm","d":[{{"h":{},"m":{},"rep":0,"on":true}}]}})"#,
+            of_day / 60,
+            of_day % 60
+        ));
+        step.extend(["wait 8s".into(), "button".into()]);
+        context.waited += 8.0;
+    }
+    step.extend([
+        "wait 1s".into(),
+        "asleep off".into(),
+        "wait 2s".into(),
+        "asleep on".into(),
+        "wait 2s".into(),
+    ]);
+    context.waited += 5.0;
+    match rng.below(4) {
+        0 => {}
+        // Up for good: 7 minutes on, it's over. Too long for a dev kit's
+        // real time, so its wait is for the simulator alone.
+        1 => {
+            step.push("asleep off".into());
+            let s = rng.range(400, 480);
+            context.waited += s as f64;
+            step.extend(host_only(context, format!("wait {s}s")));
+        }
+        // Noon ends it.
+        2 => {
+            let (utc, zone) = context.now().expect("the clock was just set");
+            let noon = (utc + zone_seconds(zone)).div_euclid(DAY) * DAY + 12 * 3600;
+            step.push(set_clock(
+                context,
+                noon - zone_seconds(zone) - rng.range(2, 6) as i64,
+                zone,
+            ));
+            step.push("wait 8s".into());
+            context.waited += 8.0;
+        }
+        _ => step.push("button 2".into()),
+    }
+    step
 }
 
 /// Gadgetbridge's `setTime`, at a random moment in October 2026 (with
@@ -1913,11 +2232,103 @@ fn action(rng: &mut Rng, context: &mut Context) -> Step {
 /// on a desk.
 fn set_time(rng: &mut Rng, context: &mut Context) -> String {
     // 2026-10-01 to 2026-11-01, UTC.
-    let utc = rng.range(1_790_812_800, 1_793_491_200) as i64;
+    let utc = rng.range(EARLIEST as u64, 1_793_491_200) as i64;
     let zone = *rng.pick(&[-8.0, -5.0, 0.0, 1.0, 2.0, 5.5, 9.0, 12.75]);
-    context.local = Some(utc + (zone * 3600.0) as i64);
+    set_clock(context, utc, zone)
+}
+
+/// The earliest and (past) the latest the phone sets the clock to: see
+/// [`set_time`]. From the start of October 2026 to the day after America's
+/// clocks went back (06:00 UTC on 1 November).
+const EARLIEST: i64 = 1_790_812_800;
+const LATEST: i64 = 1_793_577_600;
+
+/// Time zones a phone may travel to: the ends of the range in use (UTC-12,
+/// UTC+14), the half- and quarter-hour ones, and the ones [`set_time`]
+/// picks from.
+const ZONES: &[f64] = &[
+    -12.0, -9.5, -8.0, -5.0, -3.5, 0.0, 1.0, 2.0, 5.5, 5.75, 9.0, 12.75, 14.0,
+];
+
+const DAY: i64 = 24 * 60 * 60;
+
+fn zone_seconds(zone: f64) -> i64 {
+    (zone * 3600.0) as i64
+}
+
+/// Gadgetbridge's `setTime` at `utc` (within [`EARLIEST`] and
+/// [`LATEST`]: see [`set_time`] for why), in `zone`.
+fn set_clock(context: &mut Context, utc: i64, zone: f64) -> String {
+    let utc = utc.clamp(EARLIEST, LATEST - 1);
+    context.clock = Some((utc, zone));
     context.waited = 0.0;
     format!("gb {}", devkit::set_time_line(utc, zone))
+}
+
+/// The phone setting the clock while connected, as Gadgetbridge does on
+/// connecting, at a time zone or summer time change, and every couple of
+/// days (`TimeChangeReceiver`): relative to the clock now, as a phone
+/// does, where [`set_time`] jumps anywhere in its month. Clock bugs are
+/// the commonest kind to reach the wearer, and the fuzzer had found only
+/// two (F1 and F4 of the overnight findings), so these aim at the edges:
+/// midnight (the day's steps and history), noon (the quiet night), and
+/// summer time's hours.
+fn phone_clock(rng: &mut Rng, context: &mut Context) -> Step {
+    let Some((utc, zone)) = context.now() else {
+        return vec![set_time(rng, context)];
+    };
+    let local = utc + zone_seconds(zone);
+    let midnight = local.div_euclid(DAY) * DAY;
+    // Seconds either way.
+    let signed = |rng: &mut Rng, low: u64, high: u64| {
+        let s = rng.range(low, high) as i64;
+        if rng.chance(0.5) { s } else { -s }
+    };
+    match rng.below(6) {
+        // A clock that drifted, set right: a few seconds to a few
+        // minutes either way (a dev kit's is ~30 s behind after a
+        // reset).
+        0 => vec![set_clock(context, utc + signed(rng, 1, 180), zone)],
+        // Summer time starting or ending: the same instant, the zone an
+        // hour on or back.
+        1 => {
+            let zone = match (rng.chance(0.5), zone) {
+                (true, zone) if zone < 14.0 => zone + 1.0,
+                (_, zone) if zone > -12.0 => zone - 1.0,
+                _ => zone + 1.0,
+            };
+            vec![set_clock(context, utc, zone)]
+        }
+        // Travel: the same instant, in another zone.
+        2 => vec![set_clock(context, utc, *rng.pick(ZONES))],
+        // To just before one of the day's edges, for the steps' waits to
+        // cross it: midnight, summer time's hours (02:00 and 03:00), noon,
+        // and the next midnight.
+        3 => {
+            let edge = *rng.pick(&[0, 2 * 3600, 3 * 3600, 12 * 3600, DAY]);
+            let at = midnight + edge - rng.range(1, 15) as i64;
+            vec![set_clock(context, at - zone_seconds(zone), zone)]
+        }
+        // Across midnight, and back: just after it, then, a moment
+        // later, just before it again (a phone setting right a clock it
+        // had set fast).
+        4 => {
+            let next = midnight + DAY - zone_seconds(zone);
+            let after = set_clock(context, next + rng.range(1, 90) as i64, zone);
+            let ms = rng.range(200, 1500);
+            let before = set_clock(context, next - rng.range(1, 90) as i64, zone);
+            vec![after, format!("wait {ms}ms"), before]
+        }
+        // A large jump: hours or days, back or ahead.
+        _ => {
+            let s = if rng.chance(0.5) {
+                signed(rng, 3600, DAY as u64 - 1)
+            } else {
+                signed(rng, DAY as u64, 30 * DAY as u64)
+            };
+            vec![set_clock(context, utc + s, zone)]
+        }
+    }
 }
 
 /// Random text for the phone to send, as Gadgetbridge escapes it: plain

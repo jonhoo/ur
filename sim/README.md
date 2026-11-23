@@ -344,6 +344,14 @@ The dev kit's storage is read first (`original-storage.bin`) and written
 back at the end. `--dry` runs the scripts on the simulator alone, to check
 the generator (`tests/fuzz.rs` does).
 
+Some steps aim at what timing decides: two touches at the gaps that tell
+a double tap, a retry and a tap and hold apart (from the screen off, or a
+glance); the charger's lines in the order a cradle gives them; the phone
+setting the clock a little off, across midnight, noon and summer time's
+hours, or far; and a doze after getting up in the morning, and its end.
+Waits too long for a dev kit's real time (a charge glance's five
+minutes, a doze's seven) are the simulator's alone.
+
 Besides a difference from the simulator, a run stops at:
 
 - a restart the script didn't ask for: a panic, a fault, or the watchdog.
