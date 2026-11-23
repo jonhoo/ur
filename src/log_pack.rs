@@ -51,18 +51,30 @@ pub fn pack_samples(samples: &[u16], out: &mut [u8]) -> usize {
     let mut previous: Option<u16> = None;
     for &sample in samples {
         let delta = previous.map(|before| i32::from(sample) - i32::from(before));
-        let bytes = match delta {
-            Some(delta @ -127..=127) => &[delta as i8 as u8][..],
+        // Each step's bytes go into the one local buffer, rather than a
+        // slice of whichever of two temporary arrays the `match` picked:
+        // with the source of `copy_from_slice` able to point into either
+        // of two arrays of different sizes, Kani (CBMC) gets the copy
+        // wrong and finds a counterexample to the round trip that no run
+        // has (model-checking/kani#5065, diffblue/cbmc#9237). Don't fold
+        // it back while that's open.
+        let mut buf = [0u8; PACKED_PER_SAMPLE];
+        let n = match delta {
+            Some(delta @ -127..=127) => {
+                buf[0] = delta as i8 as u8;
+                1
+            }
             _ => {
                 let [low, high] = sample.to_le_bytes();
-                &[ESCAPE, low, high][..]
+                buf = [ESCAPE, low, high];
+                3
             }
         };
-        let Some(room) = out.get_mut(len..len + bytes.len()) else {
+        let Some(room) = out.get_mut(len..len + n) else {
             break;
         };
-        room.copy_from_slice(bytes);
-        len += bytes.len();
+        room.copy_from_slice(&buf[..n]);
+        len += n;
         previous = Some(sample);
     }
     len
