@@ -361,6 +361,30 @@ mod tests {
         assert_eq!(rings, vec![(150, Kind::Timer(1)), (300, Kind::Timer(0))]);
     }
 
+    /// A timer stopped before it runs out never rings, nor shows as next,
+    /// and the other runs on.
+    #[test]
+    fn a_stopped_timer_never_rings() {
+        let s = Settings {
+            timers: [5, 2],
+            ..Settings::default()
+        };
+        let mut state = State::default();
+        state.start_timer(0, &s, BOOTED);
+        state.start_timer(1, &s, BOOTED);
+        state.stop_timer(1);
+        assert_eq!(state.remaining(1, BOOTED + 60), None);
+        let now = at(MONDAY, 10, 0) * 60;
+        assert_eq!(
+            state.next(&s, &Phone::default(), now, BOOTED),
+            Some((Kind::Timer(0), now + 5 * 60))
+        );
+        let rings: Vec<_> = (BOOTED..BOOTED + 600)
+            .filter_map(|uptime| state.elapsed(uptime).map(|k| (uptime - BOOTED, k)))
+            .collect();
+        assert_eq!(rings, vec![(300, Kind::Timer(0))]);
+    }
+
     /// A timer is a duration: the phone setting the clock, or a new time
     /// zone, moves neither when it rings nor what it says is left. (When
     /// it counted local seconds, a clock set back 8.7 days left 209 hours
@@ -435,6 +459,103 @@ mod tests {
         let garbage = Settings::from_bytes([0xFF; Settings::BYTES]);
         assert_eq!(garbage.smart_weekday, Settings::default().smart_weekday);
         assert_eq!(garbage.timers, Settings::default().timers);
+    }
+
+    /// Whatever the editor sets comes back from storage as it was: every
+    /// combination of the switches, with times and durations across
+    /// their whole range, the last minute of the day and the longest
+    /// timer included.
+    #[test]
+    fn any_settings_round_trip() {
+        let day = DAY as u16;
+        for switches in 0..8u8 {
+            for i in 0..day {
+                let s = Settings {
+                    smart: switches & 1 != 0,
+                    at: [switches & 2 != 0, switches & 4 != 0],
+                    smart_weekday: i,
+                    smart_weekend: day - 1 - i,
+                    at_time: [(i * 7) % day, (i * 13 + 5) % day],
+                    timers: [1 + i % MAX_TIMER, MAX_TIMER - i % MAX_TIMER],
+                };
+                assert_eq!(Settings::from_bytes(s.to_bytes()), s);
+            }
+        }
+    }
+
+    /// The settings and the phone's alarms live in flash, where the next
+    /// build (or the one before, after a downgrade) reads them: their
+    /// layout is fixed. Little-endian minutes, after a byte of switches
+    /// (smart, then the two one-offs) for the settings, and a count for
+    /// the phone's, each of which is its time, weekdays and switch.
+    #[test]
+    fn the_stored_format_is_fixed() {
+        let s = Settings {
+            smart: true,
+            at: [false, true],
+            smart_weekday: 7 * 60,
+            smart_weekend: 9 * 60 + 30,
+            at_time: [0, 23 * 60 + 59],
+            timers: [10, MAX_TIMER],
+        };
+        let stored = [
+            0b101, 0xA4, 0x01, 0x3A, 0x02, 0x00, 0x00, 0x9F, 0x05, 0x0A, 0x00, 0xC0, 0x03,
+        ];
+        assert_eq!(Settings::BYTES, stored.len());
+        assert_eq!(s.to_bytes(), stored);
+        assert_eq!(Settings::from_bytes(stored), s);
+        // A time from 24:00 on, or a timer of none or over the longest,
+        // is out of range: the default instead.
+        let mut odd = stored;
+        odd[1..3].copy_from_slice(&(DAY as u16).to_le_bytes());
+        odd[9..11].copy_from_slice(&0u16.to_le_bytes());
+        odd[11..13].copy_from_slice(&(MAX_TIMER + 1).to_le_bytes());
+        let read = Settings::from_bytes(odd);
+        assert_eq!(read.smart_weekday, Settings::default().smart_weekday);
+        assert_eq!(read.timers, Settings::default().timers);
+        assert_eq!(read.smart_weekend, s.smart_weekend);
+
+        let mut p = phone(&[
+            (5, 30, 0, true),
+            (6, 15, MON | FRI, true),
+            (23, 59, 0, false),
+        ]);
+        rings(
+            &mut Settings::default(),
+            &mut p,
+            &mut State::default(),
+            at(MONDAY, 5, 0),
+            at(MONDAY, 6, 0),
+        );
+        let mut stored = [0; 41];
+        stored[..13].copy_from_slice(&[3, 0x4A, 0x01, 0, 2, 0x77, 0x01, 0x11, 1, 0x9F, 0x05, 0, 0]);
+        assert_eq!(Phone::BYTES, stored.len());
+        assert_eq!(p.to_bytes(), stored);
+        assert_eq!(Phone::from_bytes(stored), p);
+        // All ten slots, each its own.
+        let full = phone(
+            &(0..PHONE_ALARMS as u16)
+                .map(|i| (i, i, 1 << (i % 7), i % 2 == 0))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(Phone::from_bytes(full.to_bytes()), full);
+    }
+
+    /// The calendar holds at 1970 and before it, where days since then
+    /// are 0 or less, as anywhere else (the proofs take the clock from
+    /// 1969 on).
+    #[test]
+    fn the_next_alarm_comes_round_at_1970_too() {
+        // 1970-01-01, a Thursday: its first minute, the one before, and
+        // 06:00.
+        for now in [-1, 0, 6 * 60] {
+            assert_eq!(next_smart(&smart(), now), 7 * 60, "from {now}");
+            assert_eq!(next_at(7 * 60, 0, now), 7 * 60, "from {now}");
+            // The first Saturday is the third day.
+            assert_eq!(next_at(7 * 60, SAT, now), 2 * DAY + 7 * 60, "from {now}");
+        }
+        // Saturday's smart alarm is at its weekend time.
+        assert_eq!(next_smart(&smart(), DAY + 8 * 60), 2 * DAY + 9 * 60);
     }
 
     // ==========================================================================
@@ -1172,6 +1293,65 @@ mod tests {
                 phone_rang: true
             })
         );
+    }
+
+    /// The smart alarm remembers which morning it rang for (by its latest
+    /// time), early at a stir or at its time, so that it rings once a
+    /// morning; and only when it's the one ringing, not whenever an
+    /// alarm rings with it switched on.
+    #[test]
+    fn a_smart_alarm_remembers_the_morning_it_rang_for() {
+        let mut s = Settings {
+            at: [true, false],
+            at_time: [6 * 60 + 40, 0],
+            ..smart()
+        };
+        let mut p = Phone::default();
+        let mut state = State::default();
+        let mut due = |state: &mut State, minute: i64, wearer| {
+            let due = state.due(&mut s, &mut p, minute * 60, wearer)?;
+            Some((due.kind, due.early, state.smart_rang()))
+        };
+        assert_eq!(state.smart_rang(), None);
+        // Another alarm, in the smart one's window but not at a stir.
+        assert_eq!(
+            due(&mut state, at(MONDAY, 6, 40), Wearer::default()),
+            Some((Kind::At(0), false, None))
+        );
+        // At its time.
+        let monday = Some(at(MONDAY, 7, 0));
+        assert_eq!(
+            due(&mut state, at(MONDAY, 7, 0), Wearer::default()),
+            Some((Kind::Smart, false, monday))
+        );
+        // Early, at a stir: the next morning's.
+        assert_eq!(
+            due(&mut state, at(MONDAY + 1, 6, 40), LIGHT_STIR),
+            Some((Kind::Smart, true, Some(at(MONDAY + 1, 7, 0))))
+        );
+        // Not again that morning, though it's still in its window.
+        assert_eq!(due(&mut state, at(MONDAY + 1, 6, 41), LIGHT_STIR), None);
+    }
+
+    /// The first check (after a reset, say, or a jump of the clock) looks
+    /// at the minute under way: an alarm at that very minute rings.
+    #[test]
+    fn the_first_check_rings_an_alarm_at_its_minute() {
+        let mut s = Settings {
+            at: [true, false],
+            at_time: [7 * 60, 0],
+            ..Settings::default()
+        };
+        let mut p = phone(&[(9, 0, 0x7F, true)]);
+        let mut state = State::default();
+        let mut due = |minute: i64| {
+            state
+                .due(&mut s, &mut p, minute * 60 + 30, Wearer::default())
+                .map(|due| due.kind)
+        };
+        assert_eq!(due(at(MONDAY, 7, 0)), Some(Kind::At(0)));
+        // A day on: further than `CATCH_UP`, so it starts afresh.
+        assert_eq!(due(at(MONDAY + 1, 9, 0)), Some(Kind::Phone(0)));
     }
 
     /// `next` names what `due` rings: at a shared minute, and after winter
