@@ -794,6 +794,37 @@ mod tests {
         );
     }
 
+    /// The same, with the new offset's time arriving late: Gadgetbridge
+    /// sends it 5 s after the change, and at about one connection in six
+    /// the phone's time reaches the watch some seconds after it was
+    /// stamped (1 to 12 s in the field logs). Stamped 8 s late, it put
+    /// the clock from 03:00:05 back to 01:59:57: 61 minutes by the
+    /// minute, one more than `CATCH_UP` allowed back, so the hour was
+    /// checked afresh and 02:30 rang twice.
+    #[test]
+    fn winter_time_sent_late_rings_each_alarm_once() {
+        let mut s = Settings::default();
+        let mut p = phone(&[(2, 30, 0x7F, true), (3, 10, 0x7F, true)]);
+        let mut state = State::default();
+        let sunday = MONDAY - 1;
+        let mut rang = Vec::new();
+        // Checked every second, as `App::check_alarms` checks.
+        let seconds = (at(sunday, 1, 50) * 60..=at(sunday, 3, 0) * 60 + 5)
+            .chain(at(sunday, 1, 59) * 60 + 57..at(sunday, 3, 30) * 60);
+        for second in seconds {
+            if let Some(due) = state.due(&mut s, &mut p, second, Wearer::default()) {
+                rang.push((second.div_euclid(60), due.kind));
+            }
+        }
+        assert_eq!(
+            rang,
+            vec![
+                (at(sunday, 2, 30), Kind::Phone(0)),
+                (at(sunday, 3, 10), Kind::Phone(1)),
+            ]
+        );
+    }
+
     #[test]
     fn a_clock_set_back_a_little_rings_nothing_twice() {
         // The phone's clock was 20 minutes fast, and is put right after

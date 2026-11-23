@@ -126,9 +126,10 @@ pub const PHONE_ALARMS: usize = 10;
 ///   rings once the one before is done). What the clock moved over rings
 ///   at once: an alarm at 02:30 rings at 03:00 the night summer time
 ///   starts, as a phone's does, rather than not at all.
-/// - Back: the hour that winter time repeats. What already rang in the
-///   minutes repeated doesn't ring again: an alarm at 02:30 rings once
-///   that night, not twice.
+/// - Back: the hour that winter time repeats, even with the phone's time
+///   arriving some seconds late. What already rang in the minutes
+///   repeated doesn't ring again: an alarm at 02:30 rings once that
+///   night, not twice.
 ///
 /// A clock that moves further (set by the phone, or a new time zone)
 /// skips what it jumped over rather than ringing for it, and rings again
@@ -541,9 +542,12 @@ impl State {
         // Forward, it's the minute before plus up to `CATCH_UP` skipped:
         // summer time's jump from 02:00 to 03:00 can come between checks
         // at 01:59 and 03:00, when the watch's clock is a second or two
-        // behind the phone's.
+        // behind the phone's. Back, likewise a minute more than
+        // `CATCH_UP`: winter time's hour can come with the seconds a
+        // phone's time arrives late, and so cross 61 turns of a minute
+        // (03:00:05, where 03:00 was checked, to 01:59:57).
         match self.checked.map(i64::from) {
-            Some(checked) if (minute - 1 - CATCH_UP..=minute + CATCH_UP).contains(&checked) => {
+            Some(checked) if (minute - 1 - CATCH_UP..=minute + 1 + CATCH_UP).contains(&checked) => {
                 checked
             }
             _ => minute - 1,
