@@ -641,3 +641,83 @@ mod tests {
         assert!(!swing(58.0, None, 0, LIMIT));
     }
 }
+
+/// Kani proofs (`cargo kani` here, one at a time with `--harness`).
+#[cfg(kani)]
+mod proofs {
+    use super::workout::*;
+
+    fn any_window() -> [Minute; WINDOW] {
+        core::array::from_fn(|_| Minute {
+            steps: kani::any(),
+            movement: kani::any(),
+        })
+    }
+
+    fn any_kind() -> Option<Kind> {
+        match kani::any::<u8>() % 3 {
+            0 => None,
+            1 => Some(Kind::Walk),
+            _ => Some(Kind::Effort),
+        }
+    }
+
+    /// What `detect` decides, it keeps deciding on the same minutes: a
+    /// workout it starts doesn't end on the next look at the same window,
+    /// and one it ends doesn't start again. (A flap would send Gadgetbridge
+    /// a workout of a minute, and restart the heart rate's schedule.)
+    #[kani::proof]
+    #[kani::unwind(11)]
+    fn a_decision_stands_on_the_same_minutes() {
+        let recent = any_window();
+        let current = any_kind();
+        let now = detect(current, &recent, false);
+        assert_eq!(detect(now, &recent, false), now);
+        kani::cover!(
+            current.is_none() && now == Some(Kind::Effort),
+            "an effort starts"
+        );
+        kani::cover!(
+            current == Some(Kind::Effort) && now.is_none(),
+            "an effort ends"
+        );
+        kani::cover!(current == Some(Kind::Walk) && now.is_none(), "a walk ends");
+    }
+
+    /// An effort ends at most [`EFFORT_LAPSE_MINUTES`] minutes after its
+    /// last hard one, however busy the wrist stays meanwhile: from any
+    /// window and any state, that many minutes below [`EFFORT_MOVEMENT`]
+    /// (asleep or not, with any steps) leave no effort under way. This is
+    /// what bounds the LED's time on an effort that was never one (see
+    /// the module's docs: the strength session's ran on for 40 minutes
+    /// when quiet alone ended an effort).
+    #[kani::proof]
+    #[kani::unwind(11)]
+    fn an_effort_lapses_without_hard_minutes() {
+        let mut recent = any_window();
+        let mut current = any_kind();
+        let started = current == Some(Kind::Effort);
+        let (mut busy, mut awake) = (true, true);
+        for _ in 0..EFFORT_LAPSE_MINUTES {
+            let minute = Minute {
+                steps: kani::any(),
+                movement: kani::any(),
+            };
+            kani::assume(minute.movement < EFFORT_MOVEMENT);
+            busy &= minute.movement >= EFFORT_END_MOVEMENT;
+            recent.rotate_left(1);
+            recent[WINDOW - 1] = minute;
+            let asleep: bool = kani::any();
+            awake &= !asleep;
+            current = detect(current, &recent, asleep);
+        }
+        assert_ne!(current, Some(Kind::Effort));
+        // The lapse, not the quiet nor sleep, ended it: every minute was
+        // busy and awake.
+        kani::cover!(
+            started && busy && awake && current.is_none(),
+            "an effort lapses"
+        );
+        kani::cover!(started && current == Some(Kind::Walk), "a walk takes over");
+    }
+}
