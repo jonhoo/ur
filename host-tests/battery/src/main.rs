@@ -637,6 +637,11 @@ mod tests {
     // Time to full
     // ==========================================================================
 
+    /// A charge that ran until the charger was done: its lines (local
+    /// minute, millivolts, charging), and the window (from, to, in local
+    /// minutes) in which the charger was done.
+    type ChargeLog = (&'static [(u32, u32, bool)], (u32, u32));
+
     /// The sealed watch's two charges that ran until the charger was done
     /// (its 10-minute lines, as `MORNING`), each to the last line still
     /// charging, with the window in which the charger was done: until the
@@ -645,7 +650,7 @@ mod tests {
     /// 2026-11-11 (0.11.0-rc.2, `tmp/hc-1112/dec.log`): on battery at
     /// 15:41:51, charging at 15:51:51 (taken as plugged in at 15:46), done
     /// by 16:51:51.
-    const NOV_11: (&[(u32, u32, bool)], (u32, u32)) = (
+    const NOV_11: ChargeLog = (
         &[
             (15 * 60 + 32, 3882, false),
             (15 * 60 + 42, 3881, false),
@@ -662,7 +667,7 @@ mod tests {
     );
     /// 2026-11-10 (`tmp/b010/rc5.log`): booted on the charger at 21:02,
     /// done by 22:12:58.
-    const NOV_10: (&[(u32, u32, bool)], (u32, u32)) = (
+    const NOV_10: ChargeLog = (
         &[
             (21 * 60 + 2, 4010, true),
             (21 * 60 + 3, 4015, true),

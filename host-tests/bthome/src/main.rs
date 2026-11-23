@@ -170,7 +170,7 @@ mod tests {
             // The packet id is the counter's low byte; the battery; the
             // button's event.
             assert_eq!(&plain[..6], [0x00, 0x34, 0x01, 82, 0x3A, event]);
-            let mut dimmers = vec![[0x3C, 0, 0]; 3];
+            let mut dimmers = [[0x3C, 0, 0]; 3];
             if let Some((slot, rotate)) = dimmer {
                 dimmers[slot] = [0x3C, rotate, code];
             }
@@ -196,7 +196,7 @@ mod tests {
                 assert_eq!(counter, 0x1234);
                 // The packet id, then a button each, in order: the pressed
                 // one's with the event, the rest "none". No battery.
-                let mut buttons = vec![[0x3A, 0x00]; 6];
+                let mut buttons = [[0x3A, 0x00]; 6];
                 buttons[usize::from(code) - 1][1] = event;
                 assert_eq!(plain[..2], [0x00, 0x34]);
                 assert_eq!(plain[2..].to_vec(), buttons.concat(), "{code} {gesture:?}");

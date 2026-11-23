@@ -1913,7 +1913,7 @@ mod tests {
         }
         assert_eq!(spellings, [true; 2], "both spellings tried");
         // Without, nothing is said.
-        assert_eq!(with_bitmaps(&notify_line("Signal", "", "Lin")).1, false);
+        assert!(!with_bitmaps(&notify_line("Signal", "", "Lin")).1);
     }
 
     /// Images are noticed wherever Gadgetbridge puts them in text we
