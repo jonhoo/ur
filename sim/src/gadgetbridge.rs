@@ -279,26 +279,112 @@ impl Session {
     /// What the wearer does: on the dev kit, what can be done to one
     /// (steps and a heart rate only the simulator can be told, so they're
     /// comments there; the choices that made them still count).
+    ///
+    /// A byte picks it, by what it is modulo 12; what's left of the byte
+    /// (its twelfths) picks a variant of a few: two touches for a tap,
+    /// the charger for steps, asleep for a heart rate. They came later,
+    /// and take no more bytes, so the inputs from before still make the
+    /// sessions they did, bar a step whose byte was high.
     fn wearer(&mut self, choices: &mut Choices<'_>, runner: &mut impl Runner) -> Result<(), Stop> {
         let (x, y) = (choices.below(80), choices.below(80));
-        let line = match choices.byte() % 12 {
-            0 | 1 => "button".to_owned(),
-            2 => "button 2".to_owned(),
-            3 | 4 => format!("tap {x},{y}"),
-            5 => format!("long {x},{y}"),
-            6 => "up".to_owned(),
-            7 => "down".to_owned(),
-            8 => "left".to_owned(),
-            9 => "right".to_owned(),
-            10 => format!("steps {}", choices.below(30_000)),
-            _ => format!("heart {}", 40 + choices.below(140)),
+        let byte = choices.byte();
+        let variant = byte / 12;
+        // Within `wake::PAIR_RADIUS` of (x, y): where a pair's second
+        // touch must start.
+        let (nx, ny) = ((x + 5).min(79), (y + 4).min(79));
+        let lines: Vec<String> = match byte % 12 {
+            0 | 1 => vec!["button".to_owned()],
+            2 => vec!["button 2".to_owned()],
+            // Two touches, as `wake::after` tells them apart: a pair
+            // (`DOUBLE_TAP_MS`: the second within 300 ms of the first's
+            // lift), a retry after a light tap (`RETRY_TAP_MS`, 1500), or
+            // neither. (Over a dev kit's probe, two taps are ~0.3 s apart
+            // at best: `double` is its quick pair.)
+            3 | 4 => match variant {
+                14 => vec![format!("double {x},{y}")],
+                // (A tap's touch starts its length before it's
+                // handled: these waits are the gap from the first's lift
+                // and the second's length.)
+                15 => vec![
+                    format!("tap {x},{y} 30"),
+                    "wait 60ms".to_owned(),
+                    format!("tap {nx},{ny} 30"),
+                ],
+                16 => vec![
+                    format!("tap {x},{y}"),
+                    "wait 150ms".to_owned(),
+                    format!("tap {nx},{ny}"),
+                ],
+                17 => vec![
+                    format!("tap {x},{y}"),
+                    "wait 450ms".to_owned(),
+                    format!("tap {nx},{ny}"),
+                ],
+                18 => vec![
+                    format!("tap {x},{y} 30"),
+                    "wait 900ms".to_owned(),
+                    format!("tap {nx},{ny}"),
+                ],
+                19 => vec![
+                    format!("tap {x},{y} 30"),
+                    "wait 1800ms".to_owned(),
+                    format!("tap {nx},{ny}"),
+                ],
+                // A tap and hold.
+                20 => vec![
+                    format!("tap {x},{y}"),
+                    "wait 100ms".to_owned(),
+                    format!("press {nx},{ny}"),
+                    "wait 900ms".to_owned(),
+                    "lift".to_owned(),
+                ],
+                // A light tap.
+                21 => vec![format!("tap {x},{y} 30")],
+                _ => vec![format!("tap {x},{y}")],
+            },
+            5 => vec![format!("long {x},{y}")],
+            6 => vec!["up".to_owned()],
+            7 => vec!["down".to_owned()],
+            8 => vec!["left".to_owned()],
+            9 => vec!["right".to_owned()],
+            10 => {
+                let n = choices.below(30_000);
+                // The charger, as its lines say (a dev kit's input 25):
+                // its millivolts from the steps' bytes.
+                let mv = 3500 + n % 710;
+                match variant {
+                    16 | 17 => vec![format!("battery {mv} charging")],
+                    18 => vec![format!("battery {mv} charged")],
+                    19 => vec![format!("battery {mv} unplugged")],
+                    // A wobbly cradle: off it for a moment.
+                    20 => vec![
+                        format!("battery {mv} unplugged"),
+                        "wait 500ms".to_owned(),
+                        format!("battery {mv} charging"),
+                    ],
+                    _ => vec![format!("steps {n}")],
+                }
+            }
+            _ => {
+                let bpm = 40 + choices.below(140);
+                // Sleep tracking says the wearer is asleep, or not (a dev
+                // kit's input 21): the quiet night.
+                match variant {
+                    17 | 18 => vec!["asleep on".to_owned()],
+                    19 | 20 => vec!["asleep off".to_owned()],
+                    _ => vec![format!("heart {bpm}")],
+                }
+            }
         };
-        let host_only = line.starts_with("steps ") || line.starts_with("heart ");
-        if host_only && !runner.alone() {
-            self.comment(format!("host only: {line}"));
-            return Ok(());
+        for line in lines {
+            let host_only = line.starts_with("steps ") || line.starts_with("heart ");
+            if host_only && !runner.alone() {
+                self.comment(format!("host only: {line}"));
+                continue;
+            }
+            self.line(runner, line)?;
         }
-        self.line(runner, line)
+        Ok(())
     }
 
     /// What the phone does, and the lines it and the watch then trade.
@@ -322,6 +408,20 @@ impl Session {
             Action::Disconnect => {
                 self.line(runner, "disconnect".into())?;
                 self.gb.disconnect();
+            }
+            // The phone's clock set, or its zone (or its summer time)
+            // changed: Android says so, and Gadgetbridge sets the watch's
+            // at once, if it syncs the time at all
+            // (`externalevents/TimeChangeReceiver.java:53-86`; to the
+            // connected devices only, as `uart_tx` sends).
+            //
+            // TODO: its periodic sync, every ~44 hours of the phone's
+            // clock (`PERIODIC_SYNC_INTERVAL_MS`, `:49`).
+            Action::Clock { .. } | Action::Zone { .. } => {
+                self.gb.perform(action);
+                if self.gb.prefs.sync_time {
+                    self.gb.perform(&Action::SetTime);
+                }
             }
             action => self.gb.perform(action),
         }
