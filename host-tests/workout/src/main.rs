@@ -343,6 +343,70 @@ mod tests {
         assert!(said[49..].iter().all(Option::is_none));
     }
 
+    /// A minute exactly at a threshold has reached it: at
+    /// `EFFORT_MOVEMENT` it's hard, at `EFFORT_END_MOVEMENT` it's not
+    /// quiet, and at `WALK_END_STEPS` it's still walking. So a workout
+    /// whose minutes sit right on the line goes on, for as long as they
+    /// do, and the minute just under it ends it.
+    #[test]
+    fn a_minute_at_a_threshold_has_reached_it() {
+        let hard = Minute {
+            steps: 0,
+            movement: EFFORT_MOVEMENT,
+        };
+        let not_quiet = Minute {
+            steps: 0,
+            movement: EFFORT_END_MOVEMENT,
+        };
+        let quiet = Minute {
+            steps: 0,
+            movement: EFFORT_END_MOVEMENT - 1,
+        };
+        let just_walking = Minute {
+            steps: WALK_END_STEPS,
+            movement: 1500,
+        };
+        let stopped = Minute {
+            steps: WALK_END_STEPS - 1,
+            movement: 1500,
+        };
+
+        // Hard minutes at the line start an effort, and keep it from
+        // lapsing for as long as they come; one in ten does.
+        let mut day = repeat(hard, 30);
+        for _ in 0..3 {
+            day.extend(repeat(not_quiet, EFFORT_LAPSE_MINUTES - 1));
+            day.push(hard);
+        }
+        let said = run(&day);
+        assert_eq!(said[EFFORT_MINUTES - 1], Some(Kind::Effort));
+        assert!(
+            said[EFFORT_MINUTES - 1..]
+                .iter()
+                .all(|&kind| kind == Some(Kind::Effort))
+        );
+        // Minutes at the quiet line aren't quiet, however many; under it,
+        // they are.
+        let day = [
+            repeat(hard, 10),
+            repeat(not_quiet, EFFORT_LAPSE_MINUTES - 1),
+        ]
+        .concat();
+        assert!(
+            run(&day)[9..]
+                .iter()
+                .all(|&kind| kind == Some(Kind::Effort))
+        );
+        let day = [repeat(hard, 10), repeat(quiet, EFFORT_END_MINUTES)].concat();
+        assert_eq!(run(&day).last(), Some(&None));
+
+        // A walk whose steps drop to the line goes on; under it, it ends.
+        let day = [repeat(WALKING, 5), repeat(just_walking, 10)].concat();
+        assert!(run(&day)[2..].iter().all(|&kind| kind == Some(Kind::Walk)));
+        let day = [repeat(WALKING, 5), repeat(stopped, WALK_END_MINUTES)].concat();
+        assert_eq!(run(&day).last(), Some(&None));
+    }
+
     // ------------------------------------------------------------------
     // The strength session of 2026-11-22
     // ------------------------------------------------------------------
