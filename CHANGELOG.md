@@ -23,6 +23,7 @@ missing below were test builds for the dev kit.
 ### Fixed
 
 - Ring each alarm once the night winter time starts even when the phone's time reaches the watch a few seconds late (as it does at about one connection in six): stamped more than 5 seconds late, it put the clock back over 61 turns of a minute, which the watch took for a new time zone, and every alarm between 02:00 and 03:00 rang a second time (47f16a2)
+- Keep holding back a nap soon after a night that the watch has already sent to Gadgetbridge when the step counter fires as the wrist turns over in bed: such a minute counted as getting up, which the sleep detection takes it for only when it's not among other minutes of movement, so the minutes after it could go to the phone as awake before the watch knew whether they were the start of a nap, and stay awake there for good. None of 100,000 simulated days and nights ran into it (cf01a78)
 
 ### Security
 
