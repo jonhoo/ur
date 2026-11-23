@@ -201,3 +201,40 @@ mod tests {
         }
     }
 }
+
+/// Kani proofs (`cargo kani` here, one at a time with `--harness`).
+///
+/// TODO: a proof that any samples `pack_samples` packs unpack (as
+/// `scripts/expand_log.py` does) to themselves. Kani 0.68 finds a
+/// counterexample to it that the same inputs, run concretely, don't
+/// reproduce; that looks like a Kani modelling bug, and is being looked
+/// into apart from this.
+#[cfg(kani)]
+mod proofs {
+    use super::log_pack::*;
+
+    /// What `still` promises: every sample within 8 (half of
+    /// `STILL_AXIS_RANGE`) of the middle it gives, on each axis, for any
+    /// poll of up to three samples.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn a_still_polls_samples_are_within_8_of_its_middle() {
+        let samples: [[i8; 3]; 3] = kani::any();
+        let n: usize = kani::any();
+        kani::assume(n <= 3);
+        let middle = still(&samples[..n]);
+        let mut furthest = 0;
+        if let Some(middle) = middle {
+            for sample in &samples[..n] {
+                for axis in 0..3 {
+                    let d = (i16::from(sample[axis]) - i16::from(middle[axis])).abs();
+                    assert!(d <= STILL_AXIS_RANGE / 2, "{d}");
+                    furthest = furthest.max(d);
+                }
+            }
+        }
+        kani::cover!(n == 3 && middle.is_some(), "three samples at rest");
+        // The bound is tight: a range of 15 puts its top 8 from the middle.
+        kani::cover!(furthest == STILL_AXIS_RANGE / 2, "a sample 8 away");
+    }
+}

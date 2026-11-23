@@ -10,6 +10,10 @@ publish = false
 
 [dependencies]
 
+# `cargo kani` builds with `--cfg kani`, for the proofs in `src/main.rs`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 # CI runs the host tests with `--release`; keep the arithmetic checks.
 [profile.release]
 overflow-checks = true
