@@ -22,7 +22,7 @@
 //! [`crate::system_off`] keeps the activity log (see [`crate::spill`]) and
 //! saves the rest before switching the watch off, and every couple of
 //! minutes (see [`crate::snapshot`]), and
-//! [`crate::field_log`] keeps logs in the top 2 MiB and, since 0.11.3, in
+//! [`crate::field_log`] keeps logs in the top 2 MiB and, since 0.12.0, in
 //! the space below the checkpoints too (see [`crate::log_ring`]).
 //!
 //! The flash shares SPIM2 with the LCD (see [`crate::spi`]). Every operation

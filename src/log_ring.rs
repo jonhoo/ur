@@ -3,7 +3,7 @@
 //!
 //! The ring is one run of sector indices over two stretches of the flash
 //! that don't touch: the top 2 MiB, which was all of it up to 0.11.2, and
-//! (since 0.11.3) the space the bootloader leaves free below our saved
+//! (since 0.12.0) the space the bootloader leaves free below our saved
 //! activity. Between them, and below the second, are the crash checkpoints,
 //! the System OFF record and MCUBoot's secondary slot (see
 //! [`crate::spi_flash`] for the map): the log erases a sector every few
