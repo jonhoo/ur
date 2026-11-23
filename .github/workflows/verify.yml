@@ -19,10 +19,13 @@
 #   run the firmware's UI and settings storage against random inputs,
 #   with every `debug_assert!` on: half an hour each, from their seeds
 #   (sim/fuzz/seeds.tar.zst; test.yml runs those alone on every PR)
+# - coverage: line and branch coverage of the host tests and the
+#   simulator's tests, merged (scripts/coverage.sh), to read: in the run's
+#   summary, and as HTML. No number fails it
 #
-# Nightly: Miri, Bolero's libFuzzer and cargo-fuzz need it, so it is
-# pinned here (not in rust-toolchain.toml, which is the release compiler),
-# as test.yml pins it. TODO: Dependabot doesn't update this pin; move it,
+# Nightly: Miri, Bolero's libFuzzer, cargo-fuzz and branch coverage need
+# it, so it is pinned here (not in rust-toolchain.toml, which is the
+# release compiler), as test.yml pins it. TODO: Dependabot doesn't update this pin; move it,
 # and Kani's, when either breaks, or a new Rust edition needs it.
 #
 # See CONTRIBUTING.md for running each of these locally.
@@ -209,3 +212,56 @@ jobs:
           name: sim-fuzz-artifacts
           path: sim/fuzz/artifacts/
           if-no-files-found: ignore
+  # Line and branch coverage (scripts/coverage.sh): the firmware's modules
+  # through the host tests and the simulator, and the simulator through
+  # its tests, merged into one report. Not a check (no number fails it;
+  # its tests failing does, as they do in test.yml): a release's look at
+  # what no test reaches, as the run's summary (each file, least covered
+  # first, and the functions never run) and as HTML, line by line (the
+  # `coverage` artifact). Self-contained, like the jobs above.
+  coverage:
+    runs-on: ubuntu-latest
+    name: coverage
+    # Four minutes on a desktop, building with 8 jobs (in November 2026),
+    # most of it building.
+    timeout-minutes: 60
+    env:
+      CARGO_LLVM_COV_VERSION: 0.9.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+      # The simulator's tests compare its screenshots with the approved
+      # ones, in Git LFS: from the cache test.yml fills, as it does.
+      - name: list LFS objects
+        run: git lfs ls-files --long | cut -d' ' -f1 | sort >lfs-ids
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # tag=v6.1.0
+        with:
+          path: .git/lfs/objects
+          key: lfs-${{ hashFiles('lfs-ids') }}
+          restore-keys: lfs-
+      - name: fetch LFS objects
+        run: git lfs pull
+      # Nightly, as branch coverage is unstable; with llvm-tools, whose
+      # llvm-cov reads what that compiler's instrumentation wrote.
+      - name: Install nightly, with llvm-tools
+        run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # tag=v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-${{ env.CARGO_LLVM_COV_VERSION }}
+      - name: Install cargo-llvm-cov
+        run: command -v cargo-llvm-cov >/dev/null || cargo install --locked cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION"
+      - name: scripts/coverage.sh
+        run: scripts/coverage.sh coverage
+      # Even when a test failed: the script still writes the report, of
+      # what the tests ran.
+      - name: summary
+        if: ${{ !cancelled() && hashFiles('coverage/summary.md') != '' }}
+        run: cat coverage/summary.md >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # tag=v7.0.2
+        if: ${{ !cancelled() && hashFiles('coverage/summary.md') != '' }}
+        with:
+          name: coverage
+          path: |
+            coverage/html/
+            coverage/summary.md
+          if-no-files-found: error

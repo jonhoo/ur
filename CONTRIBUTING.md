@@ -455,8 +455,9 @@ into one report: `OUT/html/index.html`, line by line, and
 test reaches, and the files of src/ that no test builds at all (the
 hardware's). It needs [cargo-llvm-cov] and the nightly verify.yml pins,
 with `llvm-tools`; `scripts/coverage.sh OUT host-tests/alarm` does just
-one crate. It's for finding what's untested, not a target: no number
-fails it.
+one crate. `verify.yml` runs it on every release tag, into the run's
+summary and the `coverage` artifact. It's for finding what's untested,
+not a target: no number fails it.
 
 [cargo-llvm-cov]: https://github.com/taiki-e/cargo-llvm-cov
 
@@ -1073,6 +1074,7 @@ gh release download v0.9.0 --pattern sha256.sum --dir published
 - `verify.yml`: on a version tag too (rc's included), and on demand,
   the slow checks: running the Kani proofs, Miri, Bolero and the
   simulator's fuzzing; see [In CI, on release tags](#in-ci-on-release-tags).
+  And the tests' coverage (see [Coverage](#coverage)).
   It doesn't hold up the release.
 - `beta.yml`: weekly, and on demand, the firmware's clippy and the host
   tests on beta, for early warning of the next stable Rust. Not per PR:
