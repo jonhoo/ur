@@ -1297,7 +1297,7 @@ mod tests {
     // ==========================================================================
 
     use super::sleep::{self, Kind as Class};
-    use super::sleep_hold::{CAP, Hold, Settled, UP_MINUTES, hold, settles};
+    use super::sleep_hold::{CAP, Hold, Settled, UP_MINUTES, hold, settles, wakes};
     use super::stages;
 
     const ACTIVE: sleep::Minute = sleep::Minute {
@@ -1718,6 +1718,141 @@ mod tests {
                 sleep: true,
             })
         );
+    }
+
+    /// Where [`sleep_hold`]'s `wakes` says the classifier wakes (which
+    /// lets a nap's minutes after it go as they come), the classifier,
+    /// reading these minutes in a pass, never calls that minute sleep,
+    /// whatever came before. And where the classifier, asleep, reads a
+    /// minute afresh (the pass's first, or one after a minute asleep
+    /// that isn't of its run of moving minutes), the two agree on whether
+    /// it wakes.
+    ///
+    /// `wakes` once took any minute of `WAKE_STEPS` steps for a wake,
+    /// where the classifier gives one amid a run the run's kind: a step
+    /// count as the wrist turns over in bed was restless sleep to it.
+    #[test]
+    fn the_hold_says_the_classifier_wakes_only_where_it_does() {
+        fn property(pass: Pass) -> bool {
+            let minutes = &pass.minutes;
+            let n = minutes.len();
+            let newest = NOON + n as i64 - 1;
+            let evidence = |minute: i64| {
+                usize::try_from(minute - NOON)
+                    .ok()
+                    .and_then(|i| minutes.get(i))
+                    .copied()
+                    .unwrap_or_default()
+            };
+            let mut kinds = vec![Class::Unknown; n];
+            sleep::classify(
+                pass.asleep_ago,
+                sleep::Minute::default(),
+                minutes,
+                &mut kinds,
+            );
+            // As the classifier reads a run: seen, on the wrist, and not
+            // still.
+            let moving = |t: usize| {
+                let minute = NOON + t as i64;
+                let after = (minute < newest).then(|| evidence(minute + 1));
+                minutes[t].seen
+                    && minutes[t].worn != Some(false)
+                    && !sleep::still_among(Some(evidence(minute - 1)), minutes[t], after)
+            };
+            (0..n).all(|t| {
+                let wakes = wakes(NOON + t as i64, newest, evidence);
+                let woke = matches!(kinds[t], Class::Awake | Class::NotWorn);
+                let fresh = match t {
+                    0 => pass.asleep_ago == Some(1),
+                    _ => kinds[t - 1].is_sleep() && !(moving(t - 1) && moving(t)),
+                };
+                let right = !(wakes && kinds[t].is_sleep()) && (!fresh || wakes == woke);
+                if !right {
+                    eprintln!("{pass:?}\nat {t}: wakes {wakes}, {:?}", kinds[t]);
+                }
+                right
+            })
+        }
+        QuickCheck::new()
+            .tests(10_000)
+            .quickcheck(property as fn(Pass) -> bool);
+    }
+
+    /// A pass's minutes, for [`sleep::classify`], and how long before them
+    /// the wearer was last asleep (mostly just before, so that most of
+    /// them are read asleep): runs of the sorts of minutes a night and a
+    /// morning have, the still ones, now calm and now fidgety, among them.
+    #[derive(Clone, Debug)]
+    struct Pass {
+        asleep_ago: Option<usize>,
+        minutes: Vec<sleep::Minute>,
+    }
+
+    impl Arbitrary for Pass {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let length = 10 + usize::arbitrary(g) % (sleep::WINDOW + sleep::CONTEXT - 10);
+            let mut minutes = Vec::with_capacity(length);
+            while minutes.len() < length {
+                let sort = u8::arbitrary(g) % 8;
+                for _ in 0..1 + usize::arbitrary(g) % 8 {
+                    let movement = u16::arbitrary(g);
+                    let worn = sleep::Minute {
+                        seen: true,
+                        movement: 0,
+                        steps: 0,
+                        worn: Some(true),
+                        fidgeted: bool::arbitrary(g),
+                        pulse: bool::arbitrary(g),
+                    };
+                    minutes.push(match sort {
+                        // Still, and some of it barely.
+                        0 | 1 => sleep::Minute {
+                            movement: movement % sleep::STILL_LIMIT,
+                            ..worn
+                        },
+                        // A stir, or a minute next to one.
+                        2 => sleep::Minute {
+                            movement: 80 + movement % 400,
+                            ..worn
+                        },
+                        // Moving hard.
+                        3 => sleep::Minute {
+                            movement: sleep::STILL_LIMIT + movement % 3000,
+                            ..worn
+                        },
+                        // A few steps, or walking.
+                        4 => sleep::Minute {
+                            movement: 300 + movement % 2000,
+                            steps: 1 + movement % (2 * sleep::WAKE_STEPS),
+                            ..worn
+                        },
+                        5 => sleep::Minute {
+                            movement: movement % 60,
+                            worn: Some(false),
+                            ..worn
+                        },
+                        6 => sleep::Minute::default(),
+                        // Not looked at for skin yet.
+                        _ => sleep::Minute {
+                            movement: movement % 300,
+                            worn: None,
+                            ..worn
+                        },
+                    });
+                }
+            }
+            minutes.truncate(length);
+            let asleep_ago = match u8::arbitrary(g) % 4 {
+                0 => None,
+                1 => Some(1 + usize::arbitrary(g) % sleep::SAME_NIGHT_GAP),
+                _ => Some(1),
+            };
+            Self {
+                asleep_ago,
+                minutes,
+            }
+        }
     }
 
     /// The classifier rewrites its window, but never a settled minute.

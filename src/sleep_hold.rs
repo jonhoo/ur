@@ -338,16 +338,18 @@ pub fn settles(
 }
 
 /// Whether a minute shows the wearer up, for [`settles`]: walking, or the
-/// watch off the wrist. Either way the classifier calls it awake, whatever
-/// came before (see [`sleep::classify`]).
+/// watch off the wrist. The classifier calls either awake, whatever came
+/// before, but for a walking minute amid a run of moving ones, which has
+/// the run's kind (see [`wakes`]).
 fn up(minute: sleep::Minute) -> bool {
     minute.steps >= sleep::WAKE_STEPS || minute.worn == Some(false)
 }
 
 /// Whether the classifier wakes at `minute`, whatever came before: a
-/// minute that's up (see [`up`]), or the first of a run of moving ones
-/// that makes a wake, as recorded by `newest`: [`sleep::WAKE_RUN`] of
-/// them, of which [`sleep::MOVED`] moved themselves.
+/// minute off the wrist; a walking one that starts a run of moving ones
+/// (see [`up`]); or the first of a run of moving ones that makes a wake,
+/// as recorded by `newest`: [`sleep::WAKE_RUN`] of them, of which
+/// [`sleep::MOVED`] moved themselves.
 ///
 /// This must never say the classifier wakes where it may not: [`nap`]
 /// lets the minutes after a waking go as they come, and Gadgetbridge
@@ -355,15 +357,23 @@ fn up(minute: sleep::Minute) -> bool {
 /// only from `minute` on: the classifier's run may start earlier, and
 /// then holds every moving minute this one does, and wakes if this does.
 /// (The other way is safe: a wake missed here holds a nap's minutes back
-/// for longer.)
-fn wakes(minute: i64, newest: i64, evidence: impl Fn(i64) -> sleep::Minute) -> bool {
-    if up(evidence(minute)) {
-        return true;
-    }
+/// for longer.) `host-tests/gb_buckets` checks it against the classifier,
+/// hence `pub(crate)`.
+///
+/// A walking minute wakes the classifier at once only where it reads
+/// the minute by itself: asleep, it checks the steps of the minute a run
+/// starts at, and gives every minute of the run the run's kind. So one
+/// after a moving minute (a step count in bed, as the wrist turns over)
+/// is a stir like the minutes around it, unless the run makes a wake.
+pub(crate) fn wakes(minute: i64, newest: i64, evidence: impl Fn(i64) -> sleep::Minute) -> bool {
     let moving = |minute: i64| {
         let m = evidence(minute);
         m.seen && m.worn != Some(false) && !still_at(minute, newest, &evidence)
     };
+    let this = evidence(minute);
+    if this.worn == Some(false) || (this.steps >= sleep::WAKE_STEPS && !moving(minute - 1)) {
+        return true;
+    }
     // Stops at the first minute the run is a wake by, so on an active
     // day, where every minute moved, this reads `WAKE_RUN` minutes and
     // no more, however long the run (this runs with the history locked).
