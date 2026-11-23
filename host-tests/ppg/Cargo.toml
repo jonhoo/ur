@@ -32,4 +32,6 @@ overflow-checks = true
 
 # `cargo kani` builds with `--cfg kani`, for the proofs in `src/main.rs`.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+# The firmware's `field-log` feature too, which `heart_schedule` (included
+# for `hopeless`) gates its LED experiment on: the host tests build it all.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(feature, values("field-log"))'] }
