@@ -5,9 +5,10 @@
 #   touches apart, the button grid's gestures, BTHome advertisements and
 #   QR code, what a touch does with the screen off, Gadgetbridge's
 #   messages and link, colours that must differ in every colour scheme), each built into a
-#   host crate under host-tests/ and tested on the computer, with the
-#   pinned toolchain (beta.yml tests them on beta, weekly), one crate
-#   after another in one job; and the Gadgetbridge mock (gbmock/)
+#   host crate under host-tests/ and tested, and linted with clippy, on
+#   the computer, with the pinned toolchain (beta.yml tests them on beta,
+#   weekly), one crate after another in one job; and the Gadgetbridge
+#   mock (gbmock/)
 # - kani: that every host-test crate's Kani proofs still compile, without
 #   running them (verify.yml runs them, on release tags)
 # - sim: the simulator's tests (sim/), which check its screenshots of the
@@ -93,6 +94,26 @@ jobs:
           done
           if [ "${#failed[@]}" -gt 0 ]; then
             echo "::error::tests failed in: ${failed[*]}"
+            exit 1
+          fi
+      # Lints, for the tests' own code and for the firmware modules as the
+      # host builds them, which check.yml's clippy (the firmware, for the
+      # watch) doesn't reach. `--all-targets`: the tests, and the binary,
+      # whose `main` uses none of the modules (hence their
+      # `#[allow(dead_code)]`). Here rather than in check.yml, for this
+      # job's cache of these crates' dependencies. Even if tests failed.
+      - name: cargo clippy, every crate
+        if: ${{ !cancelled() }}
+        run: |
+          failed=()
+          for dir in host-tests/*/ gbmock/; do
+            crate=${dir%/}
+            echo "::group::$crate"
+            (cd "$crate" && cargo clippy --locked --release --all-targets -- -D warnings) || failed+=("$crate")
+            echo "::endgroup::"
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::clippy failed in: ${failed[*]}"
             exit 1
           fi
   # The Kani proofs (`#[kani::proof]`, under `#[cfg(kani)]`), compiled

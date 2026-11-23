@@ -116,6 +116,9 @@ The host tests run from each crate's directory, where its own
 cd host-tests/ppg && cargo test --release
 ```
 
+CI lints them there too, tests included:
+`cargo clippy --release --all-targets -- -D warnings`.
+
 ### Size checks
 
 `scripts/size.py check` holds built ELFs to every size constraint, with
@@ -1035,7 +1038,7 @@ gh release download v0.9.0 --pattern sha256.sum --dir published
   all together with every feature (`--all-features`), and that the
   simulator builds with everything. `test.yml`'s heavier jobs, the
   simulator and firmware, wait for it.
-- `test.yml`: the host tests, that their Kani proofs compile (Kani
+- `test.yml`: the host tests and their clippy, that their Kani proofs compile (Kani
   only compiles `#[cfg(kani)]` code, and running the proofs is for
   release tags), the simulator's tests and screenshots
   (as the run's `screenshots` artifact; every theme's own too, with
