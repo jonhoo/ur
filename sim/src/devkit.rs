@@ -2085,10 +2085,12 @@ fn real_time_line() -> Result<(String, u64, String), String> {
 }
 
 /// Gadgetbridge's line setting the clock to `utc` (seconds), in a time
-/// zone `zone` hours from UTC.
+/// zone `zone` hours from UTC: the hours as Java's `Float.toString` has
+/// them (`transmitTime`), so a quarter-hour zone is `12.75`, not `12.8`.
 pub fn set_time_line(utc: i64, zone: f64) -> String {
+    let zone = gbmock::java::float_to_string(zone as f32);
     format!(
-        "setTime({utc});E.setTimeZone({zone:.1});(s=>s&&(s.timezone={zone:.1},\
+        "setTime({utc});E.setTimeZone({zone});(s=>s&&(s.timezone={zone},\
          require('Storage').write('setting.json',s)))(require('Storage').readJSON('setting.json',1))"
     )
 }
