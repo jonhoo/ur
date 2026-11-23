@@ -1,0 +1,38 @@
+# cargo-mutants' configuration, for scripts/mutants.sh (which passes it
+# with `--config`: each host-test crate is a workspace of its own, so
+# cargo-mutants wouldn't find it here by itself). See CONTRIBUTING.md's
+# "Mutation testing".
+
+# A floor under the timeout cargo-mutants sets from the unmutated tests'
+# time (by default 20 s). A mutant that makes a loop endless is caught,
+# as a timeout, either way, and gb_buckets alone had 17 of those in the
+# first trial: 10 s is still several times the slowest crate's tests.
+minimum_test_timeout = 10
+
+# Mutants known to be missed for no lack of a test: equivalent ones (the
+# code means the same either way, for every input it can get), and
+# helpers only `debug_assert!`s call, which no test can reach with an
+# input that breaks them. Each is matched by what cargo-mutants names it,
+# `src/ur/FILE:LINE:COLUMN: replace A with B in FUNCTION`, without the
+# line (any edit above it would move that), but with the column where a
+# function has more than one of the operator. Keep this short: a mutant
+# excluded here is one nobody will look at again. (cargo-mutants 27.1.0
+# ignores these for the mutants that delete a struct field, `delete field
+# X from struct Y expression`: those can't be excluded here.)
+exclude_re = [
+  # `exponent > 0` to `>=`: the loop around it runs `exponent`'s
+  # magnitude times, so not at all when it's 0.
+  'src/ur/decimal\.rs:\d+:\d+: replace > with >= in Decimal::scaled$',
+  # `dx < 0` and `dy < 0` to `<=`: a swipe moved at least SWIPE_DISTANCE
+  # in its main direction, so that one is never 0 where it's looked at.
+  'src/ur/gesture\.rs:\d+:(44|52): replace < with <= in Tracking::classify$',
+  # The flag bits are disjoint, so `|` and `^` give the same byte.
+  'src/ur/alarm\.rs:\d+:(42|70): replace \| with \^ in Settings::to_bytes$',
+  # `today..today + 3` (and `+ 8`) to `today * 3`: days since 1970, so the
+  # range only grows, and the search ends at the first match either way.
+  'src/ur/alarm\.rs:\d+:19: replace \+ with \* in next_(smart|at)$',
+  # Called only by `debug_assert!`s (and, for `consistent`, by the Kani
+  # proofs, which `cargo test` doesn't build).
+  'src/ur/gesture\.rs:\d+:\d+: replace (on_panel -> bool with true|&& with \|\| in on_panel)$',
+  'src/ur/heart_schedule\.rs:\d+:\d+: replace (Schedule::consistent -> bool with true|.* in Schedule::consistent)$',
+]
