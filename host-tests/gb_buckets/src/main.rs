@@ -1720,6 +1720,126 @@ mod tests {
         );
     }
 
+    /// A minute or two of sleep in the window, an hour and more after the
+    /// night (what a pass leaves of a sleep it found among the window's
+    /// oldest minutes and then took back), is a sleep of its own, which
+    /// didn't begin before the window: it settles nothing, however long
+    /// the night before it was. A night longer than the cap does settle,
+    /// as any other.
+    #[test]
+    fn a_sleep_left_over_in_the_window_settles_nothing() {
+        let newest = NOON + 600;
+        let window = newest - sleep::WINDOW as i64 + 1;
+        let walking = |minute: i64| if minute < NOON + 300 { STILL } else { WALKING };
+        for minutes in 1..=2 {
+            let left_over = window + 5..window + 5 + minutes;
+            let kind = |minute: i64| {
+                if (NOON..NOON + 300).contains(&minute) || left_over.contains(&minute) {
+                    Class::Light
+                } else {
+                    Class::Awake
+                }
+            };
+            assert_eq!(
+                settles(newest, Settled::NONE, kind, walking),
+                None,
+                "{minutes} minutes"
+            );
+        }
+        // Asleep since long before the cap, up and about for the last
+        // hour.
+        let long = |minute: i64| {
+            if minute < newest - 60 {
+                Class::Light
+            } else {
+                Class::Awake
+            }
+        };
+        let up = |minute: i64| if minute < newest - 60 { STILL } else { WALKING };
+        assert_eq!(settles(newest, Settled::NONE, long, up), Some(newest - 61));
+    }
+
+    /// Evidence for [`hold`] after a night (asleep until `NOON + 400`,
+    /// walking from then on, the night settled at `NOON + 447`), with
+    /// `pattern` a minute a character from `from`: `s` still, `m` a
+    /// stir (a minute that moved, between still ones), `o` off the
+    /// wrist, `_` unseen, anything else walking.
+    fn after_the_night(from: i64, pattern: &'static str) -> impl Fn(i64) -> sleep::Minute {
+        move |minute: i64| {
+            if minute < NOON + 400 {
+                return STILL;
+            }
+            let at = usize::try_from(minute - from).ok();
+            match at.and_then(|i| pattern.as_bytes().get(i)) {
+                Some(b's') => STILL,
+                Some(b'm') => sleep::Minute {
+                    movement: 400,
+                    ..STILL
+                },
+                Some(b'o') => sleep::Minute {
+                    worn: Some(false),
+                    ..STILL
+                },
+                Some(b'_') => sleep::Minute::default(),
+                _ => WALKING,
+            }
+        }
+    }
+
+    /// After a settled night, a nap is held back from its first still
+    /// minute (as the classifier smooths them: not the one next to a
+    /// walking minute) if it's still long enough for one, `RESUME`
+    /// minutes, as the classifier counts them: bridging a stir of up to
+    /// `STIR` moving minutes (a minute that moved, smoothed into three),
+    /// but not a longer one, nor a minute off the wrist or unseen; or if
+    /// it's still under way, and may yet be long enough.
+    #[test]
+    fn a_nap_after_a_settled_night_is_held_as_the_classifier_finds_it() {
+        let night = |minute: i64| {
+            if (NOON..NOON + 400).contains(&minute) {
+                Class::Light
+            } else {
+                Class::Awake
+            }
+        };
+        let settled = Settled::before(NOON + 447);
+        let from = NOON + 460;
+        let held = |pattern: &'static str, newest: i64| {
+            hold(newest, settled, night, after_the_night(from, pattern))
+        };
+        // Its first still minute, after four walking ones: the first of
+        // the `s`s is smoothed with its walking neighbour.
+        let nap = Some(Hold {
+            from: from + 5,
+            sleep: false,
+        });
+        let newest = from + 40;
+        for (pattern, expected) in [
+            // Twelve still minutes are ten to the classifier: a nap.
+            ("WWWWssssssssssss", nap),
+            ("WWWWsssssssssss", None),
+            // A stir bridged: four still, three moving, four still.
+            ("WWWWssssssmssssss", nap),
+            ("WWWWssssssmmssssss", None),
+            ("WWWWssssssossssss", None),
+            ("WWWWssssss_ssssss", None),
+            // Too short, then long enough: from the second.
+            (
+                "WWWWsssssWWWWWWWWWssssssssssss",
+                Some(Hold {
+                    from: from + 19,
+                    sleep: false,
+                }),
+            ),
+        ] {
+            assert_eq!(held(pattern, newest), expected, "{pattern}");
+        }
+        // Under way: still, or a stir after it, at the newest minute.
+        for newest in [from + 8, from + 9, from + 10, from + 11] {
+            assert_eq!(held("WWWWssssssmm", newest), nap, "at {}", newest - from);
+        }
+    }
+
     /// Where [`sleep_hold`]'s `wakes` says the classifier wakes (which
     /// lets a nap's minutes after it go as they come), the classifier,
     /// reading these minutes in a pass, never calls that minute sleep,
