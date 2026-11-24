@@ -315,7 +315,7 @@ themes there are, are listed in
 
 ## Finding bugs
 
-Beyond the tests, six tools look for what nobody thought to test. All
+Beyond the tests, several tools look for what nobody thought to test. All
 but the dev kit's run on the computer; the heavy ones can take a lot of
 memory, so run them in a capped scope (`systemd-run --user --scope -p
 MemoryMax=6G --quiet …`): on a machine without much swap, an
@@ -365,13 +365,8 @@ stack, or a grid hold without its release, is shrunk to a repro. See
 
 ### Proofs
 
-Some host test crates (`host-tests/alarm`, `aranet`, `backoff`,
-`battery`, `brightness`, `bthome`, `buttons`, `calendar`, `day`,
-`decimal`, `desk`, `dfu`, `fault`, `gb`, `gb_buckets`, `gesture`,
-`glance`, `heart_schedule`, `link`, `live`, `living_tokyo`, `log_pack`,
-`log_ring`, `mcuboot`, `minute_ring`, `nav`, `on_time`, `ppg`, `route`,
-`rtt_ring`, `sleep`, `snapshot`, `step_counter`, `sun`, `temperature`,
-`theme`, `wake`, `workout`) have [Kani] proofs at the end of their
+Most host test crates (`scripts/kani-affected.sh --all` names them)
+have [Kani] proofs at the end of their
 `src/main.rs` (`gb`'s also in `src/mock_proofs.rs`): what the tests
 check for some inputs, for every input, within bounds. `cargo kani` in
 the crate runs them; `--harness NAME` one (and one at a time). They
@@ -380,19 +375,21 @@ fast with loops (one unbounded alarm proof took 18 GB). A proof should
 also have a `kani::cover!` of the case it's about (a branch taken, a
 bound reached): Kani reports it satisfied only if some input the
 `assume`s allow reaches it, so an unsatisfied one means the proof checks
-nothing there, though Kani still calls it verified (`verify.yml` fails
-on it). For [Bolero] property tests, see [Fuzzing the host
+nothing there, though Kani still calls it verified (CI and the
+[release gate](#local-release-gate) fail on it). CI runs the proofs of
+the crates a change touches (see [In CI](#in-ci)); the release gate,
+all of them. For [Bolero] property tests, see [Fuzzing the host
 tests](#fuzzing-the-host-tests).
 
 ### Fuzzing the host tests
 
 Many host test crates have [Bolero] harnesses: properties of what the
 module promises, for any input, where the tests try a few. They're in
-`src/fuzz.rs` (in `src/main.rs` for `gb`, and `day`'s `properties`), in
+the crate's `src/fuzz.rs` mostly (in `src/main.rs` for `gb`, and `day`'s
+`properties`), in the crates whose Cargo.toml depends on `bolero`:
 `aranet` (Bluetooth adverts from any device nearby), `gb`
-(Gadgetbridge's lines), `mcuboot` (firmware updates), `route`, `nav`,
-`snapshot`, `font`, `qr`, `sleep`, `ppg`, `glance`, `arrival` and
-`day`. `cargo test` runs each for a second of random inputs; to fuzz
+(Gadgetbridge's lines) and `mcuboot` (firmware updates) among them.
+`cargo test` runs each for a second of random inputs; to fuzz
 one properly, with [cargo-bolero] and nightly (for the sanitizer), in
 the crate:
 
@@ -444,7 +441,9 @@ systemd-run --user --scope -p MemoryMax=6G --quiet scripts/mutants.sh decimal ge
 systemd-run --user --scope -p MemoryMax=6G --quiet scripts/mutants.sh --in-diff <(git diff main)
 ```
 
-With neither, it does every module. cargo-mutants only mutates files
+With neither, it does every module (`--list` names them), which takes
+about an hour: the [release gate](#local-release-gate) does that.
+cargo-mutants only mutates files
 inside a crate, and the host-test crates include their modules from
 `src/` by `#[path]`, so the script works on a scratch copy with the
 modules moved into the crates, and never touches the checkout. A module
@@ -469,28 +468,109 @@ known equivalent ones are excluded in `.cargo/mutants.toml`, each with
 why; add one there only with that argument. So results are advisory: a
 missed mutant is for a person to judge, and never fails CI.
 
-### In CI, on release tags
+### In CI
 
-`.github/workflows/verify.yml` runs the slow checks on every release
-tag, rc's included, and on demand (Actions → verify → Run workflow), a
-job for each: every crate's Kani proofs, Miri on the crates with
-`unsafe` code (named in the workflow: in safe Rust, Miri finds nothing a
-normal run doesn't, a thousand times slower), every Bolero harness for
-four minutes, and the simulator's two fuzz targets for half an hour
-each, from their seeds (`sim/fuzz/seeds.tar.zst`). The other jobs find
-their crates in the tree. It takes a few hours, so it doesn't
-hold up the release a tag starts; a failure on an rc is what to fix
-before the final release. On every PR, `test.yml` does the quick part
-of two of them: it compiles the Kani proofs without running them, and
-runs each of the simulator's seeds once (see [CI](#ci)).
+No CI job may run for hours, so CI runs the part of all this that
+fits in minutes, and the [release gate](#local-release-gate) the rest.
+On every PR and push to main:
 
-`.github/workflows/mutants.yml` runs [mutation testing](#mutation-testing)
-on the same tags (and on demand): every module, in a job of its own
-(an hour on a desktop, a few on a runner), with the missed mutants as
-the job's summary and each one's diff and test log in the run's
-`mutants` artifact. On every PR it mutates only the code the PR
-changes, in a few minutes, and shows each missed mutant as a warning
-on its line. Neither job ever fails.
+- `test.yml` compiles every Kani proof without running it, gives every
+  Bolero harness its second (`cargo test`), and runs each of the
+  simulator's fuzz seeds (`sim/fuzz/seeds.tar.zst`) once.
+- `kani.yml` runs the Kani proofs of the host-test crates the change
+  affects: those whose own directory changed (Cargo.toml and Cargo.lock
+  included), that include a changed module of `src/` by `#[path]`, or
+  that depend on a changed directory by path (`gbmock/`, for `gb`).
+  `scripts/kani-affected.sh BASE` names them for a change since `BASE`.
+  Most changes affect none, and the workflow then ends in seconds;
+  otherwise the crates are dealt into jobs that should each take under
+  half an hour (`KANI_SHARDS` in the workflow, with what each weighs),
+  and each job's summary is a table of its proofs' times. A change to
+  the workflow or the script runs every crate's, as does running it on
+  demand (Actions → kani → Run workflow). If a job nears its hour's
+  limit, split its shard there.
+- `mutants.yml` runs [mutation testing](#mutation-testing) on only the
+  code a PR changes, and shows each missed mutant as a warning on its
+  line. It never fails.
+
+On every release tag, rc's included, and on demand, `verify.yml` runs
+Miri on the crates with `unsafe` code (named in the workflow: in safe
+Rust, Miri finds nothing a normal run doesn't, a thousand times
+slower) and measures [coverage](#coverage). It doesn't hold up the
+release a tag starts; a failure on an rc is what to fix before the
+final release.
+
+### Local release gate
+
+The long runs happen on your computer, once per release, before the
+tag is pushed:
+
+```sh
+scripts/release-gate.sh
+```
+
+from a clean checkout of the commit to be tagged. It runs four stages
+side by side:
+
+- `kani`: every proof of every crate. Fails on a proof that fails or
+  times out, and on an unsatisfied `kani::cover!`.
+- `bolero`: every Bolero harness, with libFuzzer, four minutes each.
+  Fails on a crash.
+- `sim-fuzz`: each of the simulator's fuzz targets for half an hour,
+  from its seeds. Fails on a crash.
+- `mutants`: `scripts/mutants.sh` on every module. Advisory: read what
+  it missed; it never fails the gate.
+
+It needs cargo-kani, [cargo-bolero], cargo-fuzz, [cargo-mutants], jq,
+and the nightly that `verify.yml` pins, and says which are missing. On
+32 cores with 30 GB it should take about an hour (an estimate from its
+parts; mutation testing is the longest), using most of the cores. How
+much runs at once is set from the environment (`GATE_KANI_JOBS`,
+`GATE_BOLERO_JOBS`, `GATE_SIM_FUZZ_FORKS`, `GATE_MUTANTS_JOBS`), as is
+memory: with systemd, every command runs in its own scope in one slice
+capped at `GATE_MEMORY` (24G), a crate's proofs at `GATE_KANI_MEMORY`
+(8G), so a proof that blows up is killed alone and fails its stage
+rather than taking the terminal with it. Without systemd nothing is
+capped, and the gate says so and runs one thing at a time.
+`scripts/release-gate.sh --help` has the rest.
+
+The results go to `tmp/release-gate/<commit>/`: `summary.md` with each
+stage's verdict and time, each stage's logs, `kani/timing.md` (every
+proof, slowest first), the inputs that crashed a fuzzer
+(`bolero/crashes/`, `sim-fuzz/artifacts/`), and `mutants/summary.md`.
+When `kani`, `bolero` and `sim-fuzz` have passed and `mutants` has run,
+all in full on the clean commit, it writes the stamp, `passed`, and
+exits zero; if a stage failed, non-zero.
+
+To run one stage, or try the gate out quickly:
+
+```sh
+scripts/release-gate.sh --only kani
+scripts/release-gate.sh --only bolero,sim-fuzz --bolero-seconds 10 --sim-fuzz-seconds 30
+scripts/release-gate.sh --only kani --kani-crates "alarm decimal" --allow-dirty
+```
+
+Each stage leaves its verdict in the results, so a stage repeated alone
+(after it ran out of memory, say) completes an earlier run of the same
+commit. A stage that was shortened or narrowed is *reduced*: it can
+pass, but doesn't count towards the stamp, and neither does anything
+run with `--allow-dirty`, as the stamp is for a commit.
+
+So that the gate isn't forgotten, `scripts/hooks/pre-push` refuses to
+push a release tag whose commit has no stamp, and says what to run
+(`RELEASE_GATE_SKIP=1 git push …` overrides it, knowingly). Install it
+once, in the main checkout:
+
+```sh
+ln -sf ../../scripts/hooks/pre-push "$(git rev-parse --git-common-dir)/hooks/pre-push"
+```
+
+That takes the place of Git LFS's pre-push hook, which ours runs when
+it's done. (Not `git config core.hooksPath scripts/hooks`: LFS keeps
+three more hooks in `.git/hooks/`, which that would turn off. And `git
+lfs install --force` puts LFS's hook back over the link; install it
+again after.) The hook finds a stamp made in the checkout you push
+from, or in the main checkout when that's a worktree of it.
 
 ### cargo-careful and Miri
 
@@ -508,7 +588,7 @@ simulator, and of the simulator (sim/src/) through its tests, merged
 into one report: `OUT/html/index.html`, line by line, and
 `OUT/summary.md`, each file least covered first, with the functions no
 test reaches, and the files of src/ that no test builds at all (the
-hardware's). It needs [cargo-llvm-cov] and the nightly verify.yml pins,
+hardware's). It needs [cargo-llvm-cov] and the nightly `verify.yml` pins,
 with `llvm-tools`; `scripts/coverage.sh OUT host-tests/alarm` does just
 one crate. `verify.yml` runs it on every release tag, into the run's
 summary and the `coverage` artifact. It's for finding what's untested,
@@ -1064,7 +1144,18 @@ Cargo.toml's version is the source of truth. To release:
    `--locked` (e.g. `cargo check`) to update Cargo.lock to match. (The
    approved screenshots don't show it: their scripts pin a version of
    their own.)
-3. Commit, then tag (annotated, with a very brief summary of what changed
+3. Commit, and run the [release gate](#local-release-gate) on that
+   commit, an hour or so:
+
+   ```sh
+   scripts/release-gate.sh
+   ```
+
+   It must pass before the tag exists anywhere but here: nothing in CI
+   runs every proof or fuzzes for long, and the pre-push hook refuses
+   the tag without the gate's stamp. Read its `mutants/summary.md` too.
+   A fix is a new commit, and the gate again.
+4. Tag (annotated, with a very brief summary of what changed
    since the last release: the key user-facing effects, naming new
    concepts as the README does, and any particularly impactful change
    behind the scenes) and push:
@@ -1109,34 +1200,41 @@ gh release download v0.9.0 --pattern sha256.sum --dir published
   all together with every feature (`--all-features`), and that the
   simulator builds with everything. `test.yml`'s heavier jobs, the
   simulator and firmware, wait for it.
-- `test.yml`: the host tests and their clippy, that their Kani proofs compile (Kani
-  only compiles `#[cfg(kani)]` code, and running the proofs is for
-  release tags), the simulator's tests and screenshots
+- `test.yml`: the host tests and their clippy, that their Kani proofs
+  compile (only Kani compiles `#[cfg(kani)]` code), the simulator's
+  tests and screenshots
   (as the run's `screenshots` artifact; every theme's own too, with
   `themes-all`) and its browser build (`sim-web`), every seed of the
-  simulator's fuzz targets once (`sim-fuzz-seeds`; see [In CI, on
-  release tags](#in-ci-on-release-tags)), and a packaged build
+  simulator's fuzz targets once (`sim-fuzz-seeds`; see [In
+  CI](#in-ci)), and a packaged build
   (by `release.sh`, so without `debug-input`) of every PR and every
   commit on main, to try on a watch:
   `0.9.0-pr.<number>+<commit>`, or `0.9.0-snap.<commits>+<commit>`. The
   run's artifacts include each variant's `-dfu.zip` on its own, unzipped,
   ready to send to a watch, and everything (with the ELFs that decode
   logs) as one zip.
+- `kani.yml`: runs the Kani proofs of the host-test crates a PR or
+  push affects, in jobs of under half an hour, and nothing when it
+  affects none; every crate's on demand. See [In CI](#in-ci).
 - `blueprints.yml`: the Home Assistant blueprints (`blueprints/`), in
   Home Assistant's own test harness; only when a PR or push changes
   something under `blueprints/`, as nothing else can break them.
 - `release.yml`: on a version tag; see [Releasing](#releasing).
-- `verify.yml`: on a version tag too (rc's included), and on demand,
-  the slow checks: running the Kani proofs, Miri, Bolero and the
-  simulator's fuzzing; see [In CI, on release tags](#in-ci-on-release-tags).
-  And the tests' coverage (see [Coverage](#coverage)).
+- `verify.yml`: on a version tag too (rc's included), and on demand:
+  Miri, and the tests' coverage (see [Coverage](#coverage)).
   It doesn't hold up the release.
-- `mutants.yml`: [mutation testing](#mutation-testing), of the code a
-  PR changes on every PR, and of every module on a version tag (rc's
-  included) and on demand. Advisory: it never fails.
+- `mutants.yml`: [mutation testing](#mutation-testing) of the code a
+  PR changes. Advisory: it never fails.
 - `beta.yml`: weekly, and on demand, the firmware's clippy and the host
   tests on beta, for early warning of the next stable Rust. Not per PR:
   beta changes on its own schedule, not the PR's.
+
+No job in any of them may run for hours; the ones that could
+(`kani.yml`'s, `verify.yml`'s, `mutants.yml`'s) have a `timeout-minutes`
+of an hour at most. What takes longer (every Kani proof, fuzzing for
+minutes per harness, every module's mutants) ran on release tags until
+November 2026, failed there unwatched, and now runs before a release
+in the [local release gate](#local-release-gate).
 
 Dependabot proposes updates to the actions, the firmware's and host
 tests' Cargo.lock, and the pinned toolchain quarterly.
