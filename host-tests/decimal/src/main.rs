@@ -171,17 +171,24 @@ mod tests {
 mod proofs {
     use super::decimal::parse;
 
-    /// The longest text the proofs of any bytes take: enough for a sign,
-    /// a point, and an exponent of its own sign and digits at once
-    /// (`-1.5e-30`), and for an exponent far past any number
-    /// (`1e999999`).
-    const LONGEST: usize = 8;
+    /// The longest text the proof of which bytes are a number takes: the
+    /// longest a Java `double` prints (`-2.2250738585072014E-308`), so
+    /// any `double` as Gadgetbridge writes one, with a sign, a point, and
+    /// an exponent of its own sign and digits at once, and an exponent
+    /// far past any number (`1e999999`). (At 24 bytes it takes CBMC about
+    /// 30 s, at 20 bytes 20 s, and at 32 a minute.)
+    const LONGEST: usize = 24;
 
-    /// Any bytes, up to [`LONGEST`] of them.
-    fn any_text() -> ([u8; LONGEST], usize) {
-        let text: [u8; LONGEST] = kani::any();
+    /// The longest the proof that no number is NaN takes: shorter, as it
+    /// takes each number on through `to_f32`, which costs CBMC more a
+    /// byte; at 16 it's done in about 25 s, and at 20 in 35 s.
+    const LONGEST_FLOAT: usize = 16;
+
+    /// Any bytes, up to `N` of them.
+    fn any_text<const N: usize>() -> ([u8; N], usize) {
+        let text: [u8; N] = kani::any();
         let len: usize = kani::any();
-        kani::assume(len <= LONGEST);
+        kani::assume(len <= N);
         (text, len)
     }
 
@@ -222,15 +229,15 @@ mod proofs {
         at == text.len()
     }
 
-    /// Any eight bytes or fewer: nothing panics or overflows, parsing
+    /// Any [`LONGEST`] bytes or fewer: nothing panics or overflows, parsing
     /// them or scaling what they say by any power of ten at all; they're
     /// a number exactly when they're written as `parse`'s docs say; and
     /// the number has the sign it was written with (so a coordinate can't
     /// change hemisphere, however it saturates).
     #[kani::proof]
-    #[kani::unwind(21)]
+    #[kani::unwind(25)]
     fn any_short_text_is_a_number_or_not() {
-        let (text, len) = any_text();
+        let (text, len) = any_text::<LONGEST>();
         let text = &text[..len];
         let parsed = parse(text);
         assert_eq!(parsed.is_some(), is_a_number(text));
@@ -243,6 +250,7 @@ mod proofs {
             }
             kani::cover!(scaled == i64::MAX, "saturated");
             kani::cover!(scaled == -i64::MAX, "saturated, negative");
+            kani::cover!(len == LONGEST, "a number as long as any");
         }
     }
 
@@ -261,9 +269,9 @@ mod proofs {
     #[kani::proof]
     #[kani::unwind(71)]
     fn any_short_text_is_never_nan() {
-        let (text, len) = any_text();
+        let (text, len) = any_text::<LONGEST_FLOAT>();
         let text = &text[..len];
-        for at in 0..LONGEST - 3 {
+        for at in 0..LONGEST_FLOAT - 3 {
             let tiny = at + 3 < len && (text[at] | 0x20) == b'e' && text[at + 1] == b'-';
             kani::assume(!tiny);
         }
@@ -273,6 +281,7 @@ mod proofs {
             assert_eq!(float.is_sign_negative(), text[0] == b'-');
             kani::cover!(float.is_infinite(), "infinite");
             kani::cover!(text[len - 1] == b'.', "ends in a point");
+            kani::cover!(len == LONGEST_FLOAT, "as long as any here");
         }
     }
 
@@ -343,6 +352,7 @@ mod proofs {
             digits / power
         };
         assert_eq!(scaled, if negative { -magnitude } else { magnitude });
+        kani::cover!(negative && magnitude != 0, "negative");
     }
 
     /// Whole numbers come back as written, to 13 digits (or fewer, after
@@ -417,5 +427,6 @@ mod proofs {
         let number = parse(&text[..len]).expect("a number");
         let nearest = digits as f32 / 100.0;
         assert_eq!(number.to_f32(), if negative { -nearest } else { nearest });
+        kani::cover!(negative && digits != 0, "negative");
     }
 }
