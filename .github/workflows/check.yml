@@ -60,10 +60,15 @@ jobs:
             echo "::error::not formatted: ${failed[*]}"
             exit 1
           fi
-      # shellcheck comes with the runner image.
+      # shellcheck comes with the runner image. The git hooks
+      # (scripts/hooks/) are shell too, named as git wants them, without
+      # `.sh`. (`pipefail`, which a step's default shell lacks, so that a
+      # failed listing isn't a pass.)
       - name: shellcheck
         if: ${{ !cancelled() }}
-        run: git ls-files -z '*.sh' | xargs -0 shellcheck
+        run: |
+          set -o pipefail
+          git ls-files -z '*.sh' 'scripts/hooks/*' | xargs -0 shellcheck
       - name: python syntax
         if: ${{ !cancelled() }}
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile

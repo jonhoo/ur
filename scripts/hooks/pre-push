@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# git's pre-push hook: refuses to push a release tag (`v1.2.3`, rc's
+# included: the tags release.yml builds from) whose commit hasn't passed
+# the local release gate, scripts/release-gate.sh. The gate is the only
+# place the long checks run (every Kani proof, the fuzzers), nothing in
+# CI waits for it, and it's an hour's run that is easy to forget; this
+# is what remembers.
+#
+# To install it, in the main checkout (worktrees share its hooks):
+#
+#     ln -sf ../../scripts/hooks/pre-push "$(git rev-parse --git-common-dir)/hooks/pre-push"
+#
+# That replaces Git LFS's own pre-push hook, which this one therefore
+# ends by running, as LFS's did. A link in .git/hooks/ rather than `git
+# config core.hooksPath scripts/hooks`, which would turn off the other
+# hooks LFS keeps there (post-checkout, post-commit, post-merge). `git
+# lfs install --force` (or `git lfs update --force`) puts LFS's hook
+# back over the link: install again after.
+#
+# The gate's stamp is `tmp/release-gate/<commit>/passed`, looked for in
+# this checkout, in the main checkout if this is a worktree of it, and
+# in $RELEASE_GATE_DIR (in place of `tmp/release-gate`) if that's set.
+# To push a tag without one, knowingly:
+#
+#     RELEASE_GATE_SKIP=1 git push origin v1.2.3
+#
+# git runs the hook with the remote's name and URL as arguments, and a
+# line per ref being pushed on standard input: `<local ref> <local
+# object> <remote ref> <remote object>`.
+set -euo pipefail
+
+# All of standard input, to check here and then to hand to LFS.
+refs=$(cat)
+
+top=$(git rev-parse --show-toplevel)
+# The main checkout is the first worktree listed.
+main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+places=("$top/tmp/release-gate")
+if [[ $main != "$top" ]]; then
+  places+=("$main/tmp/release-gate")
+fi
+if [[ -n ${RELEASE_GATE_DIR-} ]]; then
+  places+=("$RELEASE_GATE_DIR")
+fi
+
+refused=
+while read -r local_ref local_object _ _; do
+  # Release tags only; and not one being deleted, which has no local
+  # object (all zeros).
+  [[ $local_ref =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
+  [[ $local_object =~ ^0+$ ]] && continue
+  # The commit an annotated tag points at.
+  commit=$(git rev-parse "$local_object^{commit}")
+  stamped=
+  for place in "${places[@]}"; do
+    # The stamp names its commit on its first line.
+    if [[ -e $place/$commit/passed && $(head -n1 "$place/$commit/passed") == "$commit" ]]; then
+      stamped=1
+      break
+    fi
+  done
+  [[ -n $stamped ]] && continue
+  tag=${local_ref#refs/tags/}
+  if [[ -n ${RELEASE_GATE_SKIP-} ]]; then
+    echo "pre-push: pushing $tag though its commit hasn't passed the release gate (RELEASE_GATE_SKIP is set)" >&2
+    continue
+  fi
+  refused=1
+  cat >&2 <<EOF
+pre-push: not pushing $tag: its commit, $commit,
+hasn't passed the local release gate (no stamp at
+tmp/release-gate/$commit/passed).
+
+Check that commit out, clean, and run (about an hour; see CONTRIBUTING.md's
+"Local release gate"):
+
+    scripts/release-gate.sh
+
+and push again once it has passed. To push without it, knowingly:
+
+    RELEASE_GATE_SKIP=1 git push ...
+
+EOF
+done <<<"$refs"
+if [[ -n $refused ]]; then
+  exit 1
+fi
+
+# Git LFS's pre-push hook, whose place in .git/hooks/ this one takes: it
+# uploads the LFS objects (the approved screenshots) that the pushed
+# commits refer to. As LFS's own hook does, refuse without git-lfs,
+# rather than push pointers to objects the remote never gets.
+if ! command -v git-lfs >/dev/null; then
+  cat >&2 <<EOF
+pre-push: this repository keeps files in Git LFS, but git-lfs isn't on
+your path: install it, so that what a push refers to is uploaded with it.
+EOF
+  exit 2
+fi
+git lfs pre-push "$@" <<<"$refs"
