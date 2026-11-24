@@ -1103,6 +1103,10 @@ mod tests {
 mod proofs {
     use super::battery::*;
 
+    // `#[kani::unwind(11)]` throughout: `charge_percent` loops over
+    // `CHARGE_CURVE`'s 10 points, and a bound below that fails every
+    // harness on an unwinding assertion.
+
     /// The SAADC's 12 bits, which noise can take a little below zero.
     fn any_sample() -> i16 {
         let raw: i16 = kani::any();
@@ -1132,7 +1136,7 @@ mod proofs {
     /// rises with the voltage throughout, without a jump where two of its
     /// lines meet).
     #[kani::proof]
-    #[kani::unwind(7)]
+    #[kani::unwind(11)]
     fn the_curve_rises_from_0_to_100_without_a_jump() {
         let mv: u32 = kani::any();
         let percent = charge_percent(mv);
@@ -1150,7 +1154,7 @@ mod proofs {
     /// it never passes the SAADC's 7.2 V, and its eighths fit their
     /// `u16`.
     #[kani::proof]
-    #[kani::unwind(7)]
+    #[kani::unwind(11)]
     fn the_smoothed_voltage_stays_among_its_samples() {
         let mut battery = Battery::new();
         let (mut lowest, mut highest) = (u32::MAX, 0);
@@ -1169,7 +1173,7 @@ mod proofs {
     /// the percentage stays within 0–100. A boot charging starts under
     /// 100, which is for when the charger says it's done.
     #[kani::proof]
-    #[kani::unwind(7)]
+    #[kani::unwind(11)]
     fn the_percentage_after_a_boot_is_one() {
         let mut battery = Battery::new();
         assert!(battery.percent() <= 100);
@@ -1189,7 +1193,7 @@ mod proofs {
     /// once the charger says it's done. On battery it never rises, and
     /// falls only when the curve reads lower.
     #[kani::proof]
-    #[kani::unwind(7)]
+    #[kani::unwind(11)]
     fn the_percentage_moves_a_point_at_a_time_the_right_way() {
         let mut battery = any_measured();
         for _ in 0..3 {
@@ -1218,7 +1222,7 @@ mod proofs {
     /// charger, and never at a voltage that isn't low (or isn't a
     /// battery's at all).
     #[kani::proof]
-    #[kani::unwind(7)]
+    #[kani::unwind(11)]
     fn critical_takes_a_minute_of_low_voltage_off_the_charger() {
         let mut battery = if kani::any() {
             any_measured()
