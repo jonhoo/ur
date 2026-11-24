@@ -29,6 +29,11 @@ fn main() {
     println!("run `cargo test`");
 }
 
+// Any number of the phone's settings of the clock, second by second,
+// against a reference; with the models in `tests`.
+#[cfg(test)]
+mod clock_model;
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -42,7 +47,7 @@ mod tests {
 
     /// What `ble` buckets by: Gadgetbridge's `ActivityKind` name, `None`
     /// for plain activity.
-    type Kind = Option<&'static str>;
+    pub(super) type Kind = Option<&'static str>;
     const KINDS: [Kind; 4] = [
         None,
         Some("LIGHT_SLEEP"),
@@ -51,7 +56,7 @@ mod tests {
     ];
 
     /// 2026-11-09 12:00 UTC, in minutes since 1970: a bucket's start.
-    const NOON: i64 = 29_903_760;
+    pub(super) const NOON: i64 = 29_903_760;
     /// The history's length (`activity::HISTORY_MINUTES`).
     const HISTORY: i64 = super::minute_ring::MINUTES as i64;
 
@@ -61,7 +66,7 @@ mod tests {
 
     /// A history: the minutes with data, by UTC minute, as
     /// `activity::History::since` gives them.
-    type History = BTreeMap<i64, Minute<Kind>>;
+    pub(super) type History = BTreeMap<i64, Minute<Kind>>;
 
     fn minute(steps: u16, heart_rate: u8, kind: Kind) -> Minute<Kind> {
         Minute {
@@ -133,7 +138,7 @@ mod tests {
     /// The bucket starting at `start`, built straight from all of its
     /// minutes in `history`, as the module docs describe it; `None` if it
     /// has none.
-    fn reference(history: &History, start: i64) -> Option<Bucket<Kind>> {
+    pub(super) fn reference(history: &History, start: i64) -> Option<Bucket<Kind>> {
         let minutes: Vec<_> = history.range(start..start + MINUTES).collect();
         let seen: Vec<_> = minutes.iter().filter(|(_, m)| m.seen).collect();
         // The kind most minutes have; of those, the latest minute's.
@@ -170,7 +175,7 @@ mod tests {
             .sum()
     }
 
-    fn quickcheck() -> QuickCheck {
+    pub(super) fn quickcheck() -> QuickCheck {
         QuickCheck::new().tests(2_000)
     }
 
@@ -180,8 +185,8 @@ mod tests {
 
     /// A sample as Gadgetbridge stores it, by its timestamp in seconds.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    struct Stored {
-        steps: u32,
+    pub(super) struct Stored {
+        pub(super) steps: u32,
         heart_rate: u8,
         intensity: u16,
         kind: Kind,
@@ -222,7 +227,7 @@ mod tests {
         }
     }
 
-    fn send(store: &mut BTreeMap<i64, Stored>, bucket: &Bucket<Kind>) {
+    pub(super) fn send(store: &mut BTreeMap<i64, Stored>, bucket: &Bucket<Kind>) {
         let timestamp = bucket.timestamp_ms() / 1000;
         upsert(
             store,
