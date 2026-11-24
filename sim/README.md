@@ -421,7 +421,8 @@ fuzz/target/x86_64-unknown-linux-gnu/release/steps -merge=1 -use_counters=0 \
 from long local runs and a shorter one after the generator's timing
 moves (in November 2026: 652 inputs for `steps`, 1053 for
 `gadgetbridge`, 89 KB packed). CI runs every seed on each PR, and
-fuzzes from them on each release tag (`.github/workflows/verify.yml`);
+the local release gate (`scripts/release-gate.sh`) fuzzes from them
+before each release;
 a fresh fuzzing run can start from them too, unpacked into
 `fuzz/seeds/` (which git ignores):
 

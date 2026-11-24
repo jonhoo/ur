@@ -18,7 +18,7 @@
 # - sim-fuzz-seeds: every seed of the simulator's two fuzz targets
 #   (sim/fuzz/seeds.tar.zst), once each: the firmware's UI and settings
 #   storage on inputs long fuzzing found, with every `debug_assert!` on
-#   (verify.yml fuzzes from them, on release tags)
+#   (the local release gate, scripts/release-gate.sh, fuzzes from them)
 # - features: that every theme, and every feature, builds (features.yml);
 #   sim and firmware wait for it
 # - firmware: builds and packages both variants exactly as a release would

@@ -1,32 +1,33 @@
-# The slow checks, on every release tag (rc's included) and on demand:
-# what test.yml can't afford on every PR, and nothing else runs. A
-# failure on an rc is the signal to fix it before the final release; this
-# doesn't hold up release.yml, which a tag starts at the same time.
-#
-# One job per kind of check, each going through every crate that has one
-# (found in the tree, so a new crate needs no list here; Miri's are named,
-# see there), and carrying on past a failure so that one run shows them
-# all:
+# The slow checks that are still cheap, on every release tag (rc's
+# included) and on demand: what test.yml doesn't run on every PR, in
+# minutes. A failure on an rc is the signal to fix it before the final
+# release; this doesn't hold up release.yml, which a tag starts at the
+# same time.
 # - miri: the tests of the host-test crates with `unsafe` code under Miri,
 #   which catches the undefined behaviour (out-of-bounds or misaligned
 #   pointers, aliasing, data races) that a normal run passes over
-# - bolero: each host-test crate's Bolero harnesses, fuzzed with libFuzzer
-#   for a few minutes each (`cargo test` gives each only a second)
-# - sim-fuzz: the simulator's coverage-guided targets (sim/fuzz/), which
-#   run the firmware's UI and settings storage against random inputs,
-#   with every `debug_assert!` on: half an hour each, from their seeds
-#   (sim/fuzz/seeds.tar.zst; test.yml runs those alone on every PR)
 # - coverage: line and branch coverage of the host tests and the
 #   simulator's tests, merged (scripts/coverage.sh), to read: in the run's
 #   summary, and as HTML. No number fails it
 #
-# Nightly: Miri, Bolero's libFuzzer, cargo-fuzz and branch coverage need
-# it, so it is pinned here (not in rust-toolchain.toml, which is the
-# release compiler), as test.yml pins it. TODO: Dependabot doesn't update
-# this pin; move it when it breaks, or a new Rust edition needs it.
+# No job in CI may run for hours, release tags included, and until
+# November 2026 three here did (on v0.12.0's tag: every Kani proof, 2h06;
+# every Bolero harness fuzzed for four minutes, 3h01; the simulator's
+# fuzz targets for half an hour each, 1h02), failing on three tags in a
+# row without anyone noticing, as nothing waits for this workflow. They
+# are gone from CI:
+# - the Kani proofs a change affects run on that change (kani.yml);
+# - all of it runs on the maintainer's computer before a release is
+#   tagged: scripts/release-gate.sh, which a pre-push hook asks for (see
+#   CONTRIBUTING.md's "Local release gate").
+# test.yml still gives every Bolero harness a second (`cargo test`) and
+# runs the simulator's fuzz seeds, on every PR.
 #
-# The Kani proofs ran here until November 2026, two hours of them in one
-# job; kani.yml now runs the ones a change affects, on that change.
+# Nightly: Miri and branch coverage need it, so it is pinned here (not in
+# rust-toolchain.toml, which is the release compiler), as test.yml pins
+# it; scripts/release-gate.sh reads the pin from here, for its fuzzers.
+# TODO: Dependabot doesn't update this pin; move it when it breaks, or a
+# new Rust edition needs it.
 #
 # See CONTRIBUTING.md for running each of these locally.
 permissions:
@@ -41,8 +42,6 @@ concurrency:
   cancel-in-progress: true
 env:
   NIGHTLY: nightly-2026-11-06
-  CARGO_BOLERO_VERSION: 0.13.5
-  CARGO_FUZZ_VERSION: 0.13.2
 name: verify
 jobs:
   miri:
@@ -66,7 +65,7 @@ jobs:
       - name: Install nightly, with Miri
         run: rustup toolchain install "$NIGHTLY" --profile minimal --component miri,rust-src
       # Bolero's harnesses read their corpus from disk, which Miri's
-      # isolation forbids; the job below fuzzes them.
+      # isolation forbids, so they're skipped.
       - name: cargo miri test, the crates with unsafe code
         run: |
           failed=()
@@ -81,102 +80,13 @@ jobs:
             echo "::error::Miri failed in: ${failed[*]}"
             exit 1
           fi
-  bolero:
-    runs-on: ubuntu-latest
-    name: bolero
-    # 39 harnesses, four minutes each, and the builds.
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
-      - name: Install nightly
-        run: rustup toolchain install "$NIGHTLY" --profile minimal --component rust-src
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # tag=v6.1.0
-        with:
-          path: ~/.cargo/bin/cargo-bolero
-          key: cargo-bolero-${{ env.CARGO_BOLERO_VERSION }}
-      - name: Install cargo-bolero
-        run: command -v cargo-bolero >/dev/null || cargo install --locked cargo-bolero --version "$CARGO_BOLERO_VERSION"
-      # Every harness of every crate that depends on Bolero (`cargo bolero
-      # list` names them, a JSON object a line).
-      - name: cargo bolero test, every harness
-        run: |
-          failed=()
-          mapfile -t crates < <(grep -l bolero host-tests/*/Cargo.toml | cut -d/ -f2)
-          for crate in "${crates[@]}"; do
-            # (`|| true`: a failed listing is recorded below, not the end
-            # of the step.)
-            harnesses=()
-            mapfile -t harnesses < <(cd "host-tests/$crate" && cargo "+$NIGHTLY" bolero list | jq -r 'select(.test) | .test') || true
-            if [ "${#harnesses[@]}" -eq 0 ]; then
-              failed+=("$crate (no harnesses listed)")
-              continue
-            fi
-            for harness in "${harnesses[@]}"; do
-              echo "::group::$crate $harness"
-              (cd "host-tests/$crate" && cargo "+$NIGHTLY" bolero test "$harness" --engine libfuzzer -T 4min) \
-                || failed+=("$crate $harness")
-              echo "::endgroup::"
-            done
-          done
-          if [ "${#failed[@]}" -gt 0 ]; then
-            printf '::error::Bolero failed: %s\n' "${failed[@]}"
-            exit 1
-          fi
-      # What a harness found (Bolero keeps it in the crate's src/__fuzz__/,
-      # under the harness's name), to rerun.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # tag=v7.0.2
-        if: failure()
-        with:
-          name: bolero-crashes
-          path: host-tests/*/src/__fuzz__/*/crashes/
-          if-no-files-found: ignore
-  sim-fuzz:
-    runs-on: ubuntu-latest
-    name: sim-fuzz
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
-      - name: Install nightly
-        run: rustup toolchain install "$NIGHTLY" --profile minimal --component rust-src
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # tag=v6.1.0
-        with:
-          path: ~/.cargo/bin/cargo-fuzz
-          key: cargo-fuzz-${{ env.CARGO_FUZZ_VERSION }}
-      - name: Install cargo-fuzz
-        run: command -v cargo-fuzz >/dev/null || cargo install --locked cargo-fuzz --version "$CARGO_FUZZ_VERSION"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # tag=v2.9.3
-        with:
-          workspaces: sim/fuzz
-      # Half an hour of each target, a process per core, from its seeds
-      # into a scratch corpus (the seeds stay as unpacked). `-s none`:
-      # the targets catch what they check themselves, and a sanitizer
-      # would only slow them.
-      - name: half an hour of each target
-        working-directory: sim/fuzz
-        run: |
-          tar --zstd -xf seeds.tar.zst
-          mkdir -p artifacts
-          for target in steps gadgetbridge; do
-            echo "::group::$target"
-            mkdir -p "corpus/$target"
-            cargo "+$NIGHTLY" fuzz run -s none "$target" "corpus/$target" "seeds/$target" -- \
-              -fork="$(nproc)" -timeout=20 -rss_limit_mb=2048 -max_total_time=1800 \
-              -artifact_prefix="artifacts/$target-"
-            echo "::endgroup::"
-          done
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # tag=v7.0.2
-        if: failure()
-        with:
-          name: sim-fuzz-artifacts
-          path: sim/fuzz/artifacts/
-          if-no-files-found: ignore
   # Line and branch coverage (scripts/coverage.sh): the firmware's modules
   # through the host tests and the simulator, and the simulator through
   # its tests, merged into one report. Not a check (no number fails it;
   # its tests failing does, as they do in test.yml): a release's look at
   # what no test reaches, as the run's summary (each file, least covered
   # first, and the functions never run) and as HTML, line by line (the
-  # `coverage` artifact). Self-contained, like the jobs above.
+  # `coverage` artifact). Self-contained, like the job above.
   coverage:
     runs-on: ubuntu-latest
     name: coverage
