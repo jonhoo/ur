@@ -10,7 +10,7 @@
 #   weekly), one crate after another in one job; and the Gadgetbridge
 #   mock (gbmock/)
 # - kani: that every host-test crate's Kani proofs still compile, without
-#   running them (verify.yml runs them, on release tags)
+#   running them (kani.yml runs the ones a change affects)
 # - sim: the simulator's tests (sim/), which check its screenshots of the
 #   UI against the approved ones (every theme's README's too), run every
 #   theme's every screen, and upload those screenshots, to look at; then
@@ -117,15 +117,17 @@ jobs:
             exit 1
           fi
   # The Kani proofs (`#[kani::proof]`, under `#[cfg(kani)]`), compiled
-  # but not verified (`--only-codegen`): only `cargo kani` compiles them,
-  # so without this a change to a module can break its proofs and nothing
-  # notices until verify.yml runs them on a release tag. That happened to
-  # gb_buckets' and snapshot's in November 2026. All 38 crates' proofs
-  # compile in ~30 s on a desktop; verifying them takes over an hour.
+  # but not verified (`--only-codegen`), every crate's: only `cargo kani`
+  # compiles them, and kani.yml runs only the proofs of the crates it
+  # works out a change affects, so this is what notices a proof broken
+  # by a change that rule missed (gb_buckets' and snapshot's stopped
+  # compiling unnoticed in November 2026, when proofs ran only on
+  # release tags). Every crate's proofs compile in ~30 s on a desktop;
+  # verifying them all takes over an hour.
   kani:
     runs-on: ubuntu-latest
     name: kani
-    # As verify.yml's, so the two share the cache entry below (its key and
+    # As kani.yml's, so the two share the cache entry below (its key and
     # paths must match exactly).
     env:
       KANI_VERSION: 0.68.0
