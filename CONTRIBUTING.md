@@ -529,8 +529,10 @@ much runs at once is set from the environment (`GATE_KANI_JOBS`,
 `GATE_BOLERO_JOBS`, `GATE_SIM_FUZZ_FORKS`, `GATE_MUTANTS_JOBS`), as is
 memory: with systemd, every command runs in its own scope in one slice
 capped at `GATE_MEMORY` (24G), a crate's proofs at `GATE_KANI_MEMORY`
-(12G), so a proof that blows up is killed alone and fails its stage
-rather than taking the terminal with it. Give it the memory: a slice
+(12G) and mutation testing at `GATE_MUTANTS_MEMORY` (10G), each
+mutated test run at 4G of address space (`GATE_MUTANTS_TEST_AS`), so a
+proof or a mutated test that blows up fails alone rather than taking
+the other stages, or the terminal, with it. Give it the memory: a slice
 at its cap stalls whatever runs in it while the kernel reclaims, and a
 fuzzer stalled for 10 seconds reports a timeout, which fails `bolero`
 with an input that runs in milliseconds. With less to spare, run the

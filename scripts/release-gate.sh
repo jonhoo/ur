@@ -52,6 +52,9 @@
 #     GATE_BOLERO_JOBS=6        harnesses fuzzed at once
 #     GATE_SIM_FUZZ_FORKS=6     libFuzzer processes per simulator target
 #     GATE_MUTANTS_JOBS=6       mutants built and tested at once
+#     GATE_MUTANTS_MEMORY=10G   the most memory the mutants stage gets
+#     GATE_MUTANTS_TEST_AS=4G   the address space one mutated test run
+#                               gets (`prlimit --as`)
 #     GATE_MEMORY=24G           the most memory all of it gets together
 #     CARGO_TARGET_DIR          where it builds (default
 #                               target/release-gate/), in a directory
@@ -167,6 +170,8 @@ kani_timeout=${GATE_KANI_TIMEOUT:-30m}
 bolero_jobs=${GATE_BOLERO_JOBS:-6}
 sim_fuzz_forks=${GATE_SIM_FUZZ_FORKS:-6}
 mutants_jobs=${GATE_MUTANTS_JOBS:-6}
+mutants_memory=${GATE_MUTANTS_MEMORY:-10G}
+mutants_test_as=${GATE_MUTANTS_TEST_AS:-4G}
 memory=${GATE_MEMORY:-24G}
 
 # ==============================================================================
@@ -227,6 +232,7 @@ if selected sim-fuzz; then
 fi
 if selected mutants; then
   need cargo-mutants "cargo install --locked cargo-mutants"
+  need prlimit "util-linux"
 fi
 if selected bolero || selected sim-fuzz; then
   if [[ -z $nightly ]]; then
@@ -629,8 +635,20 @@ stage_mutants() {
   say mutants "${mutants_modules:-every module}, $mutants_jobs mutants at a time"
   # Its scratch copies (a crate and its build per job, some GB each) go
   # under the target directory rather than /tmp, which may be memory.
+  #
+  # Some mutants make a test allocate without bound (gb_buckets' and
+  # nav's reached 17 GB in November 2026). Capped only by the slice,
+  # such a test filled it, so that the kernel killed fuzzers next to it
+  # and stalled others past libFuzzer's 10 s timeout, failing `bolero`
+  # twice. So each test run gets an address space of its own to fill,
+  # through cargo's runner (every host test runs in 4G): its allocation
+  # fails and it aborts, which counts its mutant caught, and nothing
+  # else notices. A cap on the whole stage alone isn't enough: the
+  # kernel's OOM killer then takes other jobs' `rustc`s too, and their
+  # mutants come out unviable. That cap stays, as the backstop.
   mkdir -p "$target/mutants"
-  TMPDIR=$target/mutants capped "$memory" \
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="prlimit --as=$(numfmt --from=iec "$mutants_test_as") --" \
+    TMPDIR=$target/mutants capped "$mutants_memory" \
     scripts/mutants.sh -o "$dir" -j "$mutants_jobs" "${modules[@]}" >"$out/mutants.txt" 2>&1 || status=$?
   local detail
   if [[ -e $dir/missed.txt ]]; then
