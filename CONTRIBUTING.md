@@ -556,21 +556,8 @@ commit. A stage that was shortened or narrowed is *reduced*: it can
 pass, but doesn't count towards the stamp, and neither does anything
 run with `--allow-dirty`, as the stamp is for a commit.
 
-So that the gate isn't forgotten, `scripts/hooks/pre-push` refuses to
-push a release tag whose commit has no stamp, and says what to run
-(`RELEASE_GATE_SKIP=1 git push …` overrides it, knowingly). Install it
-once, in the main checkout:
-
-```sh
-ln -sf ../../scripts/hooks/pre-push "$(git rev-parse --git-common-dir)/hooks/pre-push"
-```
-
-That takes the place of Git LFS's pre-push hook, which ours runs when
-it's done. (Not `git config core.hooksPath scripts/hooks`: LFS keeps
-three more hooks in `.git/hooks/`, which that would turn off. And `git
-lfs install --force` puts LFS's hook back over the link; install it
-again after.) The hook finds a stamp made in the checkout you push
-from, or in the main checkout when that's a worktree of it.
+Nothing enforces the gate: it's a step of [Releasing](#releasing), to
+remember. The stamp is the record that a commit passed it.
 
 ### cargo-careful and Miri
 
@@ -1152,8 +1139,9 @@ Cargo.toml's version is the source of truth. To release:
    ```
 
    It must pass before the tag exists anywhere but here: nothing in CI
-   runs every proof or fuzzes for long, and the pre-push hook refuses
-   the tag without the gate's stamp. Read its `mutants/summary.md` too.
+   runs every proof or fuzzes for long, and nothing else will remind
+   you. Check that `tmp/release-gate/<commit>/passed` names the commit
+   you're tagging, and read its `mutants/summary.md` too.
    A fix is a new commit, and the gate again.
 4. Tag (annotated, with a very brief summary of what changed
    since the last release: the key user-facing effects, naming new

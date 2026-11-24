@@ -2,8 +2,7 @@
 # The local release gate: the long, exploratory checks that CI doesn't
 # run (no CI job may take hours), on the commit about to be tagged, on
 # this computer. Run it from a clean checkout of that commit, before
-# tagging; scripts/hooks/pre-push refuses to push a `v*` tag whose commit
-# hasn't passed it.
+# tagging (CONTRIBUTING.md's "Releasing"; nothing enforces it).
 #
 #     scripts/release-gate.sh [OPTIONS]
 #

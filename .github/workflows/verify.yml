@@ -18,8 +18,8 @@
 # are gone from CI:
 # - the Kani proofs a change affects run on that change (kani.yml);
 # - all of it runs on the maintainer's computer before a release is
-#   tagged: scripts/release-gate.sh, which a pre-push hook asks for (see
-#   CONTRIBUTING.md's "Local release gate").
+#   tagged: scripts/release-gate.sh (see CONTRIBUTING.md's "Local release
+#   gate").
 # test.yml still gives every Bolero harness a second (`cargo test`) and
 # runs the simulator's fuzz seeds, on every PR.
 #
