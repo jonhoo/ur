@@ -89,8 +89,13 @@ jobs:
       # to show the proof isn't vacuous (its `kani::assume`s leave some
       # input that reaches the case it's about), and an unsatisfied one
       # says it is.
+      #
+      # A step's shell is `bash -e`, without `pipefail` (that comes only
+      # with an explicit `shell: bash`): without it here, the `tee`'s
+      # success would hide a crate's failed proofs.
       - name: cargo kani, every crate with proofs
         run: |
+          set -o pipefail
           failed=()
           mapfile -t crates < <(grep -rl 'kani::proof' host-tests/*/src | cut -d/ -f2 | sort -u)
           mkdir -p "$RUNNER_TEMP/kani"
@@ -191,8 +196,8 @@ jobs:
           failed=()
           mapfile -t crates < <(grep -l bolero host-tests/*/Cargo.toml | cut -d/ -f2)
           for crate in "${crates[@]}"; do
-            # (Steps run with `-eo pipefail`: a failed listing is recorded
-            # below, not the end of the step.)
+            # (`|| true`: a failed listing is recorded below, not the end
+            # of the step.)
             harnesses=()
             mapfile -t harnesses < <(cd "host-tests/$crate" && cargo "+$NIGHTLY" bolero list | jq -r 'select(.test) | .test') || true
             if [ "${#harnesses[@]}" -eq 0 ]; then
