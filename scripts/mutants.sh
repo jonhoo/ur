@@ -6,6 +6,7 @@
 # nothing checks.
 #
 #     scripts/mutants.sh [-o OUT] [-j JOBS] [--in-diff DIFF] [MODULE ...]
+#     scripts/mutants.sh --list
 #
 # MODULE is a module of src/ that a host-test crate includes (`decimal`,
 # `src/gesture.rs`, `themes/retro/schemes`); with none, every one of them.
@@ -13,7 +14,11 @@
 # `<(git diff main)`) narrows that to the code the diff touches, as it is
 # in the working tree now. JOBS (default 3) is how many mutants build and
 # test at once, each in a copy of its crate with a target directory of
-# its own, so a few GB of memory and disk each.
+# its own, so a few GB of memory and disk each. `--list` only names the
+# modules there are, a line each, and mutates nothing: CI divides a full
+# run among jobs by it (.github/workflows/mutants.yml), as any set of
+# modules can run apart from the others: a shared module's crates are
+# found from the module, whatever else is asked for.
 #
 # OUT (default `tmp/mutants`, emptied first) receives:
 #
@@ -55,34 +60,27 @@ set -euo pipefail
 out=tmp/mutants
 jobs=3
 diff=
+list=
 modules=()
 while (($# > 0)); do
   case $1 in
     -o | --out) out=$2 && shift 2 ;;
     -j | --jobs) jobs=$2 && shift 2 ;;
     --in-diff) diff=$2 && shift 2 ;;
+    --list) list=1 && shift ;;
     -h | --help)
       sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p}' "$0"
       exit 0
       ;;
     -*)
-      echo "usage: scripts/mutants.sh [-o OUT] [-j JOBS] [--in-diff DIFF] [MODULE ...]" >&2
+      echo "usage: scripts/mutants.sh [-o OUT] [-j JOBS] [--in-diff DIFF] [MODULE ...] | --list" >&2
       exit 2
       ;;
     *) modules+=("$1") && shift ;;
   esac
 done
-command -v cargo-mutants >/dev/null || {
-  echo "cargo-mutants isn't installed: cargo install --locked cargo-mutants" >&2
-  exit 1
-}
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-# OUT relative to where it was run from, as a path argument would be.
-mkdir -p "$out"
-out=$(cd "$out" && pwd)
-rm -rf "${out:?}"/{summary.md,missed.txt,modules,crates}
-mkdir -p "$out/modules" "$out/crates"
 
 # ==============================================================================
 # Which crates include which modules
@@ -121,6 +119,23 @@ declare -A by_name
 for module in "${!crates_of[@]}"; do
   by_name[$(name_of "$module")]=$module
 done
+
+if [[ -n $list ]]; then
+  printf '%s\n' "${!by_name[@]}" | sort
+  exit 0
+fi
+
+# Past here it mutates, so only now what that needs: `--list` goes
+# without cargo-mutants, and leaves OUT alone.
+command -v cargo-mutants >/dev/null || {
+  echo "cargo-mutants isn't installed: cargo install --locked cargo-mutants" >&2
+  exit 1
+}
+# OUT relative to where it was run from, as a path argument would be.
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+rm -rf "${out:?}"/{summary.md,missed.txt,modules,crates}
+mkdir -p "$out/modules" "$out/crates"
 
 # ==============================================================================
 # The modules to mutate
