@@ -73,6 +73,23 @@ jobs:
       - name: field log expander
         if: ${{ !cancelled() }}
         run: python3 -I scripts/expand_log_test.py
+      # `cargo test` runs Bolero's harnesses without either, so only
+      # `cargo bolero` (the release gate, before a tag) would notice a
+      # crate missing the profile it builds with, or the corpus it grows
+      # showing up in `git status`.
+      - name: bolero crates have a fuzz profile and ignore their corpus
+        if: ${{ !cancelled() }}
+        run: |
+          failed=()
+          for manifest in $(grep -l '^bolero' host-tests/*/Cargo.toml); do
+            crate=$(dirname "$manifest")
+            grep -q '^\[profile\.fuzz\]' "$manifest" || failed+=("$crate: no [profile.fuzz]")
+            grep -qx '/src/__fuzz__/' "$crate/.gitignore" 2>/dev/null || failed+=("$crate: .gitignore lacks /src/__fuzz__/")
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf '::error::%s\n' "${failed[@]}"
+            exit 1
+          fi
   clippy:
     runs-on: ubuntu-latest
     name: clippy
