@@ -160,6 +160,7 @@ mod proofs {
         let next = after(size, read, n);
         assert!(next < size);
         assert_eq!(waiting(size, next, write), waits - n);
+        kani::cover!(write < read && waits > 0, "the waiting bytes wrap around");
     }
 
     /// For every ring, and any count of the waiting bytes: the two
@@ -185,6 +186,7 @@ mod proofs {
         } else if read <= write {
             assert!(read + first <= write);
         }
+        kani::cover!(second > 0, "two pieces");
     }
 
     /// The longest ring the next proof walks.
@@ -226,5 +228,9 @@ mod proofs {
                 }
             }
         }
+        kani::cover!(
+            fits.is_some_and(|fits| fits > 0 && fits < waits) && write < read,
+            "a frame fits, around the end, with more waiting"
+        );
     }
 }

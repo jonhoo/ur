@@ -618,6 +618,10 @@ mod proofs {
         };
         kani::assume(usize::from(header.minutes) <= MAX_MINUTES);
         assert_eq!(Header::from_bytes(&header.to_bytes()), Some(header));
+        kani::cover!(
+            header.synced && usize::from(header.minutes) == MAX_MINUTES,
+            "a whole day, synced"
+        );
     }
 
     /// For any 32 bytes of flash (erased, a consumed record, half a
@@ -644,10 +648,15 @@ mod proofs {
                 if header.synced || bytes[28..32] == [0xFF; 4] {
                     assert_eq!(again[28..32], bytes[28..32]);
                 }
+                kani::cover!(
+                    !header.synced && bytes[28..32] != [0xFF; 4],
+                    "a synced word that's neither"
+                );
             }
             None => {
                 let minutes = u16::from_le_bytes([bytes[8], bytes[9]]);
                 assert!(!fresh || usize::from(minutes) > MAX_MINUTES);
+                kani::cover!(fresh, "fresh, but longer than a record");
             }
         }
     }
@@ -676,6 +685,14 @@ mod proofs {
             Some(logged) if logged <= newest => assert_eq!(from, (logged + 1).max(oldest)),
             _ => assert_eq!(from, oldest),
         }
+        kani::cover!(
+            logged.is_some_and(|logged| logged <= newest && logged + 1 > oldest),
+            "just after the log"
+        );
+        kani::cover!(
+            logged.is_some_and(|logged| logged > newest),
+            "the clock went back"
+        );
     }
 
     /// For any minute the clock can show (to the year 6000, and before
@@ -691,6 +708,10 @@ mod proofs {
         let next = checkpoint_slot(minute + CHECKPOINT_MINUTES);
         assert_eq!(next, (slot + 1) % CHECKPOINT_SLOTS);
         assert_ne!(next, slot);
+        kani::cover!(
+            minute < 0 && next < slot,
+            "before 1970, round to the first slot"
+        );
     }
 
     /// For any length a record can have: a save erases all of it, in
@@ -704,6 +725,12 @@ mod proofs {
         assert!(erased as usize >= HEADER_BYTES + usize::from(minutes) * SAMPLE_BYTES);
         assert!(erased <= SLOT_BYTES);
         assert!(erased.is_multiple_of(SECTOR_BYTES));
+        let used = HEADER_BYTES + usize::from(minutes) * SAMPLE_BYTES;
+        kani::cover!(erased as usize == used, "filled to the slot's end");
+        kani::cover!(
+            erased == SLOT_BYTES && used < SECTOR_BYTES as usize + SAMPLE_BYTES,
+            "a sample into the second sector"
+        );
     }
 
     /// For any 32 bytes: the planned record's date (`as_of_any`) is a
@@ -718,5 +745,9 @@ mod proofs {
         if let Some(header) = Header::from_bytes(&bytes) {
             assert_eq!(as_of_any(&bytes), Some(header.as_of()));
         }
+        kani::cover!(
+            Header::from_bytes(&retired).is_none() && as_of_any(&retired).is_some(),
+            "retired, and still dated"
+        );
     }
 }

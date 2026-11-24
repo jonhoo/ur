@@ -790,7 +790,15 @@ mod proofs {
         kani::assume(len <= bytes.len());
         let integrations = bytes[0] & 0x20 != 0;
         let u16_at = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
-        match aranet::parse(&bytes[..len]) {
+        let parsed = aranet::parse(&bytes[..len]);
+        kani::cover!(
+            parsed
+                .as_ref()
+                .is_ok_and(|reading| reading.co2.is_some() && reading.hundredths.is_some()),
+            "a reading with the CO₂ and the temperature"
+        );
+        kani::cover!(matches!(parsed, Err(Skip::OldFirmware)), "old firmware");
+        match parsed {
             Ok(reading) => {
                 assert!(len == 22 && integrations);
                 assert_eq!(reading.kind, Kind::Aranet4);
@@ -838,6 +846,10 @@ mod proofs {
         let h = i32::from(hundredths);
         assert!(10 * tenths - 5 <= h && h < 10 * tenths + 5);
         assert!(100 * quarters - 50 <= 4 * h && 4 * h < 100 * quarters + 50);
+        kani::cover!(
+            hundredths < 0 && hundredths % 10 == -5,
+            "below zero, half a tenth"
+        );
     }
 
     fn a_reading(hundredths: Option<i16>) -> Reading {
@@ -867,7 +879,12 @@ mod proofs {
         let bytes: [u8; 8] = kani::any();
         let len: usize = kani::any();
         kani::assume(len <= bytes.len());
-        match bthome_sensor::parse(&bytes[..len]) {
+        let parsed = bthome_sensor::parse(&bytes[..len]);
+        kani::cover!(
+            parsed.as_ref().is_ok_and(|reading| reading.co2.is_some()),
+            "the temperature and the CO₂"
+        );
+        match parsed {
             Ok(reading) => {
                 assert!(len >= 4, "the information, an id, and two bytes at least");
                 assert!(bytes[0] & 1 == 0 && bytes[0] >> 5 == 2);
@@ -905,6 +922,7 @@ mod proofs {
             assert!(3 <= at && at + found.len() <= len);
             assert_eq!(ad[at - 2..at], [kind, prefix]);
             assert_eq!(usize::from(ad[at - 3]), 2 + found.len());
+            kani::cover!(at > 3, "in a structure after the first");
         }
     }
 }

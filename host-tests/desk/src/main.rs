@@ -320,6 +320,7 @@ mod proofs {
         let mut desk = Desk::default();
         let mut now = 0u32;
         let mut on = false;
+        let mut ups = 0;
         for _ in 0..3 {
             let (later, movement, sample, pulse): (u32, u16, [i16; 3], Option<u32>) = kani::any();
             kani::assume(now <= later);
@@ -338,10 +339,13 @@ mod proofs {
                 Some(Change::Up) => {
                     assert!(on);
                     on = false;
+                    ups += 1;
                 }
                 None => {}
             }
             assert_eq!(desk.on(), on);
         }
+        kani::cover!(on, "a desk found");
+        kani::cover!(ups > 0, "found, then left");
     }
 }

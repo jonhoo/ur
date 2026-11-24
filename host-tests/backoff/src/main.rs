@@ -140,6 +140,8 @@ mod proofs {
         // The table's own entry while it lasts, then its last for good.
         let step = usize::from(first.failures - 1);
         assert_eq!(first.wait_ms, WAITS_MS[step.min(WAITS_MS.len() - 1)]);
+        kani::cover!(first.wait_ms < second.wait_ms, "the wait grows");
+        kani::cover!(first.failures == u16::MAX, "the count at its ceiling");
     }
 
     /// `loud` says beforehand what `failed` then decides, after any run of
@@ -150,6 +152,8 @@ mod proofs {
         let mut backoff = any_backoff();
         let loud = backoff.loud();
         assert_eq!(backoff.failed().log, loud);
+        kani::cover!(loud, "a failure that's logged");
+        kani::cover!(!loud, "one that isn't");
     }
 
     /// A failure is logged while the waits still grow, and then exactly
@@ -170,5 +174,6 @@ mod proofs {
         if !grows {
             assert!(!(first.log && second.log));
         }
+        kani::cover!(!grows && first.log, "past the table, the one in sixty");
     }
 }

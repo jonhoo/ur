@@ -512,7 +512,13 @@ mod proofs {
         let fits = firmware >= 8
             && u64::from(header_size) + u64::from(firmware) + 4 <= u64::from(len)
             && len <= capacity;
-        match Header::parse(&bytes, len, capacity) {
+        let parsed = Header::parse(&bytes, len, capacity);
+        kani::cover!(parsed.is_ok(), "a header taken");
+        kani::cover!(
+            matches!(parsed, Err(Problem::WrongSize)) && magic && supported,
+            "a header whose sizes don't add up"
+        );
+        match parsed {
             Ok(header) => {
                 assert!(magic && supported && fits);
                 assert_eq!(header.version.major, bytes[20]);
@@ -570,7 +576,9 @@ mod proofs {
         };
         let mut check = Check::new(header, len as u32);
         check.update(image);
-        if check.finish().is_ok() {
+        let passed = check.finish().is_ok();
+        kani::cover!(passed, "an image that passes");
+        if passed {
             assert_eq!(image[HASHED..HASHED + 2], 0x6907u16.to_le_bytes());
             let total = u16::from_le_bytes([image[HASHED + 2], image[HASHED + 3]]);
             assert_eq!(usize::from(total), len - HASHED);

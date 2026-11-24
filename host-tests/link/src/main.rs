@@ -205,6 +205,7 @@ mod proofs {
         // When it first reached for the UART, the deadline that gives,
         // and whether it's been judged for good.
         let (mut reached, mut deadline, mut judged) = (false, None, false);
+        let mut verdicts = [false; 2];
         assert_eq!(watch.due(), None);
         for _ in 0..6 {
             now = any_time(now);
@@ -236,6 +237,8 @@ mod proofs {
                         Verdict::Reconnect => assert!(!listens && !reconnected),
                         Verdict::Broken => assert!(!listens && reconnected),
                     }
+                    verdicts[0] |= verdict == Verdict::Reconnect;
+                    verdicts[1] |= verdict == Verdict::Broken;
                     if link.authenticated {
                         assert_eq!(verdict == Verdict::Wait, link.updating);
                         judged = true;
@@ -245,6 +248,8 @@ mod proofs {
             assert_eq!(watch.due(), deadline);
             assert!(reached || watch.due().is_none());
         }
+        kani::cover!(verdicts[0], "a reconnect");
+        kani::cover!(verdicts[1], "broken");
     }
 
     /// Through any four looks at the battery, at any times (not going
@@ -269,6 +274,10 @@ mod proofs {
                 Some((p, c, at)) => (p, c) != (percent, charging) || now - at >= STATUS_EVERY_MS,
             };
             assert_eq!(due, expected);
+            kani::cover!(
+                due && reported.is_some_and(|(p, c, _)| (p, c) == (percent, charging)),
+                "unchanged, reported again after the half hour"
+            );
             if due {
                 reported = Some((percent, charging, now));
             }

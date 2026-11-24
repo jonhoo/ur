@@ -209,6 +209,10 @@ mod proofs {
         assert_eq!(on_time.take(now), third);
         now = now.wrapping_add(fifth);
         assert_eq!(on_time.take(now), 0);
+        kani::cover!(
+            start.checked_add(first).is_none() && first > 0,
+            "the clock wraps in a report"
+        );
     }
 
     /// A state on twice over (two clients connected, say) counts once
@@ -226,6 +230,7 @@ mod proofs {
         now = now.wrapping_add(both);
         let total = u64::from(alone) + 2 * u64::from(both);
         assert_eq!(u64::from(on_time.take(now)), total.min(u32::MAX.into()));
+        kani::cover!(total > u32::MAX.into(), "more than a u32 holds");
 
         on_time.off(now);
         now = now.wrapping_add(after);
@@ -249,5 +254,6 @@ mod proofs {
         on_time.off(now);
         now = now.wrapping_add(after);
         assert_eq!(on_time.take(now), on);
+        kani::cover!(on > 0 && off > 0, "an on that counts after offs");
     }
 }

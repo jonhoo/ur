@@ -386,6 +386,7 @@ mod proofs {
             assert!(core::ptr::eq(theme, &retro::GLANCE));
             assert!(role == Color::GREY || role == Color::TRACK);
         }
+        kani::cover!(odd != even, "a half-toned role");
     }
 
     /// For every role in the dim look: its colour is one the panel's idle
@@ -401,5 +402,6 @@ mod proofs {
         assert!(green == 0 || green == 0x3F);
         assert!(blue == 0 || blue == 0x1F);
         assert!(matches!(rgb565, 0x0000 | 0xFFFF | 0xF800));
+        kani::cover!(rgb565 == 0xF800, "red");
     }
 }

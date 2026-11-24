@@ -2438,6 +2438,10 @@ mod proofs {
         let start = start_of(minute);
         assert!(start.rem_euclid(MINUTES) == 0);
         assert!(start <= minute && minute < start + MINUTES);
+        kani::cover!(
+            minute < 0 && minute != start,
+            "before 1970, past a bucket's start"
+        );
     }
 
     /// For every fetch (asked from any minute, of a history from any
@@ -2457,6 +2461,7 @@ mod proofs {
         let start = fetch.from();
         assert!(start.rem_euclid(MINUTES) == 0);
         assert!(start >= start_of(since) && start >= oldest.min(start_of(now)));
+        kani::cover!(start > start_of(now), "the clock put back");
         assert!(start < since.max(oldest) + MINUTES);
         // The first minute the phone won't have.
         let lacks = |fetch: &Fetch| fetch.synced_through() + 1;
@@ -2471,6 +2476,7 @@ mod proofs {
                 assert!(lacks <= hold && lacks <= now);
                 assert!(lacks > hold.min(now) - MINUTES);
             }
+            kani::cover!(lacks > start && hold < now, "minutes held back");
         }
     }
 
@@ -2483,6 +2489,7 @@ mod proofs {
         let after = synced_after_set(Some(synced), now).expect("kept");
         assert!(after < now);
         assert!(after == synced || synced >= now);
+        kani::cover!(after != synced, "moved before the clock");
         assert!(synced_after_set(None, now).is_none());
     }
 
@@ -2546,6 +2553,7 @@ mod proofs {
 
         let Some(bucket) = fetch.next(minutes) else {
             assert!(first.is_none_or(|(minute, _)| start_of(*minute) >= end));
+            kani::cover!(first.is_some(), "minutes left, in a bucket under way");
             return;
         };
         let Some((first, _)) = first else {
@@ -2582,5 +2590,9 @@ mod proofs {
         assert_eq!(u32::from(bucket.movement), mean);
         let most = votes[usize::from(bucket.kind)];
         assert!(most > 0 && votes.iter().all(|&votes| votes <= most));
+        kani::cover!(
+            seen > 1 && votes.iter().filter(|&&votes| votes > 0).count() > 1,
+            "minutes of different kinds, averaged"
+        );
     }
 }

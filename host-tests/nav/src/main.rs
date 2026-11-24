@@ -214,6 +214,15 @@ mod proofs {
             }
             (Place::Clock, Place::Clock) => panic!("a swipe from the clock to itself"),
         }
+        kani::cover!(
+            matches!(place, Place::Line { side, index } if index >= len(side))
+                && matches!(to, Place::Line { .. }),
+            "from past the end, back to it"
+        );
+        kani::cover!(
+            matches!(place, Place::Line { .. }) && to == Place::Clock,
+            "back to the clock"
+        );
     }
 
     /// From a screen that's there, a swipe that goes anywhere is undone
@@ -240,6 +249,10 @@ mod proofs {
                 Swipe::Down => Swipe::Up,
             };
             assert_eq!(swipe(to, reverse, len), Some((place, towards.opposite())));
+            kani::cover!(
+                matches!((place, to), (Place::Line { .. }, Place::Line { .. })),
+                "along a line, and back"
+            );
         }
         // And home is the clock's side of wherever it is.
         match place {

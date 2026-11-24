@@ -1020,6 +1020,10 @@ mod proofs {
         // a touch woke the screen.
         assert!(awake_long_press(x, y, false));
         assert_eq!(awake_long_press(x, y, true), centred(x, y));
+        kani::cover!(
+            inside(x, y) && !clear(x, y),
+            "inside, but too near the edge for a pair"
+        );
     }
 
     /// For every touch: it's a pair's second if it started within 0.3 s
@@ -1049,6 +1053,11 @@ mod proofs {
         let sooner = kani::any();
         kani::assume(sooner <= since);
         assert!(rank(after(kind, sooner, held)) >= rank(after(kind, since, held)));
+        kani::cover!(expected == After::Retry, "a retry");
+        kani::cover!(
+            kind == Kind::LongPress && expected == After::Pair && since > 300,
+            "a hold that started in time, a pair's second"
+        );
     }
 
     /// For every touch with the screen off:
@@ -1120,6 +1129,11 @@ mod proofs {
             Action::WakeLater => unreachable!("only a glance waits to wake"),
             Action::Ignore => {}
         }
+        kani::cover!(action == Action::Next, "a pair skips");
+        kani::cover!(
+            after == After::Pair && action == Action::FirstTap,
+            "a pair's second, too far, as a first tap"
+        );
     }
 
     /// For every touch on a glance (with a phone, outside the quiet
@@ -1181,6 +1195,11 @@ mod proofs {
             assert!(action != Action::Wake { first_tap: true });
             assert!(action != Action::WakeLater);
         }
+        kani::cover!(action == Action::WakeLater, "a wake that waits");
+        kani::cover!(
+            waking && media(action),
+            "a pair, its first tap a deliberate one"
+        );
     }
 
     /// For every wait on a deliberate tap's wake: once it's over, a touch
@@ -1195,7 +1214,13 @@ mod proofs {
             return;
         };
         let second = after(kind, reported, held) == After::Pair;
-        if wake_later_due(since, finger_down) {
+        let due = wake_later_due(since, finger_down);
+        kani::cover!(due && kind == Kind::Tap, "over, before a tap");
+        kani::cover!(
+            !due && !finger_down && second,
+            "not over, as a tap now would pair"
+        );
+        if due {
             assert!(!finger_down);
             assert!(!second);
         } else if !finger_down {
@@ -1210,7 +1235,9 @@ mod proofs {
     fn a_media_gesture_starts_away_from_the_edge() {
         let kind = any_kind();
         let (x, y): (i32, i32) = kani::any();
-        match second(kind, x, y) {
+        let action = second(kind, x, y);
+        kani::cover!(action == Some(Action::Next), "a hold in the middle skips");
+        match action {
             Some(Action::PlayPause) => assert!(kind == Kind::Tap && clear(x, y)),
             Some(Action::Next) => assert!(kind == Kind::LongPress && centred(x, y)),
             Some(_) => unreachable!("a pair only plays, pauses or skips"),
@@ -1240,5 +1267,13 @@ mod proofs {
         let placed = after.placed(first, x, y);
         assert!(placed != After::Pair || (after == After::Pair && paired(first, x, y)));
         assert!(placed == after || (after == After::Pair && placed == After::Apart));
+        kani::cover!(
+            placed == After::Pair && (x - first.0).abs() == 13,
+            "13 pixels apart, a pair"
+        );
+        kani::cover!(
+            after == After::Pair && placed == After::Apart && clear(x, y),
+            "in time, too far apart"
+        );
     }
 }

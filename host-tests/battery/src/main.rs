@@ -1146,6 +1146,7 @@ mod proofs {
         if let Some(more) = mv.checked_add(1) {
             let next = charge_percent(more);
             assert!(percent <= next && next <= percent + 1);
+            kani::cover!(next == percent + 1, "a millivolt more, a point more");
         }
     }
 
@@ -1166,6 +1167,10 @@ mod proofs {
             assert!((lowest..=highest).contains(&battery.millivolts()));
             assert!(battery.millivolts() < 7200);
         }
+        kani::cover!(
+            (lowest + 1..highest).contains(&battery.millivolts()),
+            "between the samples, at neither"
+        );
     }
 
     /// From a boot, through any four updates (any `i16` for a sample,
@@ -1182,7 +1187,12 @@ mod proofs {
             battery.update(kani::any(), charging, kani::any(), kani::any());
             assert!(battery.percent() <= 100);
             assert!(update > 0 || !charging || battery.percent() < 100);
+            kani::cover!(
+                update == 0 && charging && battery.percent() == 99,
+                "booted charging, at 99"
+            );
         }
+        kani::cover!(battery.percent() == 100, "full");
     }
 
     /// From any measured battery, through any three updates: the
@@ -1204,6 +1214,7 @@ mod proofs {
             assert!(after <= 100);
             if charging || power_present {
                 assert!(before <= after && after <= before + 1);
+                kani::cover!(charging && after > before, "charging, a point up");
                 if charging && after > before {
                     assert!(after < 100);
                     let resting = u32::from(charge_percent(mv.saturating_sub(100)));
@@ -1212,6 +1223,7 @@ mod proofs {
             } else {
                 assert!(after <= before && before <= after + 1);
                 assert!(after == before || u32::from(charge_percent(mv)) < before);
+                kani::cover!(after < before, "on battery, a point down");
             }
         }
     }
@@ -1234,7 +1246,9 @@ mod proofs {
         assert!(!battery.critical(first));
 
         battery.update(any_sample(), kani::any(), kani::any(), second);
-        if battery.critical(second) {
+        let critical = battery.critical(second);
+        kani::cover!(critical, "critical a minute on");
+        if critical {
             assert!(second >= first && second - first >= CRITICAL_FOR_SECS);
             assert!(!battery.power_present);
             assert!((2500..CRITICAL_MV).contains(&battery.millivolts()));

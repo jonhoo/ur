@@ -302,6 +302,11 @@ mod proofs {
         // Not in the crash checkpoints or the System OFF record, which
         // lie between the stretches (`system_off` checks where).
         assert!(address + SECTOR <= 0x19_D000 || 0x20_0000 <= address);
+        kani::cover!(
+            address + SECTOR == SECOND.end,
+            "the last below the checkpoints"
+        );
+        kani::cover!(index >= SECTORS, "an index past the ring");
     }
 
     /// For every index of the old ring: its sector is where builds up to
@@ -311,6 +316,7 @@ mod proofs {
         let index: u32 = kani::any();
         kani::assume(index < OLD_SECTORS);
         assert_eq!(sector_address(index), OLD_START + index * SECTOR);
+        kani::cover!(index == OLD_SECTORS - 1, "the old ring's last");
     }
 
     /// For every two different indices of the ring: their sectors don't
@@ -319,7 +325,13 @@ mod proofs {
     fn no_two_indices_share_a_sector() {
         let (a, b): (u32, u32) = kani::any();
         kani::assume(a < SECTORS && b < SECTORS && a != b);
-        assert!(sector_address(a).abs_diff(sector_address(b)) >= SECTOR);
+        let (at_a, at_b) = (sector_address(a), sector_address(b));
+        assert!(at_a.abs_diff(at_b) >= SECTOR);
+        kani::cover!(at_a.abs_diff(at_b) == SECTOR, "neighbours");
+        kani::cover!(
+            (at_a < FIRST.start) != (at_b < FIRST.start),
+            "one in each stretch"
+        );
     }
 
     /// For every index: the next is in the ring, one further on, and from
@@ -335,5 +347,7 @@ mod proofs {
         if index == SECTORS - 1 {
             assert_eq!(after, 0);
         }
+        kani::cover!(index == SECTORS - 1, "the last, back to the first");
+        kani::cover!(index >= SECTORS, "an index past the ring");
     }
 }

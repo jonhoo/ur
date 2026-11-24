@@ -466,6 +466,12 @@ mod proofs {
         }
         // And it stays, shown the same reading again.
         assert_eq!(shown(Some(tenths), hundredths, source), tenths);
+        let half = if whole { 50 } else { 5 };
+        kani::cover!(
+            previous == Some(tenths) && off.abs() > half,
+            "held past the nearest step"
+        );
+        kani::cover!(off.abs() == off_by(source), "as far as it may be");
     }
 
     /// For every pair of readings a wobble apart (a tenth for a room
@@ -487,6 +493,7 @@ mod proofs {
         let third = shown(Some(second), one, source);
         assert_eq!(shown(Some(third), other, source), third);
         assert_eq!(shown(Some(third), one, source), third);
+        kani::cover!(first != second && second != third, "changed twice");
     }
 
     /// Any calibration a watch could have learnt: its sums are of pairs
@@ -553,6 +560,14 @@ mod proofs {
             }
             (None, false) => assert_eq!((hundredths, source), (25 * die, Source::Watch)),
         }
+        kani::cover!(
+            source == Source::Wrist && hundredths / 25 == die - 15 * 4,
+            "the estimate at its floor"
+        );
+        kani::cover!(
+            source == Source::Wrist && (die - 15 * 4 + 1..die).contains(&(hundredths / 25)),
+            "the estimate inside its range"
+        );
     }
 
     /// For every calibration the flash could hold: it's what its bytes
@@ -565,6 +580,14 @@ mod proofs {
         assert!(calibration.to_bytes() == bytes || calibration == Calibration::new());
         assert!(calibration.pairs() >= 0.0);
         assert!(Calibration::from_bytes(calibration.to_bytes()) == calibration);
+        kani::cover!(
+            calibration.to_bytes() == bytes && calibration.pairs() > 0.0,
+            "a learnt calibration, as saved"
+        );
+        kani::cover!(
+            calibration == Calibration::new() && bytes != Calibration::new().to_bytes(),
+            "nonsense, read as the prior"
+        );
     }
 
     /// For every calibration the flash could hold, and every pair of
@@ -582,6 +605,7 @@ mod proofs {
         calibration.learn(any_die(), air);
         assert!(calibration.pairs() >= 1.0);
         assert!(Calibration::from_bytes(calibration.to_bytes()) == calibration);
+        kani::cover!(calibration.pairs() > 1.0, "learnt on top of others");
     }
 
     /// From a boot at any time, through any four looks at the sensors
@@ -637,6 +661,11 @@ mod proofs {
             {
                 assert!(wear.worn());
             }
+            kani::cover!(was.is_none() && worn_for.is_some(), "put on by a pulse");
+            kani::cover!(
+                worn_for.is_some() && still_since.is_some_and(|since| now - since >= LYING),
+                "still for a quarter of an hour, and asleep"
+            );
             last = now;
         }
     }

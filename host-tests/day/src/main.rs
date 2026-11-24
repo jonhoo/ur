@@ -531,6 +531,14 @@ mod proofs {
                 assert!(is.heart_max == was.heart_max || is.heart_max == heart_rate);
             }
         }
+        kani::cover!(
+            sound(&was) && was.heart_count > 0 && heart_rate < was.heart_min,
+            "a new lowest reading"
+        );
+        kani::cover!(
+            was.steps < is.steps && is.steps == u16::MAX,
+            "the steps saturate"
+        );
     }
 
     /// One hour of readings, any sound one, in an otherwise empty day: its average is the resting heart rate exactly when it
@@ -559,6 +567,11 @@ mod proofs {
             }
             None => assert!(hour.heart_count < RESTING_READINGS),
         }
+        kani::cover!(
+            day.resting()
+                .is_some_and(|resting| hour.heart_min < resting && resting < hour.heart_max),
+            "an average inside its ends"
+        );
     }
 
     /// For a day whose hours each have a lowest reading no higher than
@@ -596,6 +609,11 @@ mod proofs {
             assert!(1 <= low && low <= high);
             assert!(lowest && highest && within);
         }
+        kani::cover!(
+            range.is_some_and(|(low, high)| low < high),
+            "a range, not a point"
+        );
+        kani::cover!(most > 0, "an hour with steps");
     }
 
     /// [`has_its_range_and_its_busiest_hour`], for any day with nothing
@@ -633,6 +651,11 @@ mod proofs {
             rested |= hour.heart_count >= RESTING_READINGS;
         }
         assert_eq!(resting.is_some(), rested);
+        kani::cover!(resting.is_some(), "a resting rate");
+        kani::cover!(
+            !rested && day.hours.iter().any(|hour| hour.heart_count > 0),
+            "readings, too few"
+        );
     }
 
     /// What one reading a minute is worth: an hour given more than 255
@@ -686,5 +709,7 @@ mod proofs {
         assert_eq!(date(midnight - 1, offset), date(utc_minute, offset) - 1);
         // Midnight is its own.
         assert_eq!(super::day::midnight(midnight, offset), midnight);
+        kani::cover!(into_the_day == 1439, "the day's last minute");
+        kani::cover!(utc_minute < 0 && offset < 0, "before 1970, west of UTC");
     }
 }

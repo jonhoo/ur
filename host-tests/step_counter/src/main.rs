@@ -212,11 +212,16 @@ mod proofs {
                 Read::Counted(steps) => {
                     assert_eq!(before.checked_add(steps), Some(count));
                     assert!(steps <= most_steps(now - last_at));
+                    kani::cover!(
+                        steps > 0 && steps == most_steps(now - last_at),
+                        "as many as a wrist walks"
+                    );
                     (last_at, ignored_at) = (now, None);
                 }
                 Read::Moved(steps) => {
                     let at = ignored_at.expect("only after an ignored read");
                     assert!(steps <= count && steps <= most_steps(now - at));
+                    kani::cover!(steps > 0, "counting resumes after an ignored read");
                     (last_at, ignored_at) = (now, None);
                 }
                 Read::Ignored => {

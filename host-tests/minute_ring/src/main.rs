@@ -368,6 +368,14 @@ mod proofs {
             Some(newest) if newest == minute => assert!(stale.is_empty()),
             Some(_) => {}
         }
+        kani::cover!(
+            newest.is_some_and(|newest| minute < newest) && !stale.is_empty(),
+            "the clock went back"
+        );
+        kani::cover!(
+            newest.is_some() && stale.end - stale.start == len,
+            "the whole ring is stale"
+        );
     }
 
     /// For the firmware's ring, any newest minute, and any minute to
@@ -392,6 +400,8 @@ mod proofs {
         let emptied = shares < stale.end;
         let belongs = minute - DAY < held && held <= minute;
         assert_eq!(emptied, !belongs);
+        kani::cover!(emptied && held > minute, "a minute now in the future");
+        kani::cover!(emptied && held <= minute - DAY, "a minute a day gone");
     }
 
     /// For the firmware's ring (of a day, as above: nothing goes by the
@@ -409,5 +419,7 @@ mod proofs {
         assert!(gone.start <= gone.end && gone.end - gone.start <= DAY);
         let outlived = minute > newest && held <= minute - DAY;
         assert_eq!(gone.contains(&held), outlived);
+        kani::cover!(outlived, "a held minute let go of");
+        kani::cover!(gone.end - gone.start == DAY, "the whole ring let go of");
     }
 }

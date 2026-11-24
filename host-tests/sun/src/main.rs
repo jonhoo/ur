@@ -383,5 +383,7 @@ mod proofs {
         let up = |at: f32| rise < at && at <= set;
         let end = f32::from(minute + 1);
         assert_eq!(sun.contains(minute), up(end) || up(end + 1440.0));
+        kani::cover!(up(end + 1440.0), "day after a midnight the day runs past");
+        kani::cover!(end == set, "the sunset's own minute");
     }
 }

@@ -261,6 +261,14 @@ mod proofs {
             _ => assert_eq!(request.interval, DEFAULT_INTERVAL),
         }
         assert_eq!(request.wanted(), heart_rate || steps);
+        kani::cover!(
+            int.is_some_and(|int| int > MAX_INTERVAL.into()),
+            "longer than we follow"
+        );
+        kani::cover!(
+            int.is_some_and(|int| int > 1) && i64::from(request.interval) == int.unwrap(),
+            "its own"
+        );
     }
 
     /// For every request, with any interval a `u16` holds: what `ask` is
@@ -281,6 +289,7 @@ mod proofs {
         ask(latest);
         assert_eq!(take(), Some(latest));
         assert_eq!(take(), None);
+        kani::cover!(first != latest, "two different requests");
     }
 
     /// For every session, started at any time and step count, perhaps
@@ -306,7 +315,8 @@ mod proofs {
         kani::assume(request.wanted());
         let start: u32 = kani::any();
         assert_eq!(live.ask(request, now, start), None);
-        if kani::any() {
+        let restarted: bool = kani::any();
+        if restarted {
             (request, now) = (any_request(), any_time(now));
             kani::assume(request.wanted());
             assert_eq!(live.ask(request, now, kani::any()), None);
@@ -331,6 +341,10 @@ mod proofs {
             (now, counted) = (due, steps);
         }
         assert_eq!(reported, counted.wrapping_sub(start));
+        kani::cover!(
+            restarted && counted < start,
+            "restarted, and the count wrapped"
+        );
     }
 
     /// For every session and every heart rate reading, at a report: the
@@ -358,6 +372,8 @@ mod proofs {
         } else {
             assert_eq!(report.heart_rate, bpm);
         }
+        kani::cover!(bpm != 0 && report.heart_rate == bpm, "a fresh reading");
+        kani::cover!(at >= started && old, "a stale reading of the session");
     }
 
     /// For every session, at any later time: the phone going away ends
@@ -385,5 +401,6 @@ mod proofs {
         let poll = live.poll(later, kani::any(), kani::any(), kani::any());
         assert_eq!(poll, Poll::Idle);
         assert_eq!(live.ask(stop, later, kani::any()), None);
+        kani::cover!(request.heart_rate, "a session with the sensor on, ended");
     }
 }

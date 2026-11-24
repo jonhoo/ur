@@ -2744,5 +2744,7 @@ mod proofs {
         let text = builder.finish();
         assert_eq!(text.is_empty(), empty);
         assert!(text.chars().count() <= KEPT);
+        kani::cover!(text.chars().count() == KEPT, "a text filled");
+        kani::cover!(empty, "five characters, none kept");
     }
 }

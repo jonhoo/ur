@@ -135,13 +135,16 @@ mod proofs {
     fn a_frame_is_one_of_four_sizes() {
         let words = frame_words(kani::any(), kani::any());
         assert!(matches!(words, 8 | 9 | 26 | 27));
+        kani::cover!(words == 9, "a basic frame, realigned");
+        kani::cover!(words == 27, "a frame with the FPU's, realigned");
     }
 
     /// The address is only ever one the hardware said it kept.
     #[kani::proof]
     fn an_address_needs_its_valid_bit() {
         let (cfsr, mmfar, bfar): (u32, u32, u32) = (kani::any(), kani::any(), kani::any());
-        match address(cfsr, mmfar, bfar) {
+        let at = address(cfsr, mmfar, bfar);
+        match at {
             Some(at) if cfsr & 1 << 15 != 0 => assert_eq!(at, bfar),
             Some(at) => {
                 assert!(cfsr & 1 << 7 != 0);
@@ -149,5 +152,10 @@ mod proofs {
             }
             None => assert_eq!(cfsr & (1 << 15 | 1 << 7), 0),
         }
+        kani::cover!(
+            at.is_some() && cfsr & (1 << 15 | 1 << 7) == (1 << 15 | 1 << 7),
+            "both valid, the bus fault's taken"
+        );
+        kani::cover!(at.is_some() && cfsr & 1 << 15 == 0, "the memory fault's");
     }
 }

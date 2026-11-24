@@ -2096,6 +2096,7 @@ mod proofs {
         let waits = !calm && now - found < CALM_WAIT;
         assert_eq!(start == Start::Wait, waits);
         assert_eq!(start == Start::Calm, calm);
+        kani::cover!(start == Start::Busy, "started busy, the wait over");
 
         assert!(schedule.budget(at) >= SESSION_RESERVE);
         if why == Why::Budget {
@@ -2104,6 +2105,10 @@ mod proofs {
             // overdue: under 6 s at the doubled rate.)
             assert!(at < history.now + SESSION_RESERVE * 3600 / LED_BUDGET + 6);
         }
+        kani::cover!(
+            why == Why::Budget && history.counted.is_some(),
+            "the budget holds it back"
+        );
         let Some((last, _)) = history.counted else {
             assert!(why == Why::Budget || (at, why) == (0, Why::First));
             return;
@@ -2137,6 +2142,8 @@ mod proofs {
         };
         let read = matches!(outcome, Outcome::Reading(_));
         let moved = !asleep && active_polls >= MOVED_POLLS;
+        kani::cover!(why == Why::Elevated, "an elevated reading");
+        kani::cover!(why == Why::Overdue, "a reading overdue");
         match why {
             Why::First => unreachable!("a session has been counted"),
             Why::Budget => return,
@@ -2178,6 +2185,11 @@ mod proofs {
         assert!(before <= after);
         let every = 3600 / if overdue { OVERDUE_BUDGET } else { LED_BUDGET };
         assert!(after - before <= (later - earlier).div_ceil(every));
+        kani::cover!(overdue && after > LED_BUDGET, "overdue, past the usual cap");
+        kani::cover!(
+            !overdue && before < after && after == LED_BUDGET,
+            "filled to the cap"
+        );
     }
 
     /// After any three sessions: bringing the budget up to date on the way
@@ -2200,6 +2212,11 @@ mod proofs {
         };
         refilled.ended(on_the_way, 0, Outcome::NoReading, false, before);
         assert_eq!(refilled.budget(later), history.schedule.budget(later));
+        kani::cover!(
+            history.schedule.budget(history.now) < history.schedule.budget(on_the_way)
+                && history.schedule.budget(on_the_way) < history.schedule.budget(later),
+            "earning on both sides of the refill"
+        );
     }
 
     /// After any three sessions, a fourth, watched or not, takes its LED
@@ -2232,6 +2249,11 @@ mod proofs {
             Outcome::Reading(_) => assert_eq!(has, left.min(LED_BUDGET)),
             _ => assert_eq!(has, left),
         }
+        kani::cover!(
+            led_seconds > 0 && 0 < has && has < had,
+            "part of the budget spent"
+        );
+        kani::cover!(has < left, "a reading ends an overdue spell");
     }
 
     /// After any five sessions: each resting estimate is none (0), or
@@ -2251,6 +2273,12 @@ mod proofs {
                 assert!(asleep == 0 || (low..=high).contains(&asleep));
             }
         }
+        kani::cover!(
+            history
+                .readings
+                .is_some_and(|(low, high)| low < awake && awake < high && asleep != 0),
+            "both estimates, one inside the readings"
+        );
     }
 
     /// After any three sessions: the tries up to a reading are one round,
@@ -2283,6 +2311,8 @@ mod proofs {
         let (again, other) = schedule.begin(false);
         assert_eq!(again, next);
         assert!(other != arm && other != Arm::Asleep);
+        kani::cover!(arm == Arm::Dim, "dim, then bright");
+        kani::cover!(arm == Arm::Bright, "bright, then dim");
     }
 
     /// For every drive setting, and every length of LED time up to ten
@@ -2310,6 +2340,8 @@ mod proofs {
             assert!(charge <= paid && paid < charge + 125_000);
             assert!(drive > 0 || millis % 1000 != 0 || cost == millis / 1000);
             assert!(dimmer <= cost);
+            kani::cover!(drive > 0 && dimmer < cost, "a brighter drive costs more");
+            kani::cover!(drive == 0 && charge < paid, "rounded up");
             dimmer = cost;
         }
     }
@@ -2342,6 +2374,7 @@ mod proofs {
         if let Some(next) = bright_start(drive, peak, budget) {
             steps_up_within_the_peak_limit(drive, peak, next);
             assert!(budget >= budget_seconds(next, SESSION_RESERVE * 1000));
+            kani::cover!(next == drive + 2, "two settings up");
         }
     }
 
@@ -2386,6 +2419,8 @@ mod proofs {
             }
         );
         assert!(pair.most(SESSION_RESERVE) <= budget);
+        kani::cover!(arm == Arm::Bright, "bright first");
+        kani::cover!(arm == Arm::Dim, "dim first");
     }
 
     /// For every level check a session can count: a pair is in its first
@@ -2408,6 +2443,10 @@ mod proofs {
             PairStep::Over
         };
         assert_eq!(pair.step(checks), expected);
+        kani::cover!(
+            checks == 2 * PAIR_PHASE_CHECKS - 1,
+            "the second phase's last check"
+        );
     }
 
     /// For every count of busy checks among a session's: calm means busy
@@ -2417,6 +2456,7 @@ mod proofs {
     fn calm_is_busy_at_a_quarter_of_the_checks_at_most() {
         let (busy, checks): (u8, u8) = kani::any();
         assert_eq!(calm_throughout(busy, checks), busy <= checks / 4);
+        kani::cover!(busy > 0 && busy == checks / 4, "busy at a quarter exactly");
     }
 
     /// For every count of busy checks among a session's: hopeless means
@@ -2428,6 +2468,10 @@ mod proofs {
         let (busy, checks): (u8, u8) = kani::any();
         assert_eq!(hopeless(busy, checks), busy >= checks.div_ceil(2));
         assert!(checks == 0 || !(hopeless(busy, checks) && calm_throughout(busy, checks)));
+        kani::cover!(
+            checks > 0 && busy == checks.div_ceil(2),
+            "busy at half exactly"
+        );
     }
 
     /// For every time and every bucket: the slot found is at or after the
@@ -2450,6 +2494,11 @@ mod proofs {
         if at != earliest {
             assert_eq!(into, BUCKET_SLOT);
         }
+        kani::cover!(at != earliest, "waits for the next slot");
+        kani::cover!(
+            at == earliest + BUCKET - BUCKET_SLOT_FOR,
+            "the longest wait"
+        );
     }
 
     // ==========================================================================
@@ -2509,6 +2558,14 @@ mod proofs {
         schedule.ended(now, led_seconds, outcome, background, before);
         assert!(schedule.consistent());
         assert!(schedule.as_of() <= now);
+        kani::cover!(
+            background && matches!(outcome, Outcome::Reading(_)),
+            "a background reading"
+        );
+        kani::cover!(
+            !background && outcome == Outcome::OffWrist,
+            "a watched session, no skin"
+        );
     }
 
     /// From any consistent state, after any counted session (a background
@@ -2536,6 +2593,8 @@ mod proofs {
         let moved = !asleep && active_polls >= MOVED_POLLS;
         assert!(at >= now + MIN_INTERVAL);
         assert!(schedule.budget(at) >= SESSION_RESERVE);
+        kani::cover!(why == Why::Budget, "held back by the budget");
+        kani::cover!(why == Why::Overdue, "overdue, sooner than a retry");
         match why {
             Why::First => unreachable!("a session has been counted"),
             Why::Budget => {
@@ -2600,6 +2659,8 @@ mod proofs {
             assert_eq!(phased_why, why);
             assert!(phased + 180 >= at && phased <= at + 160);
         }
+        kani::cover!(why != Why::Budget && phased < at, "sooner, in a slot");
+        kani::cover!(why != Why::Budget && phased > at, "later, in a slot");
     }
 
     /// The wait for a session, as `heart::heart_task` makes it between
@@ -2669,6 +2730,10 @@ mod proofs {
         if second - found >= CALM_WAIT {
             assert!(start.is_some());
         }
+        kani::cover!(
+            start == Some(Start::Busy),
+            "a busy wrist, started after the wait"
+        );
     }
 
     /// From any consistent state, the charger (see `Schedule::charger`)
@@ -2709,6 +2774,10 @@ mod proofs {
                 schedule.due(active_polls, asleep),
                 watched.due(active_polls, asleep)
             );
+            kani::cover!(
+                0 < left && left < before.budget(now),
+                "cut short, part spent"
+            );
             return;
         }
 
@@ -2736,6 +2805,11 @@ mod proofs {
                 assert_eq!((at, why), (was_at, was_why));
             }
         }
+        kani::cover!(
+            matches!(charger, Charger::Left(_)) && why != Why::Budget,
+            "taken off, due two minutes on"
+        );
+        kani::cover!(matches!(charger, Charger::Settling(_)), "settling");
     }
 
     /// From any consistent state, between any two later times: the budget
@@ -2765,6 +2839,7 @@ mod proofs {
         if later <= earlier + OVERDUE {
             assert!(schedule.budget(later) <= LED_BUDGET);
         }
+        kani::cover!(after > LED_BUDGET, "overdue, past the usual cap");
     }
 
     /// From any consistent state: calm is never sought asleep; and when
@@ -2799,6 +2874,10 @@ mod proofs {
         if from <= later {
             assert!(schedule.budget(later) >= SESSION_RESERVE);
         }
+        kani::cover!(
+            matches!(outcome, Outcome::Reading(_)) && from <= later,
+            "sought, after a reading"
+        );
     }
 
     /// From any consistent state: a session takes its LED seconds out of
@@ -2826,5 +2905,13 @@ mod proofs {
         let mut refilled = schedule.clone();
         refilled.ended(now, 0, Outcome::NoReading, false, before);
         assert_eq!(refilled.budget(later), schedule.budget(later));
+        kani::cover!(
+            led_seconds > 0 && 0 < spent.budget(now) && spent.budget(now) < schedule.budget(now),
+            "part of the budget spent"
+        );
+        kani::cover!(
+            schedule.budget(now) < refilled.budget(later),
+            "earning after the refill"
+        );
     }
 }

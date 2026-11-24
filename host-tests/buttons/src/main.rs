@@ -1018,11 +1018,14 @@ mod proofs {
     fn every_code_fits_two_digits_whatever_the_layout() {
         let mut grid = Grid::default();
         let mut now = 0;
+        // Whether it's a sequence's.
         let fits = |press: Option<Press>| {
             if let Some(press) = press {
                 assert!(1 <= press.code && press.code <= 99 && press.last() != 0);
             }
+            press.is_some_and(|press| press.code >= 10)
         };
+        let mut sequence = false;
         for _ in 0..4 {
             let later: u64 = kani::any();
             kani::assume(now <= later && later <= LATEST);
@@ -1037,16 +1040,16 @@ mod proofs {
                     let started = Instant::from_ticks(started);
                     let [waited, completed] =
                         grid.touch(layout, any_button(layout), touch, started, at);
-                    fits(waited);
-                    fits(completed);
+                    sequence |= fits(waited) | fits(completed);
                 }
-                1 => fits(grid.lift()),
+                1 => sequence |= fits(grid.lift()),
                 2 => {
                     grid.cancel();
                 }
-                _ => fits(grid.expire(at, kani::any())),
+                _ => sequence |= fits(grid.expire(at, kani::any())),
             }
         }
+        kani::cover!(sequence, "a sequence's code");
     }
 
     /// The UI loop can't spin: after its timer fires and `on_timer` has
@@ -1086,6 +1089,10 @@ mod proofs {
         if let Some(due) = due {
             assert!(due > Instant::from_ticks(wearer.now), "due already: a spin");
         }
+        kani::cover!(
+            !on_grid && finger_down && wearer.grid.long_at().is_some(),
+            "a hold off the grid's screen, its long press left out"
+        );
     }
 
     // Two layers' waits, as the module docs give them, for any buttons
@@ -1146,6 +1153,8 @@ mod proofs {
         } else {
             assert_eq!(sent, [tap(a), None, tap(b)]);
         }
+        kani::cover!(in_time, "a sequence");
+        kani::cover!(!in_time, "two singles");
     }
 
     /// With two layers, a hold after a tap ends the sequence if it starts
@@ -1165,6 +1174,8 @@ mod proofs {
         } else {
             assert_eq!(sent, [tap(a), hold(b), None]);
         }
+        kani::cover!(in_time, "a sequence, held");
+        kani::cover!(!in_time, "a tap, then a hold");
     }
 
     /// With six buttons, a second tap makes a double tap exactly when
@@ -1182,18 +1193,21 @@ mod proofs {
         } else {
             assert_eq!(sent, [tap(a), None, tap(b)]);
         }
+        kani::cover!(in_time && a == b, "a double tap");
+        kani::cover!(in_time && a != b, "in time, on another button");
     }
 
     /// With six buttons, a hold never joins the tap before it, in time
     /// or not: a tap, then a hold.
     #[kani::proof]
     fn six_buttons_hold_stands_alone() {
-        let (a, b, sent, _) = two_touches(Layout::Six, Touch::Hold, WAIT_DOUBLE);
+        let (a, b, sent, in_time) = two_touches(Layout::Six, Touch::Hold, WAIT_DOUBLE);
         let hold = Press {
             code: b,
             gesture: Gesture::Hold,
         };
         assert_eq!(sent, [tap(a), Some(hold), None]);
+        kani::cover!(in_time && a == b, "in time, on the same button");
     }
 
     /// Any touch the controller could report, and any it couldn't, is on
@@ -1243,5 +1257,6 @@ mod proofs {
         assert_eq!(setting.on(), setting.bthome() || setting.app());
         assert_eq!(setting.on(), setting != Setting::Off);
         assert!(!setting.name().is_empty());
+        kani::cover!(byte >= 4, "a byte from another build");
     }
 }

@@ -1768,6 +1768,11 @@ mod proofs {
                     assert!(low - 0.5 <= reading && reading <= high + 0.5);
                 }
             }
+            kani::cover!(reading.is_some() && three.is_some(), "three that agree");
+            kani::cover!(
+                reading.is_some() && three.is_none() && !pushed,
+                "a calm pair, ended by a faint window"
+            );
             calm_before = pairs.then_some(bpm);
         }
     }
@@ -1786,9 +1791,8 @@ mod proofs {
         for &m in &movement[..n] {
             busy += usize::from(m > calm);
         }
-        assert_eq!(
-            slow_while_busy(bpm, &movement[..n], calm, asleep),
-            bpm < 50.0 && !asleep && n > 0 && 2 * busy >= n
-        );
+        let slow = slow_while_busy(bpm, &movement[..n], calm, asleep);
+        assert_eq!(slow, bpm < 50.0 && !asleep && n > 0 && 2 * busy >= n);
+        kani::cover!(slow && 2 * busy == n, "exactly half of them busy");
     }
 }

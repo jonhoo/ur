@@ -2101,11 +2101,20 @@ mod proofs {
         let minutes: [Minute; NEWEST] = core::array::from_fn(|_| any_minute());
         let n: usize = kani::any();
         kani::assume(n <= NEWEST);
-        if let Some(from) = sleep::unsettled_onset(&minutes[..n]) {
+        let onset = sleep::unsettled_onset(&minutes[..n]);
+        if let Some(from) = onset {
             assert!(1 <= from && from < n);
             assert!(minutes[from].seen && minutes[from].worn != Some(false));
             assert_eq!(minutes[from].steps, 0);
         }
+        kani::cover!(
+            onset.is_some_and(|from| from >= 2),
+            "an onset past the second minute"
+        );
+        kani::cover!(
+            onset.is_some_and(|from| minutes[from].worn.is_none()),
+            "an onset on a wrist it couldn't tell"
+        );
     }
 
     /// A day's kinds in three stretches (of any kinds and lengths, 60
@@ -2148,6 +2157,11 @@ mod proofs {
             }
         }
         assert_eq!(asleep, stages);
+        kani::cover!(kind(0).is_sleep() && start > 0, "an earlier sleep, apart");
+        kani::cover!(
+            start < first && second < end && !kinds[1].is_sleep(),
+            "a wake within it"
+        );
     }
 
     /// From a boot, through any four updates at times that move on: a
@@ -2213,6 +2227,8 @@ mod proofs {
                 None
             };
             assert_eq!(change, expected);
+            kani::cover!(change == Some(Change::Over(Over::Awake)), "awake too long");
+            kani::cover!(change == Some(Change::Quiet(Rest::Doze)), "a doze");
             match change {
                 Some(Change::Quiet(started)) => {
                     (quiet, nap, rest) = (true, started != Rest::Night, started)

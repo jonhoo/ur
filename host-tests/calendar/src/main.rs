@@ -122,6 +122,8 @@ mod proofs {
         assert!((1..=12).contains(&date.month));
         assert!(1 <= date.day && date.day <= days_in(date.year, date.month));
         assert!(date.hour < 24 && date.minute < 60 && date.second < 60);
+        kani::cover!(date.month == 2 && date.day == 29, "a leap day");
+        kani::cover!(date.year == 2199 && date.month == 12, "the last month");
     }
 
     /// A date and time, taken apart from any second the clock can show,
@@ -139,6 +141,8 @@ mod proofs {
         let of_day =
             i64::from(date.hour) * 3600 + i64::from(date.minute) * 60 + i64::from(date.second);
         assert_eq!(date.days_since_epoch() * 86_400 + of_day, seconds);
+        kani::cover!(seconds < 0, "a second before 1970");
+        kani::cover!(date.month == 2 && date.day == 29, "a leap day");
     }
 
     /// The day after any day the clock can show is the next date in the
@@ -160,5 +164,10 @@ mod proofs {
             (true, _) => (today.year, today.month + 1, 1),
         };
         assert_eq!((tomorrow.year, tomorrow.month, tomorrow.day), expected);
+        kani::cover!(
+            today.month == 2 && today.day == 29,
+            "the day after a leap day"
+        );
+        kani::cover!(last_of_month && today.month == 12, "new year's eve");
     }
 }

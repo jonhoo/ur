@@ -323,6 +323,10 @@ mod proofs {
             let said = if button == code { event } else { 0x00 };
             assert_eq!(objects[at..at + 2], [0x3A, said]);
         }
+        kani::cover!(
+            code == 6 && matches!(gesture, Gesture::Release),
+            "the last button, released"
+        );
     }
 
     /// For every code two layers have (1–99, none ending in 0), every
@@ -367,6 +371,10 @@ mod proofs {
             };
             assert_eq!(objects[at..at + 3], said);
         }
+        kani::cover!(
+            code == 99 && matches!(gesture, Gesture::LongPress),
+            "a long press of the last code"
+        );
     }
 
     /// For either layout, any battery level and counter: the battery's
@@ -390,6 +398,7 @@ mod proofs {
         assert_eq!(len, 20);
         let objects = objects(&data, len, counter);
         assert_eq!(objects, [0x00, counter as u8, 0x01, battery.min(100)]);
+        kani::cover!(battery > 100, "over 100, sent as 100");
     }
 
     /// For every percentage last sent, and every one now: no sum wraps
@@ -410,5 +419,7 @@ mod proofs {
         if moved >= 7 {
             assert!(due);
         }
+        kani::cover!(due && moved < 7, "sent before the step");
+        kani::cover!(!due && moved > 1, "moved, not sent yet");
     }
 }

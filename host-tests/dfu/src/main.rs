@@ -200,6 +200,8 @@ mod proofs {
         // And so is the swap request, which no image reaches.
         assert!(trailer.contains(&MAGIC_ADDRESS) && MAGIC_ADDRESS + 16 == trailer.end);
         assert!(end <= MAGIC_ADDRESS);
+        kani::cover!(end > image.end, "the image runs into the trailer's sectors");
+        kani::cover!(image_size == CAPACITY, "the largest image");
     }
 
     /// For every image size, every count of bytes received, and every
@@ -226,6 +228,11 @@ mod proofs {
         assert!(
             (image.start <= address && end <= image.end)
                 || (trailer.start <= address && end <= MAGIC_ADDRESS)
+        );
+        kani::cover!(trailer.start <= address, "a page in the trailer's sectors");
+        kani::cover!(
+            page_len < PAGE && received == image_size,
+            "the image's short last page"
         );
     }
 
@@ -257,6 +264,7 @@ mod proofs {
 
         let mut next = SLOT_START + gather.received - gather.page_len;
         let mut left = packet;
+        let mut programs = 0;
         while left > 0 {
             let (took, program) = gather.step(left);
             assert!(0 < took && took <= left);
@@ -264,6 +272,7 @@ mod proofs {
             if let Some((address, len)) = program {
                 assert_eq!(address, next);
                 next += len;
+                programs += 1;
             }
         }
         assert_eq!(next, SLOT_START + gather.received - gather.page_len);
@@ -273,6 +282,14 @@ mod proofs {
         } else {
             assert!(gather.page_len < PAGE && gather.page_len == gather.received % PAGE);
         }
+        kani::cover!(
+            programs == 1 && gather.page_len > 0,
+            "a packet that fills a page and starts the next"
+        );
+        kani::cover!(
+            gather.received == gather.image_size,
+            "the image's last packet"
+        );
     }
 
     /// For every image size and every count received: the percentage
@@ -286,5 +303,9 @@ mod proofs {
         let percent = percent(received, image_size);
         assert!(percent <= 100);
         assert_eq!(percent == 100, received == image_size);
+        kani::cover!(
+            percent == 99 && image_size - received == 1,
+            "a byte short is 99"
+        );
     }
 }

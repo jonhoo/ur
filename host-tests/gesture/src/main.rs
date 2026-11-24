@@ -684,12 +684,13 @@ mod proofs {
         let start = any_position();
         let mut tracking = Tracking::new(start);
         let since = Instant::now();
-        let mut ever_strayed = false;
+        let (mut ever_strayed, mut moved) = (false, false);
         for _ in 0..2 {
             wait_any();
             let at = any_position();
             tracking.moved_to(at);
             ever_strayed |= strayed(start, at);
+            moved |= at != start;
         }
         wait_any();
         let due = tracking.long_press_at();
@@ -704,7 +705,9 @@ mod proofs {
             let release = tracking.release();
             assert_eq!(release.gesture, Gesture::Release);
             assert_eq!((release.x, release.y), (start.0 / 3, start.1 / 3));
+            kani::cover!(moved, "a long press that moved, but not far");
         }
+        kani::cover!(ever_strayed, "strayed, so no timer");
     }
 
     /// What `touch::touch_task`'s check that a position is on the panel
@@ -751,6 +754,8 @@ mod proofs {
         assert!(past >= 3);
         assert!(i32::from(by).abs() == past / 3);
         assert!((by > 0) == (dy > 0));
+        kani::cover!(by < 0, "upwards");
+        kani::cover!(past % 3 != 0, "part of a pixel past the slack, left out");
     }
 
     /// Every long press gets exactly one release, and nothing else does:

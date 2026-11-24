@@ -368,6 +368,7 @@ mod proofs {
         let byte: u8 = kani::any();
         let read = Setting::from_byte(byte);
         assert!(read.to_byte() == byte || read == Setting::default());
+        kani::cover!(read.to_byte() != byte, "a stray byte");
     }
 
     /// For every pair of times, a second apart or years, forwards or
@@ -404,6 +405,11 @@ mod proofs {
         } else {
             assert_eq!(small, morning);
         }
+        kani::cover!(before < began && small && !current, "a new morning");
+        kani::cover!(
+            before < began && !small && current,
+            "an afternoon ends them"
+        );
     }
 
     /// Whatever the setting, the sun, the hour and the screen's look: the
@@ -423,6 +429,11 @@ mod proofs {
         let at = |daytime, small| rank(level(setting, daytime, small, dim, None));
         assert!(at(daytime, true) <= at(daytime, false));
         assert!(at(false, small) <= at(true, small));
+        kani::cover!(rank(soft) < rank(auto), "soft is dimmer");
+        kani::cover!(
+            at(daytime, true) < at(daytime, false),
+            "the small hours are dimmer"
+        );
     }
 
     /// For every two moments of a ringing wake alarm, however long it's
@@ -448,5 +459,10 @@ mod proofs {
         assert!(dim || at(Some(0)) == rank(Level::LOW));
         assert!(at(Some(earlier)) <= at(Some(later)) && at(Some(later)) <= top);
         assert!(later < RAMP || at(Some(later)) == top);
+        kani::cover!(at(Some(earlier)) < at(Some(later)), "it brightens");
+        kani::cover!(
+            !dim && at(None) < low_and_mid && at(Some(later)) == low_and_mid,
+            "low and mid, brighter than asked"
+        );
     }
 }
