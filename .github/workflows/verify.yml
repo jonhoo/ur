@@ -49,11 +49,12 @@ jobs:
   kani:
     runs-on: ubuntu-latest
     name: kani
-    # All 32 crates take 50 minutes on a desktop (in November 2026;
-    # alarm 20 of them, heart_schedule 6, the rest under 4): room for a
-    # runner's slower cores, without letting a proof that blew up (an
-    # unwind bound too high) run for GitHub's six hours.
-    timeout-minutes: 240
+    # All 38 crates take some 80 minutes on a busy desktop (in November
+    # 2026, with every proof's covers; alarm 20 of them, heart_schedule
+    # 18, gb_buckets 14, the rest under 5): room for a runner's slower
+    # cores, without letting a proof that blew up (an unwind bound too
+    # high) run for GitHub's six hours.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
       - name: Install the pinned toolchain
@@ -74,15 +75,60 @@ jobs:
       # A crate at a time, each crate's proofs one after another: CBMC's
       # memory grows fast with a proof's bounds, and one at a time keeps
       # the largest (4 GB) within a runner's.
+      #
+      # Each harness gets 30 minutes (`--harness-timeout`, unstable in
+      # Kani 0.68): the slowest took 10 on a desktop, so that's room for a
+      # runner's cores, and a harness that blew up fails alone, named,
+      # while the rest of its crate still runs. `timeout 60m` is the
+      # crate's backstop.
+      #
+      # The job's summary is a table of every harness, slowest first:
+      # its result, its covers and its time, from `--output-format
+      # terse`. A cover that isn't satisfied fails the crate too: Kani
+      # itself reports the harness as verified, but its cover is there
+      # to show the proof isn't vacuous (its `kani::assume`s leave some
+      # input that reaches the case it's about), and an unsatisfied one
+      # says it is.
       - name: cargo kani, every crate with proofs
         run: |
           failed=()
           mapfile -t crates < <(grep -rl 'kani::proof' host-tests/*/src | cut -d/ -f2 | sort -u)
+          mkdir -p "$RUNNER_TEMP/kani"
           for crate in "${crates[@]}"; do
             echo "::group::$crate"
-            (cd "host-tests/$crate" && timeout 60m cargo kani) || failed+=("$crate")
+            log=$RUNNER_TEMP/kani/$crate.txt
+            (cd "host-tests/$crate" && timeout 60m cargo kani --output-format terse -Z unstable-options --harness-timeout 30m) 2>&1 \
+              | tee "$log" || failed+=("$crate")
             echo "::endgroup::"
+            # A row per harness: `Checking harness NAME...`, then its
+            # covers (`** 2 of 2 cover properties satisfied`), its result
+            # (`VERIFICATION:- SUCCESSFUL`) and its time (`Verification
+            # Time: 1.5s`). A harness that timed out gets `CBMC timed
+            # out.` instead of a time, so a row is also finished by the
+            # next harness or the end of the log.
+            awk -v crate="$crate" '
+              function row() {
+                if (harness != "") printf "| %s | %s | %s | %s | %s |\n", crate, harness, result, covers, time
+                harness = ""
+              }
+              /^Checking harness / { row(); harness = $3; sub(/\.\.\.$/, "", harness); result = "?"; covers = "-"; time = "-" }
+              /cover properties satisfied/ { covers = $2 " of " $4; if ($2 != $4) print "unsatisfied" > "/dev/stderr" }
+              /^VERIFICATION:- / { result = $2 }
+              /^CBMC timed out/ { time = "timed out" }
+              /^Verification Time: / { time = sprintf("%.1f", $3); row() }
+              END { row() }
+            ' "$log" >"$log.rows" 2>"$log.covers"
+            if [ -s "$log.covers" ]; then
+              failed+=("$crate (a cover unsatisfied)")
+            fi
           done
+          {
+            echo "| crate | harness | result | covers | seconds |"
+            echo "|---|---|---|---|--:|"
+            cat "$RUNNER_TEMP"/kani/*.rows >"$RUNNER_TEMP/kani/rows"
+            grep 'timed out' "$RUNNER_TEMP/kani/rows" || true
+            { grep -v 'timed out' "$RUNNER_TEMP/kani/rows" || true; } | sort -t'|' -k6 -rg
+          } >>"$GITHUB_STEP_SUMMARY"
           if [ "${#failed[@]}" -gt 0 ]; then
             echo "::error::Kani failed in: ${failed[*]}"
             exit 1

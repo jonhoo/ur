@@ -120,8 +120,8 @@ jobs:
   # but not verified (`--only-codegen`): only `cargo kani` compiles them,
   # so without this a change to a module can break its proofs and nothing
   # notices until verify.yml runs them on a release tag. That happened to
-  # gb_buckets' and snapshot's in November 2026. All 32 crates' proofs
-  # compile in ~20 s on a desktop; verifying them takes most of an hour.
+  # gb_buckets' and snapshot's in November 2026. All 38 crates' proofs
+  # compile in ~30 s on a desktop; verifying them takes over an hour.
   kani:
     runs-on: ubuntu-latest
     name: kani
