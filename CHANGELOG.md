@@ -16,6 +16,8 @@ missing below were test builds for the dev kit.
 
 ### Changed
 
+- Slow the minutes in the alarm and timer editor as they follow a dragged finger, to a minute for every 0.9 mm rather than every 0.6 mm, so that the finger can lift on the minute it means to: at 0.6 mm, the minutes ran by too fast to stop on one; a drag now reaches about 15 minutes rather than 22, so a minute further off takes a second drag, or a swipe's steps first (the hours, and a swipe's steps, are as they were) (0b54e55)
+
 ### Deprecated
 
 ### Removed
