@@ -1614,6 +1614,47 @@ mod tests {
         assert_eq!(settles_at(newest, lay_down), None);
     }
 
+    /// Only the minutes after the last one asleep count as up: not a step
+    /// count amid the night's last restless minutes, which the
+    /// classifier gives the run's kind (see `sleep_hold::wakes`).
+    #[test]
+    fn only_minutes_after_the_night_count_as_up() {
+        let newest = NOON + 60;
+        let night = |minute: i64| match minute - NOON {
+            -400..-2 => Class::Light,
+            -2..0 => Class::Restless,
+            _ => Class::Awake,
+        };
+        // A turn in bed, the second minute of it with steps; then a
+        // minute with the watch off, and moving about without walking
+        // since.
+        let turned = |minute: i64| match minute - NOON {
+            ..-2 => STILL,
+            -2 => sleep::Minute {
+                movement: 400,
+                ..STILL
+            },
+            -1 => WALKING,
+            0 => sleep::Minute {
+                worn: Some(false),
+                ..STILL
+            },
+            _ => FIDGETING,
+        };
+        assert_eq!(settles(newest, Settled::NONE, night, turned), None);
+        let walked = |minute: i64| {
+            if minute == NOON + 9 {
+                WALKING
+            } else {
+                turned(minute)
+            }
+        };
+        assert_eq!(
+            settles(newest, Settled::NONE, night, walked),
+            Some(NOON - 1)
+        );
+    }
+
     /// A sleep entirely within the classifier's window (a nap, or a few
     /// still minutes the window has only just found to be sleep, which it
     /// may take back) isn't settled early; one that began before it is,
