@@ -1,0 +1,102 @@
+# Mutation testing of the host-tested firmware modules (cargo-mutants,
+# through scripts/mutants.sh; see CONTRIBUTING.md's "Mutation testing"):
+# small changes to the code that no test notices, the behaviours nothing
+# checks.
+# - diff: on a pull request, the code it changes, with the mutants every
+#   test missed in the job's summary and as warnings on the PR's lines
+# - full: on release tags (rc's included, as verify.yml), and on demand,
+#   every module, with the summary, and every mutant's diff and test log
+#   as the run's `mutants` artifact
+#
+# Advisory, never a failure: some missed mutants can't be caught (the code
+# means the same either way; about a quarter of them in the first trial),
+# so a missed one is for a person to read, not for CI to judge. Both jobs
+# pass whatever the script finds, or fails to run.
+permissions:
+  contents: read
+on:
+  pull_request:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_MUTANTS_VERSION: 27.1.0
+# `bash -eo pipefail`, where a step's default `bash -e` would let a
+# pipeline's failure through.
+defaults:
+  run:
+    shell: bash
+name: mutants
+jobs:
+  diff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    name: mutants (diff)
+    # A PR's change rarely reaches more than a few crates, a few minutes
+    # each; this is for one that touches a module most of them include.
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      # The PR merged into its base, and the base (the merge's first
+      # parent), to diff against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # tag=v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: cargo-mutants-${{ env.CARGO_MUTANTS_VERSION }}
+      - name: Install cargo-mutants
+        run: command -v cargo-mutants >/dev/null || cargo install --locked cargo-mutants --version "$CARGO_MUTANTS_VERSION"
+      # Each missed mutant also as a warning on its line, which the PR's
+      # diff shows.
+      - name: mutants in the PR's diff
+        run: |
+          git diff HEAD^1 HEAD >"$RUNNER_TEMP/pr.diff"
+          scripts/mutants.sh -o mutants -j "$(nproc)" --in-diff "$RUNNER_TEMP/pr.diff" ||
+            echo "::warning::scripts/mutants.sh couldn't test every crate; see the summary"
+          # Both missing only if the script stopped before mutating.
+          cat mutants/summary.md >>"$GITHUB_STEP_SUMMARY" || true
+          while IFS= read -r mutant; do
+            IFS=: read -r file line column _ <<<"$mutant"
+            echo "::warning file=$file,line=$line,col=$column,title=Missed mutant::${mutant#*: }"
+          done < <(cat mutants/missed.txt 2>/dev/null || true)
+  full:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    name: mutants (full)
+    # 67 minutes on a desktop with `-j 3` (November 2026: ~5,500 mutants,
+    # and ~1,000 more that a shared module's other crates retest), so a
+    # few hours on a runner's four cores: one job, within GitHub's six
+    # hours. The step's own limit is lower, so that a run that hits it
+    # still uploads the crates it finished.
+    timeout-minutes: 345
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # tag=v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-mutants
+          key: cargo-mutants-${{ env.CARGO_MUTANTS_VERSION }}
+      - name: Install cargo-mutants
+        run: command -v cargo-mutants >/dev/null || cargo install --locked cargo-mutants --version "$CARGO_MUTANTS_VERSION"
+      - name: mutants in every module
+        timeout-minutes: 330
+        run: |
+          scripts/mutants.sh -o mutants -j "$(nproc)" ||
+            echo "::warning::scripts/mutants.sh couldn't test every crate; see the summary"
+          cat mutants/summary.md >>"$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # tag=v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: mutants
+          path: mutants/
+          if-no-files-found: ignore
