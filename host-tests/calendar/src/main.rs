@@ -133,6 +133,9 @@ mod proofs {
     /// `geo`'s sunrise and the simulator count days with
     /// `days_since_epoch`.
     #[kani::proof]
+    // kissat, not Kani's default CaDiCaL: 71-83 s against 91-99 s, three
+    // runs each, alternating (November 2026, Kani 0.68).
+    #[kani::solver(kissat)]
     fn a_date_and_time_is_its_second_and_no_other() {
         let seconds: i64 = kani::any();
         kani::assume(SECONDS.contains(&seconds));
@@ -151,6 +154,9 @@ mod proofs {
     /// are up. With the first day right (`tests::known_times`: day 0 is
     /// 1970-01-01), every day's date is, by induction.
     #[kani::proof]
+    // kissat, not Kani's default CaDiCaL: 62-67 s against 84-88 s, three
+    // runs each, alternating (November 2026, Kani 0.68).
+    #[kani::solver(kissat)]
     fn the_next_day_is_the_next_date() {
         let seconds: i64 = kani::any();
         kani::assume(SECONDS.contains(&seconds) && SECONDS.contains(&(seconds + 86_400)));
