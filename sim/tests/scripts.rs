@@ -456,7 +456,7 @@ fn stored_alarms(log: &str) -> Vec<&str> {
 }
 
 /// The editor's time follows the finger while it's down: a minute for
-/// every 2 canvas pixels past the first 20 panel pixels, drawn as it
+/// every 3 canvas pixels past the first 20 panel pixels, drawn as it
 /// goes, but only set (and saved) once the finger lifts, at the very
 /// minute it showed then: not the nearest five, as a swipe's steps are.
 #[test]
@@ -464,17 +464,19 @@ fn the_editors_minutes_follow_a_dragged_finger() {
     let (dir, log) = in_the_editor(
         "editor-drag-minutes",
         "shot before.png\n\
-         # Down on the minutes, and up 30 panel pixels: 3 canvas pixels\n\
-         # past the slack, a minute.\n\
-         press 60,50\npress 60,40\nshot one.png\nsettings\n\
-         # 57 pixels: 12 canvas pixels, 6 minutes, where it stays.\n\
-         press 60,31\nshot six.png\nsettings\n\
+         # Down on the minutes, and up 33 panel pixels: 4 canvas pixels\n\
+         # past the slack, a minute (and not yet two).\n\
+         press 60,50\npress 60,39\nshot one.png\nsettings\n\
+         # 75 pixels: 18 canvas pixels, 6 minutes, where it stays.\n\
+         press 60,25\nshot six.png\nsettings\n\
          lift\nshot lifted.png\nsettings\n\
-         # And back down again, into the hour before: 10 minutes.\n\
-         press 60,30\npress 60,57\nlift\nsettings\n",
+         # And back down again, into the hour before: 30 canvas pixels,\n\
+         # 10 minutes.\n\
+         press 60,20\npress 60,57\nlift\nsettings\n",
     );
-    assert!(log.contains("drag by -3 at (60,50)"), "{log}");
-    assert!(log.contains("drag by -12 at (60,50)"), "{log}");
+    assert!(log.contains("drag by -4 at (60,50)"), "{log}");
+    assert!(log.contains("drag by -18 at (60,50)"), "{log}");
+    assert!(log.contains("drag by 30 at (60,20)"), "{log}");
     // Nothing's saved until the lift (a fresh watch has nothing stored).
     assert_eq!(
         stored_alarms(&log),
@@ -495,7 +497,7 @@ fn the_editors_minutes_follow_a_dragged_finger() {
     assert!(shot("six") == shot("lifted"), "{log}");
 }
 
-/// The hours go a step every 6 canvas pixels, a timer's minutes every 2,
+/// The hours go a step every 6 canvas pixels, a timer's minutes every 3,
 /// as an alarm's do (within what a timer can be), and a drag
 /// that comes back to where it started changes nothing: not even as the
 /// tap its touch then is, on the button it started on.
@@ -509,10 +511,10 @@ fn the_editors_drags_go_by_what_they_change() {
          # From DONE, up and back: no drag, and no DONE.\n\
          press 60,70\npress 60,50\npress 60,70\nlift\nsettings\n\
          button\nwait 1s\n\
-         # TIMER 2 (3 minutes): 7 canvas pixels up are 3 minutes more;\n\
+         # TIMER 2 (3 minutes): 10 canvas pixels up are 3 minutes more;\n\
          # down as far as the screen goes, it stops at 1.\n\
          tap 60,56\nwait 1s\n\
-         press 60,50\npress 60,36\nlift\nsettings\n\
+         press 60,50\npress 60,33\nlift\nsettings\n\
          press 60,10\npress 60,79\nlift\nsettings\n",
     );
     let stored: Vec<&str> = log
@@ -541,8 +543,9 @@ fn the_editors_drags_go_by_what_they_change() {
 fn a_swipe_in_the_editor_still_steps_the_time() {
     let (_, log) = in_the_editor(
         "editor-swipe",
-        "# 24 panel pixels up: a canvas pixel's drag, short of a minute.\n\
-         press 60,50\npress 60,42\nlift\nsettings\n\
+        "# 27 panel pixels up: 2 canvas pixels' drag, just short of a\n\
+         # minute.\n\
+         press 60,50\npress 60,41\nlift\nsettings\n\
          up 60,40\nsettings\ndown 20,40\nsettings\n",
     );
     assert_eq!(
@@ -568,7 +571,7 @@ fn closing_the_editor_settles_a_drag() {
     );
     assert_eq!(
         stored_alarms(&log),
-        ["07:06 off, 07:30 off", "07:06 off, 07:30 off"],
+        ["07:04 off, 07:30 off", "07:04 off, 07:30 off"],
         "{log}"
     );
 }

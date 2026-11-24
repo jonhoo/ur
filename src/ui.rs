@@ -507,13 +507,16 @@ struct Drag {
 /// (the first 2 mm being the slack), and nowhere on the clock is more
 /// than two drags away (the time wraps at midnight).
 const DRAG_HOUR: i32 = 6;
-/// The same for a minute, of an alarm's time or a timer's length: 0.6 mm,
-/// so that drag is 22 minutes, and an hour's worth is three. A drag
+/// The same for a minute, of an alarm's time or a timer's length: 0.9 mm,
+/// so that drag is 15 minutes, and the panel's whole height 24. A drag
 /// settles on the very minute it shows (07:03 for the train, three
-/// minutes for the tea), so a step has to be about what a lifting finger
-/// keeps; half that (a canvas pixel a minute) ran through the minutes
-/// faster, but couldn't be let go of on a chosen one.
-const DRAG_MINUTE: i32 = 2;
+/// minutes for the tea), so a step has to be more than a lifting finger
+/// moves by. A canvas pixel a minute ran through the minutes fastest,
+/// but couldn't be let go of on a chosen one; two (0.6 mm, as 0.12.0
+/// had it) was still too fast to land on one, its wearer found. The cost
+/// is reach: a minute further off than a drag goes takes a second drag,
+/// or a swipe's steps first ([`ALARM_MINUTES`] at a time for an alarm).
+const DRAG_MINUTE: i32 = 3;
 /// What a swipe steps an alarm's minutes by: a whole gesture is for
 /// getting near a time quickly, where a drag is for landing on it.
 const ALARM_MINUTES: u16 = 5;
