@@ -5,6 +5,8 @@
 #[path = "../../../src/alarm.rs"]
 #[allow(dead_code)]
 mod alarm;
+#[cfg(test)]
+mod clock_model;
 #[cfg(not(kani))]
 mod replay;
 #[cfg(not(kani))]
@@ -800,7 +802,7 @@ mod tests {
     /// stamped (1 to 12 s in the field logs). Stamped 8 s late, it put
     /// the clock from 03:00:05 back to 01:59:57: 61 minutes by the
     /// minute, one more than `CATCH_UP` allowed back, so the hour was
-    /// checked afresh and 02:30 rang twice.
+    /// checked afresh and 02:30 rang twice. (Found by `clock_model`.)
     #[test]
     fn winter_time_sent_late_rings_each_alarm_once() {
         let mut s = Settings::default();
@@ -822,6 +824,78 @@ mod tests {
                 (at(sunday, 2, 30), Kind::Phone(0)),
                 (at(sunday, 3, 10), Kind::Phone(1)),
             ]
+        );
+    }
+
+    /// An alarm that rang most of an hour late, as one in the hour summer
+    /// time skips does, and rang out, drops what was queued behind it,
+    /// even an alarm whose time had only just come. `State::due` keeps
+    /// the late alarm's minute (02:01) as the last checked; three minutes
+    /// of ringing later, at 03:03, that's 62 minutes back, more than
+    /// `CATCH_UP` allows for, so it checks afresh from 03:02 and 03:02
+    /// never rings. (Found by `clock_model`, which allows for it.)
+    ///
+    /// TODO: allowing `RING_FOR` more forward in `State::after` fixes this
+    /// shape, but not with the snooze or a timer ringing out in between
+    /// (each adds its own hold-up). Telling a hold-up from a jump needs the
+    /// minute of the last check beside the last minute checked: 4 bytes
+    /// more of the UI's RAM, for alarms within minutes of summer time's
+    /// change.
+    #[test]
+    #[ignore = "a known gap: see the TODO"]
+    fn queued_behind_an_hour_late_alarm_rings() {
+        let mut s = Settings::default();
+        let mut p = phone(&[(2, 1, 0x7F, true), (3, 2, 0x7F, true)]);
+        let mut state = State::default();
+        let sunday = MONDAY - 1;
+        let mut rang = Vec::new();
+        // Summer time moves the clock from 02:00:05 to 03:00:05; then
+        // 02:01's alarm rings out, for three minutes without checks.
+        let seconds = (at(sunday, 1, 50) * 60..=at(sunday, 2, 0) * 60 + 4)
+            .chain(at(sunday, 3, 0) * 60 + 5..=at(sunday, 3, 0) * 60 + 5)
+            .chain(at(sunday, 3, 3) * 60 + 5..at(sunday, 3, 30) * 60);
+        for second in seconds {
+            if let Some(due) = state.due(&mut s, &mut p, second, Wearer::default()) {
+                rang.push((second.div_euclid(60), due.kind));
+            }
+        }
+        assert_eq!(
+            rang,
+            vec![
+                (at(sunday, 3, 0), Kind::Phone(0)),
+                (at(sunday, 3, 3), Kind::Phone(1)),
+            ]
+        );
+    }
+
+    /// The watch resetting in the minute an alarm rang (a crash, or an
+    /// update started right after dismissing it) rings it again: what
+    /// rang is in the UI's RAM, and checking starts afresh from the minute
+    /// before the clock's, which `clock::restore` resumes in the same
+    /// minute. (Found by `clock_model`, which allows for it.)
+    ///
+    /// TODO: keeping `State`'s last checked minute beside the clock's
+    /// checkpoint in retained RAM (`clock::Retained` has 8 bytes spare)
+    /// would carry it across a reset that keeps the time.
+    #[test]
+    #[ignore = "a known gap: see the TODO"]
+    fn a_reset_in_an_alarms_minute_rings_it_once() {
+        let mut s = Settings::default();
+        let mut p = phone(&[(7, 0, 0x7F, true)]);
+        let mut state = State::default();
+        let seven = at(MONDAY, 7, 0) * 60;
+        assert_eq!(
+            state.due(&mut s, &mut p, seven - 1, Wearer::default()),
+            None
+        );
+        let rang = state.due(&mut s, &mut p, seven, Wearer::default());
+        assert_eq!(rang.map(|due| due.kind), Some(Kind::Phone(0)));
+        // Dismissed at once; a reset at 07:00:20, and the clock resumed
+        // a second on.
+        let mut state = State::default();
+        assert_eq!(
+            state.due(&mut s, &mut p, seven + 21, Wearer::default()),
+            None
         );
     }
 

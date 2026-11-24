@@ -14,6 +14,16 @@ publish = false
 # `cargo kani` sets `cfg(kani)` for the proofs at the end of src/main.rs.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
+[dev-dependencies]
+bolero = "0.13.7"
+
+# CI runs the host tests with `--release`; keep the arithmetic checks and
+# the module's own `debug_assert!`s (`State::due`'s "strictly after"
+# above all), so that the clock model in `src/clock_model.rs` trips them.
+[profile.release]
+overflow-checks = true
+debug-assertions = true
+
 # The proof of `State::due` stubs `next_at` and `next_smart` (see `proofs`
 # in `src/main.rs`).
 [package.metadata.kani.unstable]
