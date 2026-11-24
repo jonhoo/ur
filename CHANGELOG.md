@@ -22,6 +22,8 @@ missing below were test builds for the dev kit.
 
 ### Fixed
 
+- Ring each alarm once the night winter time starts even when the phone's time reaches the watch a few seconds late (as it does at about one connection in six): stamped more than 5 seconds late, it put the clock back over 61 turns of a minute, which the watch took for a new time zone, and every alarm between 02:00 and 03:00 rang a second time (47f16a2)
+
 ### Security
 
 ## [0.12.0] - 2026-11-23
