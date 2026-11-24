@@ -24,7 +24,9 @@ bolero = "0.13.7"
 overflow-checks = true
 debug-assertions = true
 
-# The proof of `State::due` stubs `next_at` and `next_smart` (see `proofs`
-# in `src/main.rs`).
+# The proofs of `State` take `next_at` and `next_smart`'s contracts in their
+# place (`stub_verified`, which needs `stubbing` too; see `proofs` in
+# `src/main.rs`).
 [package.metadata.kani.unstable]
+function-contracts = true
 stubbing = true

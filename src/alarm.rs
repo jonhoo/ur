@@ -273,6 +273,15 @@ fn weekday(day: i64) -> i64 {
 
 /// The smart alarm's next time (local minutes), strictly after minute
 /// `now`.
+// Kani's contract: see `contracts` below.
+#[cfg_attr(kani, kani::requires(
+    settings.smart_weekday < DAY as u16
+        && settings.smart_weekend < DAY as u16
+        && contracts::MINUTES.contains(&now)
+))]
+#[cfg_attr(kani, kani::ensures(|at: &i64| {
+    *at > now && *at <= now + 3 * DAY && *at == contracts::next_smart_closed(settings, now)
+}))]
 pub fn next_smart(settings: &Settings, now: i64) -> i64 {
     // Times of day, as `Settings::from_bytes` and the editor keep them:
     // a later one would make "today's" land on another day, and so ring
@@ -295,6 +304,13 @@ pub fn next_smart(settings: &Settings, now: i64) -> i64 {
 /// The next time (local minutes) that `time` comes round, strictly after
 /// minute `after`, on one of `days` (bit 0 Monday … bit 6 Sunday, as
 /// Gadgetbridge sends them), or on any day if `days` is 0.
+// Kani's contract: see `contracts` below.
+#[cfg_attr(kani, kani::requires(
+    time < DAY as u16 && days < 0x80 && contracts::MINUTES.contains(&after)
+))]
+#[cfg_attr(kani, kani::ensures(|at: &i64| {
+    *at > after && *at <= after + 8 * DAY && *at == contracts::next_at_closed(time, days, after)
+}))]
 pub fn next_at(time: u16, days: u8, after: i64) -> i64 {
     // A time of day, on Gadgetbridge's seven weekdays: what
     // `Settings::from_bytes`, the editor and `Phone::push` let through.
@@ -306,6 +322,96 @@ pub fn next_at(time: u16, days: u8, after: i64) -> i64 {
         .map(|day| day * DAY + i64::from(time))
         .find(|&at| at > after)
         .expect("every weekday comes round within eight days")
+}
+
+/// What [`next_at`] and [`next_smart`] promise, as Kani contracts:
+/// `host-tests/alarm` proves them of the functions
+/// (`kani::proof_for_contract`), and its proofs of `State` take them in
+/// the functions' place (`kani::stub_verified`). Those then needn't
+/// unwind the functions' loops over the days at each of the dozen calls
+/// a check makes, which with all ten of the phone's alarms took CBMC past
+/// 10 GB.
+///
+/// Each promises an answer strictly after the minute it's given (that's
+/// what makes an alarm ring once), and soon after it; and the very answer
+/// it gives, in a closed form with no loop. That has to be exact, not just
+/// a range: the proofs of what rings need `next_at` to give the same
+/// answer each time it's asked about the same alarm, as it does.
+///
+/// For the minutes in [`MINUTES`], and times of day and weekdays as
+/// [`Settings::from_bytes`] and [`Phone::push`] let through, which the
+/// proofs check that their callers only ask about.
+#[cfg(kani)]
+mod contracts {
+    use super::{DAY, Settings};
+
+    /// The minutes the contracts are for: from two days before 1970 (a
+    /// clock west of UTC, at a check that asks from the minute before)
+    /// to 2200.
+    pub const MINUTES: core::ops::Range<i64> = -2 * DAY..7_258_118_400 / 60;
+
+    // In 32 bits, unsigned, counting from the start of `MINUTES`: they
+    // hold every minute of it, eight days on, with room to spare. CBMC
+    // builds a circuit for each division, and a check takes a few dozen
+    // answers: the 64 bits the functions work in would cost four times
+    // as much, and a signed `div_euclid` more again, for nothing.
+    const DAY32: u32 = DAY as u32;
+
+    /// Minute `minute` of `MINUTES`, from its start (a Tuesday's).
+    fn from_start(minute: i64) -> u32 {
+        (minute - MINUTES.start) as u32
+    }
+
+    /// The minute `from_start` gave `minute` for.
+    fn minute(from_start: u32) -> i64 {
+        i64::from(from_start) + MINUTES.start
+    }
+
+    /// 0 = Monday … 6 = Sunday, of `day` days into `MINUTES`, as
+    /// [`super::weekday`] (it starts on a Tuesday).
+    fn weekday(day: u32) -> u32 {
+        (day + 1) % 7
+    }
+
+    /// `next_at` without its loop: today if `time` is still ahead, else
+    /// tomorrow; then on by as many days as it takes to reach one of
+    /// `days`, which is the zeros below the first of its bits at or
+    /// above that weekday (with the week's bits again above them, for
+    /// the days that wrap into next week).
+    pub fn next_at_closed(time: u16, days: u8, after: i64) -> i64 {
+        let after = from_start(after);
+        let today = after / DAY32;
+        let ahead = today * DAY32 + u32::from(time) > after;
+        let first = if ahead { today } else { today + 1 };
+        let week = u32::from(days) | u32::from(days) << 7;
+        let wait = if days == 0 {
+            0
+        } else {
+            (week >> weekday(first)).trailing_zeros()
+        };
+        minute((first + wait) * DAY32 + u32::from(time))
+    }
+
+    /// `next_smart` without its loop: today's time if it's still ahead,
+    /// else tomorrow's (which always is: the third day it looks at is
+    /// never needed).
+    pub fn next_smart_closed(settings: &Settings, now: i64) -> i64 {
+        let at = |day: u32| {
+            let time = if weekday(day) < 5 {
+                settings.smart_weekday
+            } else {
+                settings.smart_weekend
+            };
+            day * DAY32 + u32::from(time)
+        };
+        let now = from_start(now);
+        let today = now / DAY32;
+        minute(if at(today) > now {
+            at(today)
+        } else {
+            at(today + 1)
+        })
+    }
 }
 
 // ==============================================================================

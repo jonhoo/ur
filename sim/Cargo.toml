@@ -36,8 +36,9 @@ themes-all = ["theme-retro", "theme-living_tokyo"]
 
 [lints.rust]
 # The firmware's own features, which the modules included from it check
-# (`compare`'s hooks in `ui_loop`): never on here.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("compare"))'] }
+# (`compare`'s hooks in `ui_loop`): never on here. And `kani`, which the
+# Kani contracts in `alarm` are behind (for `host-tests/alarm`'s proofs).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("compare"))', 'cfg(kani)'] }
 
 [dependencies]
 aes = "0.8.4"

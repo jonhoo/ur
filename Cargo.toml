@@ -37,6 +37,11 @@ static_cell = "2.1.1"
 # together (see `PACKET_POLL` in src/ble.rs).
 trouble-host = { version = "0.8.0", default-features = false, features = ["peripheral", "scan", "gatt", "derive", "default-packet-pool-mtu-251", "l2cap-tx-queue-size-4", "defmt", "security"] }
 
+# `kani`: the Kani contracts on `alarm::next_at` and `next_smart` are behind
+# it (`cfg_attr(kani, …)`), for `cargo kani` in `host-tests/alarm`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 [[bin]]
 name = "ur"
 # There is no test harness for this target.

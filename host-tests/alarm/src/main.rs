@@ -1302,43 +1302,57 @@ mod proofs {
         }
     }
 
+    /// All ten of the phone's alarms (or fewer), as stored: any times,
+    /// weekdays and switches `from_bytes` lets through.
     fn any_phone() -> Phone {
         Phone::from_bytes(kani::any())
     }
 
-    /// Up to two alarms from the phone, as `push` takes them (any hour,
-    /// minute and days; nonsense ones refused): what CBMC can take through
-    /// `next`'s loops. Ten, through `from_bytes`, took it past 10 GB; the
-    /// alarms are alike, so two show what any number would.
-    fn any_two_phone_alarms() -> Phone {
-        let mut phone = Phone::default();
-        for _ in 0..2 {
-            if kani::any() {
-                phone.push(kani::any(), kani::any(), kani::any(), kani::any());
-            }
-        }
-        phone
+    const DAY: i64 = 24 * 60;
+
+    /// A time to check what's due at: an hour into the day before 1970,
+    /// and four days short of 2200, so that the minutes `due` asks
+    /// `next_at` and `next_smart` about (up to an hour either side of now,
+    /// and three days on for the smart alarm) are ones their contracts
+    /// are for.
+    fn any_check() -> i64 {
+        let now = any_now();
+        kani::assume((3600 - 86_400..7_258_118_400 - 4 * 86_400).contains(&now));
+        now
     }
 
-    #[kani::proof]
+    // ==========================================================================
+    // `next_at` and `next_smart`, by their contracts
+    // ==========================================================================
+    //
+    // Their contracts (in `alarm`, with their closed forms) are proven of
+    // them here, and every proof of `State` below takes them in their
+    // place (`stub_verified`), hence `function-contracts` in `Cargo.toml`.
+    // Each such call is then an assertion that it's asked about what the
+    // contract is for, and the answer it promises, rather than its loops
+    // over the days unwound: with those, `next` alone took 8 minutes with
+    // two of the phone's alarms, and CBMC past 10 GB with ten.
+
+    /// Any time of day, weekdays and minute the contract is for: the next
+    /// time is strictly after it, within eight days, and the closed form's.
+    #[kani::proof_for_contract(next_at)]
     #[kani::unwind(9)]
-    fn next_at_is_within_eight_days() {
-        let time: u16 = kani::any();
-        kani::assume(time < 24 * 60);
-        // As `Phone::push` keeps them: bit 7 masked off.
-        let days: u8 = kani::any::<u8>() & 0x7F;
-        let after = any_now() / 60;
-        let at = next_at(time, days, after);
-        assert!(at > after && at - after <= 8 * 24 * 60);
+    fn next_at_keeps_its_contract() {
+        let after = kani::any();
+        let at = next_at(kani::any(), kani::any(), after);
+        kani::cover!(at == after + 1, "the very next minute");
+        kani::cover!(at == after + 7 * DAY, "a week on");
     }
 
-    #[kani::proof]
+    /// Any settings and minute: within three days, and the closed form's.
+    #[kani::proof_for_contract(next_smart)]
     #[kani::unwind(4)]
-    fn next_smart_is_within_three_days() {
+    fn next_smart_keeps_its_contract() {
         let settings = any_settings();
-        let now = any_now() / 60;
+        let now = kani::any();
         let at = next_smart(&settings, now);
-        assert!(at > now && at - now <= 3 * 24 * 60);
+        kani::cover!(at == now + 1, "the very next minute");
+        kani::cover!(at > now + DAY, "the day after tomorrow");
     }
 
     #[kani::proof]
@@ -1363,10 +1377,15 @@ mod proofs {
         );
     }
 
+    /// With any settings, timers, snooze and ten alarms from the phone,
+    /// at any time: nothing in `next` panics or overflows, and it asks
+    /// `next_at` and `next_smart` only about what their contracts are for.
     #[kani::proof]
-    #[kani::unwind(9)]
+    #[kani::unwind(12)]
+    #[kani::stub_verified(next_at)]
+    #[kani::stub_verified(next_smart)]
     fn the_next_alarm_never_panics() {
-        let (settings, phone) = (any_settings(), any_two_phone_alarms());
+        let (settings, phone) = (any_settings(), any_phone());
         let mut state = State::default();
         if kani::any() {
             state.start_timer(kani::any::<bool>() as usize, &settings, any_uptime());
@@ -1374,64 +1393,33 @@ mod proofs {
         if kani::any() {
             state.snooze(any_uptime());
         }
-        let _ = state.next(&settings, &phone, any_now(), any_uptime());
-    }
-
-    /// Whether `minute` is one [`next_at_is_within_eight_days`] and
-    /// [`next_smart_is_within_three_days`] cover (`any_now() / 60`).
-    fn covered(minute: i64) -> bool {
-        (-DAY..7_258_118_400 / 60).contains(&minute)
-    }
-
-    const DAY: i64 = 24 * 60;
-
-    /// Stands in for `next_at` in [`checking_what_is_due_never_panics`]:
-    /// any minute [`next_at_is_within_eight_days`] says it may give,
-    /// having checked that it's asked only what that proof covers.
-    fn some_next_at(time: u16, days: u8, after: i64) -> i64 {
-        assert!(time < 24 * 60 && days < 0x80 && covered(after));
-        let at: i64 = kani::any();
-        kani::assume(after < at && at <= after + 8 * DAY);
-        at
-    }
-
-    /// As [`some_next_at`], for `next_smart` and
-    /// [`next_smart_is_within_three_days`] (which takes any settings).
-    fn some_next_smart(_: &Settings, now: i64) -> i64 {
-        assert!(covered(now));
-        let at: i64 = kani::any();
-        kani::assume(now < at && at <= now + 3 * DAY);
-        at
+        let next = state.next(&settings, &phone, any_now(), any_uptime());
+        let last = Kind::Phone(PHONE_ALARMS as u8 - 1);
+        kani::cover!(
+            next.is_some_and(|(kind, _)| kind == last),
+            "the tenth is next"
+        );
     }
 
     /// Checking what's due, twice, at any two times (the second finds the
     /// minutes the first checked, whichever way the clock went since),
     /// with any settings and any ten alarms from the phone: nothing
-    /// panics or overflows.
-    ///
-    /// With `next_at` and `next_smart` themselves, CBMC unwinds their
-    /// loops over the days a dozen times a check, and hadn't finished in
-    /// 20 minutes with two phone alarms and one check. They're proven on
-    /// their own above, so here stubs stand in for them (hence `stubbing`
-    /// in `Cargo.toml`): any answer those proofs allow, and an assertion
-    /// that `due` asks only what they cover. That leaves `due` its own
-    /// arithmetic and slicing to answer for, and is done in seconds.
-    ///
-    /// The clock stops four days short of 2200 and starts an hour into
-    /// the day before 1970, so that the minutes `due` asks about (up to
-    /// an hour either side of now, and three days on for the smart
-    /// alarm) are ones those proofs cover.
+    /// panics or overflows. That leaves `due` its own arithmetic and
+    /// slicing to answer for.
     #[kani::proof]
     #[kani::unwind(12)]
-    #[kani::stub(next_at, some_next_at)]
-    #[kani::stub(next_smart, some_next_smart)]
+    #[kani::stub_verified(next_at)]
+    #[kani::stub_verified(next_smart)]
     fn checking_what_is_due_never_panics() {
         let (mut settings, mut phone) = (any_settings(), any_phone());
         let mut state = State::default();
-        for _ in 0..2 {
-            let now = any_now();
-            kani::assume((3600 - 86_400..7_258_118_400 - 4 * 86_400).contains(&now));
-            let _ = state.due(&mut settings, &mut phone, now, any_wearer());
+        for check in 0..2 {
+            let due = state.due(&mut settings, &mut phone, any_check(), any_wearer());
+            let last = Kind::Phone(PHONE_ALARMS as u8 - 1);
+            kani::cover!(
+                check == 1 && due.is_some_and(|due| due.kind == last),
+                "the tenth rings at the second check"
+            );
         }
     }
 
@@ -1442,128 +1430,17 @@ mod proofs {
     // The proofs above are of what `due` can't do (panic). These are of
     // what it does: F4 was a one-off alarm that rang without being saved
     // as rung. For that, `next_at`'s answers have to be the same each
-    // time it's asked, which the stubs above aren't (any minute in range,
-    // each call), and `next_at` itself is too slow (its loops, a dozen
-    // times a check). So: `next_at` and `next_smart` each have a closed
-    // form with no loop, proven equal to them here, which then stands in
-    // for them.
-
-    // In 32 bits, which hold every minute the proofs cover with room to
-    // spare (`narrow` checks): CBMC builds a circuit for each division,
-    // and `due` asks a dozen times a check, so the 64 bits `alarm` works
-    // in cost four times as much here, for nothing.
-
-    const DAY32: i32 = 24 * 60;
-
-    /// A minute the proofs cover, in 32 bits.
-    fn narrow(minute: i64) -> i32 {
-        assert!(covered(minute));
-        minute as i32
-    }
-
-    /// 0 = Monday … 6 = Sunday, as `alarm::weekday`.
-    fn weekday(day: i32) -> u32 {
-        (day + 3).rem_euclid(7) as u32
-    }
-
-    /// `next_at` without its loop: today if `time` is still ahead, else
-    /// tomorrow; then on by as many days as it takes to reach one of
-    /// `days`, which is the zeros below the first of its bits at or
-    /// above that weekday (with the week's bits again above them, for
-    /// the days that wrap into next week).
-    fn next_at_closed(time: u16, days: u8, after: i64) -> i64 {
-        let after = narrow(after);
-        let today = after.div_euclid(DAY32);
-        let ahead = today * DAY32 + i32::from(time) > after;
-        let first = if ahead { today } else { today + 1 };
-        let week = u32::from(days) | u32::from(days) << 7;
-        let wait = if days == 0 {
-            0
-        } else {
-            (week >> weekday(first)).trailing_zeros()
-        };
-        i64::from((first + wait as i32) * DAY32 + i32::from(time))
-    }
-
-    /// `next_smart` without its loop: today's time if it's still ahead,
-    /// else tomorrow's (which always is: the third day it looks at is
-    /// never needed).
-    fn next_smart_closed(settings: &Settings, now: i64) -> i64 {
-        let at = |day: i32| {
-            let time = if weekday(day) < 5 {
-                settings.smart_weekday
-            } else {
-                settings.smart_weekend
-            };
-            day * DAY32 + i32::from(time)
-        };
-        let now = narrow(now);
-        let today = now.div_euclid(DAY32);
-        i64::from(if at(today) > now {
-            at(today)
-        } else {
-            at(today + 1)
-        })
-    }
-
-    /// Stands in for `next_at` below: its closed form, having checked
-    /// that it's asked only what [`next_at_is_its_closed_form`] covers
-    /// (the closed form checks the minute itself).
-    fn proven_next_at(time: u16, days: u8, after: i64) -> i64 {
-        assert!(time < 24 * 60 && days < 0x80);
-        next_at_closed(time, days, after)
-    }
-
-    /// As [`proven_next_at`], for `next_smart` (any settings; the
-    /// closed form checks the minute).
-    fn proven_next_smart(settings: &Settings, now: i64) -> i64 {
-        next_smart_closed(settings, now)
-    }
-
-    /// A time to check what's due at: as in
-    /// [`checking_what_is_due_never_panics`], far enough inside the
-    /// times the closed forms are proven for that `due` only asks about
-    /// those.
-    fn any_check() -> i64 {
-        let now = any_now();
-        kani::assume((3600 - 86_400..7_258_118_400 - 4 * 86_400).contains(&now));
-        now
-    }
-
-    #[kani::proof]
-    #[kani::unwind(9)]
-    fn next_at_is_its_closed_form() {
-        let time: u16 = kani::any();
-        kani::assume(time < 24 * 60);
-        let days: u8 = kani::any::<u8>() & 0x7F;
-        let after = any_now() / 60;
-        assert_eq!(
-            next_at(time, days, after),
-            next_at_closed(time, days, after)
-        );
-    }
-
-    #[kani::proof]
-    #[kani::unwind(4)]
-    fn next_smart_is_its_closed_form() {
-        let settings = any_settings();
-        let now = any_now() / 60;
-        assert_eq!(
-            next_smart(&settings, now),
-            next_smart_closed(&settings, now)
-        );
-    }
+    // time it's asked about the same alarm, which is why the contracts
+    // promise their closed forms' answers, and not just any in range.
 
     /// The first check after a reset, at any second of one week (that
-    /// of Monday 2026-11-09), with any settings and any two alarms from
+    /// of Monday 2026-11-09), with any settings and any ten alarms from
     /// the phone.
     ///
     /// (CBMC's limits: at any time from 1969 to 2200, it hadn't finished
-    /// in 20 minutes; nor with ten alarms, as the proof of no panics
-    /// above takes, or after any earlier check. One week has every
-    /// weekday and time of day, which is all `due` goes by; the alarms
-    /// are alike, and two can be at the same minute or apart; and what
-    /// an earlier check changes is which minutes this one looks at, not
+    /// in 20 minutes, nor after any earlier check. One week has every
+    /// weekday and time of day, which is all `due` goes by; and what an
+    /// earlier check changes is which minutes this one looks at, not
     /// what it does about an alarm in them. Arguments, though, where the
     /// wider proof would have been one.)
     ///
@@ -1578,10 +1455,10 @@ mod proofs {
     ///   above.
     #[kani::proof]
     #[kani::unwind(12)]
-    #[kani::stub(next_at, proven_next_at)]
-    #[kani::stub(next_smart, proven_next_smart)]
+    #[kani::stub_verified(next_at)]
+    #[kani::stub_verified(next_smart)]
     fn what_rings_is_switched_off_and_said_so() {
-        let (mut settings, mut phone) = (any_settings(), any_two_phone_alarms());
+        let (mut settings, mut phone) = (any_settings(), any_phone());
         let mut state = State::default();
         let (settings_before, phone_before) = (settings, phone);
         let into_the_week: u32 = kani::any();
@@ -1614,6 +1491,12 @@ mod proofs {
             }
         }
         assert_eq!(due.phone_rang, phone_rang);
+        kani::cover!(
+            phone.alarms().iter().all(|a| a.switch == Switch::Rang)
+                && phone.alarms().len() == PHONE_ALARMS
+                && phone_before.alarms().iter().all(|a| a.switch == Switch::On),
+            "ten one-offs ring as one"
+        );
 
         match due.kind {
             Kind::At(i) => {
@@ -1625,6 +1508,7 @@ mod proofs {
                 let (was, is) = (phone_before.alarms()[i], phone.alarms()[i]);
                 assert!(was.on());
                 assert_eq!(is.on(), was.days != 0);
+                kani::cover!(i == PHONE_ALARMS - 1, "the tenth rings");
             }
             Kind::Smart => assert!(settings.smart),
             // Durations are `elapsed`'s.
@@ -1634,7 +1518,7 @@ mod proofs {
 
     /// Whatever the wearer's sleep, a smart alarm that's on rings at its
     /// time: at the first check after a reset, at any second of one week
-    /// (as above), with any settings, any two alarms from the phone, and
+    /// (as above), with any settings, any ten alarms from the phone, and
     /// any wearer. Before its time, it rings only early in its window, at
     /// a stir in light sleep, and says so.
     ///
@@ -1644,18 +1528,19 @@ mod proofs {
     /// the wearer can hold one back.)
     #[kani::proof]
     #[kani::unwind(12)]
-    #[kani::stub(next_at, proven_next_at)]
-    #[kani::stub(next_smart, proven_next_smart)]
+    #[kani::stub_verified(next_at)]
+    #[kani::stub_verified(next_smart)]
     fn a_smart_alarm_rings_by_its_time_whatever_the_sleep() {
-        let (mut settings, mut phone) = (any_settings(), any_two_phone_alarms());
+        let (mut settings, mut phone) = (any_settings(), any_phone());
         let mut state = State::default();
         let into_the_week: u32 = kani::any();
         kani::assume(into_the_week < 7 * 86_400);
         let now = 20_766 * 86_400 + i64::from(into_the_week);
         let minute = now.div_euclid(60);
         // Its time, as the check sees it: the first after the minute before
-        // (a fresh state has checked none).
-        let latest = next_smart_closed(&settings, minute - 1);
+        // (a fresh state has checked none). By its contract, as `due` sees
+        // it too.
+        let latest = next_smart(&settings, minute - 1);
         let smart = settings.smart;
         let wearer = any_wearer();
         let due = state.due(&mut settings, &mut phone, now, wearer);
@@ -1664,6 +1549,7 @@ mod proofs {
             // Others at its minute ring as one with it, under its name.
             let due = due.expect("a smart alarm rings at its time");
             assert!(due.kind == Kind::Smart && !due.early);
+            kani::cover!(due.phone_rang, "with one-offs of the phone's");
         }
         if let Some(due) = due
             && due.kind == Kind::Smart
@@ -1671,6 +1557,10 @@ mod proofs {
         {
             assert!(due.early && wearer.stirring && wearer.light);
             assert!(latest - SMART_WINDOW <= minute && minute < latest);
+            kani::cover!(
+                minute == latest - SMART_WINDOW,
+                "at the start of its window"
+            );
         }
         if let Some(due) = due {
             assert!(!due.early || due.kind == Kind::Smart);
