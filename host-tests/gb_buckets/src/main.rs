@@ -1478,6 +1478,10 @@ mod tests {
         // rest stays in the history, which still holds it.
         let now = NOON - 300 + CAP + 100;
         assert_eq!(loggable_end(newest, held, now, CAP), NOON - 200);
+        // The cap's minutes count the one under way: from `now - CAP +
+        // 1`, so a bucket that starts there is still held.
+        let now = NOON + 100 + CAP - 1;
+        assert_eq!(loggable_end(newest, held, now, CAP), NOON + 100);
         // And a day on, all of it does, with the bucket that was under
         // way, which is long over.
         for now in [newest + CAP + 5, newest + 24 * 60, newest + 40 * 24 * 60] {
@@ -2048,6 +2052,8 @@ mod tests {
         let mut fetch = Fetch::new(NOON, NOON, NOON + 30);
         fetch.hold(NOON + 12);
         assert_eq!(fetch.synced_through(), NOON + 9);
+        // Where `ble` reads the activity log up to.
+        assert_eq!(fetch.end(), NOON + 10);
         let buckets = run(fetch, &history, NOON);
         assert_eq!(buckets.len(), 2);
         assert_eq!(buckets.last().map(|b| b.start), Some(NOON + 5));
