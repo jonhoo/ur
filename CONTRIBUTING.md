@@ -523,14 +523,19 @@ side by side:
 
 It needs cargo-kani, [cargo-bolero], cargo-fuzz, [cargo-mutants], jq,
 and the nightly that `verify.yml` pins, and says which are missing. On
-32 cores with 30 GB it should take about an hour (an estimate from its
-parts; mutation testing is the longest), using most of the cores. How
+32 cores with 30 GB it takes under an hour (48 minutes in November
+2026, mutation testing the longest), using most of the cores. How
 much runs at once is set from the environment (`GATE_KANI_JOBS`,
 `GATE_BOLERO_JOBS`, `GATE_SIM_FUZZ_FORKS`, `GATE_MUTANTS_JOBS`), as is
 memory: with systemd, every command runs in its own scope in one slice
 capped at `GATE_MEMORY` (24G), a crate's proofs at `GATE_KANI_MEMORY`
-(8G), so a proof that blows up is killed alone and fails its stage
-rather than taking the terminal with it. Without systemd nothing is
+(12G), so a proof that blows up is killed alone and fails its stage
+rather than taking the terminal with it. Give it the memory: a slice
+at its cap stalls whatever runs in it while the kernel reclaims, and a
+fuzzer stalled for 10 seconds reports a timeout, which fails `bolero`
+with an input that runs in milliseconds. With less to spare, run the
+stages in two goes on the same commit (`--only kani,sim-fuzz`, then
+`--only bolero,mutants`): the stamp counts each stage's last verdict. Without systemd nothing is
 capped, and the gate says so and runs one thing at a time.
 `scripts/release-gate.sh --help` has the rest.
 
