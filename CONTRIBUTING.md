@@ -365,16 +365,24 @@ stack, or a grid hold without its release, is shrunk to a repro. See
 
 ### Proofs
 
-Some host test crates (`host-tests/alarm`, `buttons`, `gesture`, `day`,
-`decimal`, `battery`, `heart_schedule`, `temperature`, `brightness`,
-`wake`, `on_time`, `minute_ring`, `link`, `theme`, `live`, `nav`, `route`,
-`glance`, `dfu`, `log_ring`, `rtt_ring`, `mcuboot`, `snapshot`, `bthome`, `aranet`,
-`gb_buckets`, `step_counter`, `backoff`, `calendar`, `fault`) have [Kani] proofs at the end of their `src/main.rs`: what the tests check for some
-inputs, for every input, within bounds. `cargo kani` in the crate runs
-them; `--harness NAME` one (and one at a time). They need tight
-`kani::unwind` and `kani::assume` bounds: CBMC's memory grows fast with
-loops (one unbounded alarm proof took 18 GB). For [Bolero] property
-tests, see [Fuzzing the host tests](#fuzzing-the-host-tests).
+Some host test crates (`host-tests/alarm`, `aranet`, `backoff`,
+`battery`, `brightness`, `bthome`, `buttons`, `calendar`, `day`,
+`decimal`, `desk`, `dfu`, `fault`, `gb`, `gb_buckets`, `gesture`,
+`glance`, `heart_schedule`, `link`, `live`, `living_tokyo`, `log_pack`,
+`log_ring`, `mcuboot`, `minute_ring`, `nav`, `on_time`, `ppg`, `route`,
+`rtt_ring`, `sleep`, `snapshot`, `step_counter`, `sun`, `temperature`,
+`theme`, `wake`, `workout`) have [Kani] proofs at the end of their
+`src/main.rs` (`gb`'s also in `src/mock_proofs.rs`): what the tests
+check for some inputs, for every input, within bounds. `cargo kani` in
+the crate runs them; `--harness NAME` one (and one at a time). They
+need tight `kani::unwind` and `kani::assume` bounds: CBMC's memory grows
+fast with loops (one unbounded alarm proof took 18 GB). A proof should
+also have a `kani::cover!` of the case it's about (a branch taken, a
+bound reached): Kani reports it satisfied only if some input the
+`assume`s allow reaches it, so an unsatisfied one means the proof checks
+nothing there, though Kani still calls it verified (`verify.yml` fails
+on it). For [Bolero] property tests, see [Fuzzing the host
+tests](#fuzzing-the-host-tests).
 
 ### Fuzzing the host tests
 
