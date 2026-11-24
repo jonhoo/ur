@@ -315,7 +315,7 @@ themes there are, are listed in
 
 ## Finding bugs
 
-Beyond the tests, five tools look for what nobody thought to test. All
+Beyond the tests, six tools look for what nobody thought to test. All
 but the dev kit's run on the computer; the heavy ones can take a lot of
 memory, so run them in a capped scope (`systemd-run --user --scope -p
 MemoryMax=6G --quiet …`): on a machine without much swap, an
@@ -430,6 +430,45 @@ it:
   sends over the air (`ur-sim --fuzz ELF --peer ADDRESS --corpus DIR
   --gadgetbridge`; see "Fuzzing a dev kit").
 
+### Mutation testing
+
+[cargo-mutants] turns the tests on themselves: it makes a small change
+to a host-tested module (`>` to `>=`, `+` to `-`, a function's body to
+`Default::default()`), reruns the tests, and reports each change no test
+failed on, a *missed* mutant: a behaviour nothing checks.
+`scripts/mutants.sh` runs it (`cargo install --locked cargo-mutants`
+first), on modules, or on the code a diff touches:
+
+```sh
+systemd-run --user --scope -p MemoryMax=6G --quiet scripts/mutants.sh decimal gesture
+systemd-run --user --scope -p MemoryMax=6G --quiet scripts/mutants.sh --in-diff <(git diff main)
+```
+
+With neither, it does every module. cargo-mutants only mutates files
+inside a crate, and the host-test crates include their modules from
+`src/` by `#[path]`, so the script works on a scratch copy with the
+modules moved into the crates, and never touches the checkout. A module
+several crates include (`sleep`, `stages`, ...) is mutated in each, and
+a mutant counts as missed only if all of them missed it. Its output
+(`tmp/mutants/`, or `-o DIR`) has a `summary.md` of the missed mutants,
+one a line:
+
+```
+src/gesture.rs:308:29: replace > with >= in Tracking::classify
+```
+
+That one, from the first run (November 2026), is `dx.abs() > dy.abs()`
+as `>=`, which no test told apart: none swiped at exactly 45°, so which
+way such a swipe went was unchecked (one does now). The mutant's diff
+and test output are in `crates/<crate>/mutants.out/` (`diff/`, `log/`).
+Each missed mutant is
+either a test to write or an *equivalent* mutant, one that means the
+same as the code for every input it can get (`|` for `^` on disjoint
+bits): about a quarter of them in the first run (November 2026). The
+known equivalent ones are excluded in `.cargo/mutants.toml`, each with
+why; add one there only with that argument. So results are advisory: a
+missed mutant is for a person to judge, and never fails CI.
+
 ### In CI, on release tags
 
 `.github/workflows/verify.yml` runs the slow checks on every release
@@ -444,6 +483,14 @@ hold up the release a tag starts; a failure on an rc is what to fix
 before the final release. On every PR, `test.yml` does the quick part
 of two of them: it compiles the Kani proofs without running them, and
 runs each of the simulator's seeds once (see [CI](#ci)).
+
+`.github/workflows/mutants.yml` runs [mutation testing](#mutation-testing)
+on the same tags (and on demand): every module, in a job of its own
+(an hour on a desktop, a few on a runner), with the missed mutants as
+the job's summary and each one's diff and test log in the run's
+`mutants` artifact. On every PR it mutates only the code the PR
+changes, in a few minutes, and shows each missed mutant as a warning
+on its line. Neither job ever fails.
 
 ### cargo-careful and Miri
 
@@ -1084,6 +1131,9 @@ gh release download v0.9.0 --pattern sha256.sum --dir published
   simulator's fuzzing; see [In CI, on release tags](#in-ci-on-release-tags).
   And the tests' coverage (see [Coverage](#coverage)).
   It doesn't hold up the release.
+- `mutants.yml`: [mutation testing](#mutation-testing), of the code a
+  PR changes on every PR, and of every module on a version tag (rc's
+  included) and on demand. Advisory: it never fails.
 - `beta.yml`: weekly, and on demand, the firmware's clippy and the host
   tests on beta, for early warning of the next stable Rust. Not per PR:
   beta changes on its own schedule, not the PR's.
