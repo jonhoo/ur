@@ -212,6 +212,13 @@ for crate in "${crates[@]}"; do
     files_of "$module" | copy src "host-tests/$crate/src/ur"
   done
   sed -i 's|#\[path = "\.\./\.\./\.\./src/|#[path = "ur/|' "$scratch/host-tests/$crate"/src/*.rs
+  # What only Kani compiles (`#[cfg(kani)]`, as alarm's contracts) never
+  # runs under `cargo test`, so its every mutant would be missed.
+  # `#[mutants::skip]` beside the `cfg` has cargo-mutants pass it over;
+  # on the same line, so no mutant's line moves, and as the `cfg` drops
+  # the item first, rustc never looks for a `mutants` crate.
+  find "$scratch/host-tests/$crate/src/ur" -name '*.rs' -exec \
+    sed -i -E 's/^(\s*)#\[cfg\(kani\)\]\s*$/\1#[cfg(kani)] #[mutants::skip]/' {} +
 done
 
 # ==============================================================================
