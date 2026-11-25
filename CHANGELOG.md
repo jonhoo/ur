@@ -16,7 +16,7 @@ missing below were test builds for the dev kit.
 
 ### Changed
 
-- Say in the field log what the last ten minutes averaged as a workout starts (`workout: started, Effort (…; 8/10 min moving; the ten averaged movement 2744, 35 steps)`): their mean movement and steps a minute, which no rule goes by yet, for telling an errand's start from a workout's once there are workouts to compare (see CONTRIBUTING's "Field logs") (aecc26c)
+- Log, in the logging build's field log, the movement and steps a minute that each workout started on, so that an errand's start can later be told from a workout's (aecc26c)
 
 ### Deprecated
 
@@ -25,7 +25,7 @@ missing below were test builds for the dev kit.
 ### Fixed
 
 - Count the readings a workout got toward the heart rate schedule, even when its last minutes read nothing (introduced in 0.12.0): the schedule went by the reading before the workout, so straight after one it called a reading overdue and spent a try on the doubled LED budget, and it held the tries that failed before the workout against the next ones. The same held for a long look at the clock face, and for a watch taken off after a reading. The readings themselves were always shown and sent to the phone (94e4885)
-- Stop keeping the heart rate sensor on through hard work that brings no reading (introduced in 0.12.0): forty minutes of slow, stop-and-go shopping with a busy arm counted as a workout of hard work, and the sensor stayed on for all forty, some four points of battery, for a first reading after 31. A workout that has gone twenty minutes without a reading, from its start or its last one, is now left to the usual tries, which by then also take every moment the wrist goes still; a reading from one of them puts the sensor back on for as long as the workout lasts and reads. The workout itself goes on, and reaches Gadgetbridge as exercise, as before. Twenty minutes because the two workouts that have read well never went more than 16 without a reading (a strength session's last sets and packing up, with the recovery read right after), so neither would have lost a second of sensor; the errand's would have been on for 22 to 28 of its 40 minutes. What's given up is a pause too short for a try that has to see a still wrist before it starts, once a workout has been unread that long (6c70364)
+- Turn the heart rate sensor off in a workout that has gone twenty minutes without a reading, rather than keep it on for the whole workout (introduced in 0.12.0): forty minutes of slow, stop-and-go shopping with a busy arm counted as a workout, and the sensor stayed on for all forty, some four points of battery, for a first reading after 31. The usual tries take over, at every moment the wrist goes still, and a reading puts the sensor back on for the rest of the workout. The two workouts that read well never went more than 16 minutes without a reading, so neither would have lost any (6c70364)
 
 ### Security
 
