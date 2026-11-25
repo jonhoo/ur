@@ -449,6 +449,26 @@ pub fn measured_through(kind: Option<Kind>, since_start: u32, since_reading: Opt
     kind == Some(Kind::Effort) && dry < EFFORT_DRY
 }
 
+/// What `recent`'s minutes average: their movement, and their steps. For
+/// the log, as an effort starts: how far over [`EFFORT_MOVEMENT`] its ten
+/// minutes were as a whole, which the count of hard ones doesn't say.
+///
+/// Why log it: on the logs of 2026-11-13 to 25 the errand of 2026-11-24
+/// never had ten minutes that averaged over 3025, and the strength
+/// session of 2026-11-22 started on ten at 3016-3448 (3300 or more a
+/// minute later), so a mean of 3200 asked of a start besides the count
+/// turned the one away and kept the other. It also turned away 11 of the
+/// 17 efforts those logs hold, none of them known to be exercise or not,
+/// so it isn't a rule (user, 2026-11-25); with the means in the log and
+/// efforts the wearer can vouch for, it can be looked at again.
+pub fn window_means(recent: &[Minute; WINDOW]) -> (u16, u16) {
+    // Ten `u16`s fit a `u32` many times over, and their mean a `u16`.
+    let mean = |of: fn(&Minute) -> u16| {
+        (recent.iter().map(|m| u32::from(of(m))).sum::<u32>() / WINDOW as u32) as u16
+    };
+    (mean(|m| m.movement), mean(|m| m.steps))
+}
+
 /// A heart rate below which a window measured while walking isn't
 /// trusted (see [`swing`]).
 pub const SWING_BPM: f32 = 70.0;

@@ -1999,6 +1999,10 @@ pub async fn activity_task(i2c: Device) {
                 // of the ten moved hard since any walking (an effort's).
                 let [.., a, b, c] = recent;
                 let working = workout::hard_since_walking(&recent) as u8;
+                // And what the ten averaged, which no rule goes by yet:
+                // for telling an errand's start from a workout's later
+                // (see `workout::window_means`).
+                let (movement, steps) = workout::window_means(&recent);
                 // The minutes that made it one were part of it: three of
                 // walking, or the ten an effort is judged over. (A fetch
                 // may have sent some already, as plain activity; they stay
@@ -2027,15 +2031,15 @@ pub async fn activity_task(i2c: Device) {
                 }
                 match (was, now) {
                     (None, Some(kind)) => info!(
-                        "workout: started, {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving)",
-                        kind, a.steps, b.steps, c.steps, working
+                        "workout: started, {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving; the ten averaged movement {=u16}, {=u16} steps)",
+                        kind, a.steps, b.steps, c.steps, working, movement, steps
                     ),
                     // A walk within an effort, or (rarely: its last
                     // minutes must make one by themselves) the effort a
                     // walk ends in: the same workout.
                     (Some(_), Some(kind)) => info!(
-                        "workout: now {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving)",
-                        kind, a.steps, b.steps, c.steps, working
+                        "workout: now {} (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving; the ten averaged movement {=u16}, {=u16} steps)",
+                        kind, a.steps, b.steps, c.steps, working, movement, steps
                     ),
                     (_, None) => info!(
                         "workout: over (steps {=u16}, {=u16}, {=u16}; {=u8}/10 min moving{=str})",

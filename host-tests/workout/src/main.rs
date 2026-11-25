@@ -720,6 +720,46 @@ mod tests {
     }
 
     #[test]
+    fn the_logged_means_are_the_ten_minutes() {
+        assert_eq!(window_means(&[STILL; WINDOW]), (30, 0));
+        assert_eq!(window_means(&[WALKING; WINDOW]), (3800, 110));
+        // Where in the ten they fall makes no odds; rounded down.
+        let mut mixed = [DESK; WINDOW];
+        mixed[0] = WALKING;
+        mixed[9] = LIFTING;
+        assert_eq!(window_means(&mixed), ((8 * 600 + 3800 + 2600) / 10, 12));
+        // No ten minutes overflow.
+        let most = Minute {
+            steps: u16::MAX,
+            movement: u16::MAX,
+        };
+        assert_eq!(window_means(&[most; WINDOW]), (u16::MAX, u16::MAX));
+        // The windows that started the errand of 2026-11-24 and the
+        // strength session of 2026-11-22, as the watch cut them: what
+        // their start lines would have said.
+        let window = |minutes: &[(u16, u16)]| -> [Minute; WINDOW] {
+            core::array::from_fn(|i| Minute {
+                movement: minutes[i].0,
+                steps: minutes[i].1,
+            })
+        };
+        let errand = [
+            (1816, 20),
+            (3386, 20),
+            (2400, 40),
+            (2580, 12),
+            (2383, 26),
+            (4804, 84),
+            (3595, 76),
+            (1792, 28),
+            (2540, 24),
+            (2146, 24),
+        ];
+        assert_eq!(window_means(&window(&errand)), (2744, 35));
+        assert_eq!(window_means(&window(&STRENGTH[5..15])), (3336, 46));
+    }
+
+    #[test]
     fn kinds_survive_a_byte() {
         for kind in [None, Some(Kind::Walk), Some(Kind::Effort)] {
             assert_eq!(Kind::from_bits(Kind::bits(kind)), kind);
@@ -811,6 +851,11 @@ mod proofs {
             "an effort gone dry is left to the schedule"
         );
     }
+
+    // No proof of `window_means`: that the mean of ten symbolic minutes
+    // lies between the least and the greatest of them had CBMC still
+    // solving after ten minutes (a division of a ten-term sum), and it's
+    // a log line's figures, which the tests check at their extremes.
 
     /// An effort ends at most [`EFFORT_LAPSE_MINUTES`] minutes after its
     /// last hard one, however busy the wrist stays meanwhile: from any

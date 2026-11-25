@@ -1007,7 +1007,12 @@ Some host-test crates replay decoded logs, to tune against real wrists:
     `workout: over (…)` when it ends (three minutes under 40 steps; or,
     for an effort, five quiet minutes in a row or ten with none moving
     hard, which reads `0/10 min moving`; `; asleep` if that's what ended
-    it).
+    it). After 0.12.1, `started` and `now` go on `; the ten averaged
+    movement M, S steps)`: the last ten minutes' mean movement and steps
+    a minute, which no rule goes by, for telling later how an errand's
+    start differs from a workout's (see `workout::window_means`: the one
+    errand known started at 2744 and 35, the one strength session at
+    3336 and 46).
   - **The session through it**, if it's an effort (a walk has none
     since 0.12.0-rc.3: the schedule's sessions carry on through it,
     with their usual lines): `heart: workout session (Effort)` when the
