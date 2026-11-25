@@ -989,6 +989,26 @@ pub async fn heart_task(i2c: Device) {
         // schedule's either, should the schedule have started it (and a
         // look at the clock face, or a workout, then kept it going).
         let background = background && !matches!(outcome, Ok(Ended::Faded));
+        // What the session read before an end that isn't a reading: the
+        // schedule counts it from when it came (see
+        // `Schedule::read_earlier`), so that a workout which read until a
+        // few minutes before it ended doesn't leave a reading overdue.
+        // Asked of what was published rather than of `measure`, so that it
+        // holds for every such end: having faded, the skin lost or the
+        // light flooding in after a reading, and the sensor lost.
+        // (`Charger(Some(_))` is told as a reading below, as of now.)
+        let earlier = match outcome {
+            Ok(Ended::Measured(_) | Ended::Charger(_)) => None,
+            _ => crate::heart_reading::latest().filter(|&(_, at)| at >= started),
+        };
+        if let Some((bpm, at)) = earlier {
+            info!(
+                "heart: last read {=u8} BPM {} s before the end",
+                bpm,
+                at.elapsed().as_secs()
+            );
+            schedule.read_earlier(at.as_secs() as u32, bpm, background, before);
+        }
         // Whether it's worn: a pulse means skin. No light coming back, or
         // ambient light flooding in, means the sensor isn't against
         // anything. Light without a pulse proves nothing: a desk reflects
@@ -1002,7 +1022,8 @@ pub async fn heart_task(i2c: Device) {
             Ok(Ended::NoContact | Ended::TooBright) => (Some(false), Outcome::OffWrist),
             // Skin, as a pulse was read; but no reading to tell the
             // schedule of now (not as a background session's, see above,
-            // so this counts as neither a measurement nor a failure).
+            // so this counts as neither a measurement nor a failure; the
+            // reading itself it has just heard of, as `earlier`).
             Ok(Ended::Faded) => (Some(true), Outcome::NoReading),
             Ok(Ended::TimedOut { calm: true }) => (None, Outcome::CalmNoReading),
             Ok(Ended::TimedOut { calm: false } | Ended::Hopeless { .. }) | Err(()) => {
@@ -1127,7 +1148,9 @@ enum Ended {
     /// its last reading: it read (so there's skin), but what it read is no
     /// longer the heart rate now. The readings themselves were published
     /// as they came; this only keeps the schedule from taking a workout's
-    /// reading of twenty minutes ago for one made as the session ends.
+    /// reading of twenty minutes ago for one made as the session ends. (It
+    /// hears of that reading as of when it came instead: see
+    /// `Schedule::read_earlier`.)
     Faded,
     /// No reading within [`SESSION_LIMIT`]; `calm`
     /// if the wrist was calm through most of it (see

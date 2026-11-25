@@ -66,9 +66,11 @@
 //! that swings at pace has no pauses to catch, and a sensor left on
 //! through two walks of twenty minutes read nothing.) The schedule
 //! hears of it as a watched session that cost one session's LED
-//! ([`SESSION_RESERVE`]), whose reading, if it had one in its last half
-//! minute, is never a resting one; and it carries on from there, most
-//! often at [`ELEVATED_INTERVAL`], which follows the recovery.
+//! ([`SESSION_RESERVE`]), whose last reading is never a resting one, and
+//! counts from when it came, should the session have gone on for long
+//! after it (see [`Schedule::read_earlier`]); and it carries on from
+//! there, most often at [`ELEVATED_INTERVAL`], which follows the
+//! recovery.
 //!
 //! **Never on the charger** (see [`Schedule::charger`]): no session starts
 //! while its power is present, scheduled or watched, and one under way
@@ -1091,6 +1093,31 @@ impl Schedule {
             }
         }
         self.check();
+    }
+
+    /// Records a reading of `bpm` that came at `at`, in a session that
+    /// went on after it and then ended as something else (which
+    /// [`Self::ended`] is told next, with all of its LED time): a workout's
+    /// or a long look's that read nothing more for so long that the
+    /// reading no longer says what the heart rate is as it ends, or one
+    /// that lost the skin after reading. `background` and `before` are the
+    /// session's, as for [`Self::ended`].
+    ///
+    /// It counts as a session that ended at `at` with that reading would,
+    /// which is what it was until it went on: without this, the schedule
+    /// took an effort that read for five minutes and ended four minutes
+    /// later for an hour without a reading, and spent an overdue try's
+    /// doubled budget right after it (the sealed watch, 2026-11-24).
+    ///
+    /// Y-Statement: told that a reading came earlier, facing a choice of
+    /// what it should change, we count it as any reading (the back-off,
+    /// the failures and round it ends, whether it's elevated) rather than
+    /// only move [`OVERDUE`]'s clock, to keep the schedule among the
+    /// states that sessions told of as they end can leave it in, which
+    /// are the ones the proofs and the fuzzers know; accepting that an
+    /// elevated reading of a while ago keeps the next interval short.
+    pub fn read_earlier(&mut self, at: u32, bpm: u8, background: bool, before: Before) {
+        self.ended(at, 0, Outcome::Reading(bpm), background, before);
     }
 
     /// Whether the fields agree with each other, as every method leaves

@@ -981,7 +981,11 @@ Some host-test crates replay decoded logs, to tune against real wrists:
     B/19)` (no sign of a pulse by 19 s on a busy wrist: see
     `heart_schedule::hopeless`), `heart: not on a wrist (after S s)`,
     `heart: too much light (after S s)`, or `heart: on the charger;
-    stopped after S s`. `S` is the LED's time.
+    stopped after S s`. `S` is the LED's time. After 0.12.1, a session
+    that read and then went on to end without a reading (a workout's, or
+    a long look's, more than half a minute after its last; or one that
+    lost the skin) also says `heart: last read N BPM S s before the
+    end`: the schedule counts that reading from when it came.
   - **When, against the phone's buckets:** asleep, sessions should start
     4 minutes into each UTC-aligned 5 minutes (`heart_schedule::in_phase`);
     the log's `clock:` lines date them.

@@ -1412,9 +1412,11 @@ mod tests {
             (end + ELEVATED_INTERVAL, Why::Elevated)
         );
 
-        // One that last read long before it ended (`heart`'s
-        // `Ended::Faded`) is no measurement at all: the schedule carries
-        // on from where it was, a session's LED poorer.
+        // One that read nothing is no measurement at all: the schedule
+        // carries on from where it was, a session's LED poorer. (As it
+        // does from the end of one that last read long before it ended,
+        // `heart`'s `Ended::Faded`, having heard of that reading apart:
+        // see `a_session_that_read_and_then_faded_leaves_no_reading_overdue`.)
         let mut schedule = Schedule::new();
         schedule.ended(100, 13, Outcome::Reading(60), true, awake(0));
         let before = schedule.due(0, false);
@@ -1431,6 +1433,55 @@ mod tests {
         assert_eq!(why, Why::Asleep);
         assert_eq!(at % BUCKET, BUCKET_SLOT);
         assert!(at - (end + 600) <= ASLEEP_INTERVAL + BUCKET - MIN_INTERVAL);
+    }
+
+    /// A session that read, and then went on for long enough without
+    /// another that it ends as no reading (`heart`'s `Ended::Faded`: an
+    /// effort's, or a long look at the clock face), still read: the
+    /// schedule counts from when it did, so no reading is overdue just
+    /// after it. The sealed watch's evening of 2026-11-24, in seconds
+    /// since 18:00: a reading, three tries without one, then an effort's
+    /// session of 40 minutes that read from 30 minutes in until four
+    /// minutes before it ended. On 0.12.0, 72 s later:
+    /// `heart: due (Overdue); budget 468 s, [..] 69 min since a reading`.
+    #[test]
+    fn a_session_that_read_and_then_faded_leaves_no_reading_overdue() {
+        let mut schedule = Schedule::new();
+        schedule.ended(262, 10, Outcome::Reading(64), true, awake(0));
+        schedule.ended(412, 30, Outcome::NoReading, true, awake(MOVED_POLLS));
+        schedule.ended(733, 20, Outcome::NoReading, true, awake(0));
+        schedule.ended(1472, 20, Outcome::NoReading, true, awake(0));
+        let workout = Before {
+            active_polls: u8::MAX,
+            stepless_polls: 0,
+            asleep: false,
+        };
+        let (read, end) = (4095, 4340);
+        // What `heart` tells the schedule of such a session: its last
+        // reading, as of when it came, then its end.
+        schedule.read_earlier(read, 63, false, workout);
+        schedule.ended(end, SESSION_RESERVE, Outcome::NoReading, false, workout);
+        let now = end + 72;
+        assert_eq!(schedule.since_reading(now), now - read);
+        let (at, why) = schedule.due(0, false);
+        assert_ne!(why, Why::Overdue);
+        // A session is still due by then: the effort's last minutes read
+        // nothing. On the usual budget, though.
+        assert!(at <= now);
+        assert!(schedule.budget(now) <= LED_BUDGET);
+        // Nor is one sought (see `SEEK_AFTER`) until twenty minutes after
+        // that reading, or overdue until thirty.
+        assert_eq!(schedule.seek(false), Some(read + SEEK_AFTER));
+        // The tries that follow back off as from any reading, until one
+        // is overdue from that reading on.
+        let mut t = now + 30;
+        for retry in [FAILED_INTERVAL, 2 * FAILED_INTERVAL] {
+            schedule.ended(t, 30, Outcome::NoReading, true, awake(0));
+            assert_eq!(schedule.due(0, false), (t + retry, Why::Retry));
+            t += retry + 30;
+        }
+        schedule.ended(t, 30, Outcome::NoReading, true, awake(0));
+        assert_eq!(schedule.due(0, false), (read + OVERDUE, Why::Overdue));
     }
 
     #[test]
@@ -2565,6 +2616,43 @@ mod proofs {
         kani::cover!(
             !background && outcome == Outcome::OffWrist,
             "a watched session, no skin"
+        );
+    }
+
+    /// From any consistent state, a session that read at `at` and went on
+    /// to end without a reading at `now`, however long after (as `heart`
+    /// tells of one: see `Schedule::read_earlier`), leaves the schedule
+    /// consistent, with its last reading at `at`: the next session isn't
+    /// due as overdue (its end is one failure at most, and it takes two
+    /// for that to be sooner than the retry), and until `OVERDUE` after
+    /// the reading the budget is within its usual cap.
+    #[kani::proof]
+    #[kani::unwind(2)]
+    fn a_reading_told_of_late_counts_from_when_it_came() {
+        let mut schedule = any_consistent();
+        let (at, now, led_seconds): (u32, u32, u32) = kani::any();
+        kani::assume(schedule.as_of() <= at && at <= now && now < UPTIME);
+        let (outcome, background, before) = any_end();
+        kani::assume(!matches!(outcome, Outcome::Reading(_)));
+        if background {
+            let _ = schedule.begin(before.asleep);
+        }
+        schedule.read_earlier(at, kani::any(), background, before);
+        assert!(schedule.consistent());
+        schedule.ended(now, led_seconds, outcome, background, before);
+        assert!(schedule.consistent());
+        assert!(schedule.as_of() <= now);
+
+        assert_eq!(schedule.since_reading(now), now - at);
+        let (_, why) = schedule.due(kani::any(), kani::any());
+        assert_ne!(why, Why::Overdue);
+        if now <= at + OVERDUE {
+            assert!(schedule.budget(now) <= LED_BUDGET);
+        }
+        kani::cover!(why == Why::Retry, "its end a failure");
+        kani::cover!(
+            !background && outcome == Outcome::NoReading && now > at + OVERDUE,
+            "faded for over half an hour"
         );
     }
 
