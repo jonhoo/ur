@@ -22,7 +22,7 @@ missing below were test builds for the dev kit.
 
 ### Fixed
 
-- Stop spending an extra heart rate try, on the doubled LED budget kept for when no reading has come for half an hour, straight after a workout that the watch did read through (introduced in 0.12.0): a workout's session, or a long look at the clock face, that read nothing in its last half minute left the background schedule without word of the readings before that, so it went by the one before the session, counted a reading overdue, and kept the tries that had failed before the workout against the next ones. The schedule now counts such a session's last reading from when it came, as it also does when the watch comes off the wrist after a reading. The readings themselves were always shown and sent to the phone (94e4885)
+- Count the readings a workout got toward the heart rate schedule, even when its last minutes read nothing (introduced in 0.12.0): the schedule went by the reading before the workout, so straight after one it called a reading overdue and spent a try on the doubled LED budget, and it held the tries that failed before the workout against the next ones. The same held for a long look at the clock face, and for a watch taken off after a reading. The readings themselves were always shown and sent to the phone (94e4885)
 
 ### Security
 
