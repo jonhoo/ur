@@ -16,7 +16,27 @@ missing below were test builds for the dev kit.
 
 ### Changed
 
-- Slow the minutes in the alarm and timer editor as they follow a dragged finger, to a minute for every 0.9 mm rather than every 0.6 mm, so that the finger can lift on the minute it means to: at 0.6 mm, the minutes ran by too fast to stop on one; a drag now reaches about 15 minutes rather than 22, so a minute further off takes a second drag, or a swipe's steps first (the hours, and a swipe's steps, are as they were) (0b54e55)
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.12.1] - 2026-11-25
+
+The changes in it: **an alarm rings only once on the night winter
+time starts**, even when the phone's time arrives a few seconds late;
+**a nap stays held back** through a step count in bed; and **a slower
+minute drag** in the alarm and timer editor, to stop on the minute
+meant.
+
+### Added
+
+### Changed
+
+- Slow the minutes in the alarm and timer editor as they follow a dragged finger, to a minute for every 0.9 mm rather than every 0.6 mm (since 0.12.0), at which they ran by too fast to lift the finger on the minute meant; a comfortable drag now covers about 15 minutes rather than 22, so a time further off than that takes a second drag, or a flick's steps first (the hours, and a flick's steps, are as they were) (0b54e55)
 
 ### Deprecated
 
@@ -24,8 +44,8 @@ missing below were test builds for the dev kit.
 
 ### Fixed
 
-- Ring each alarm once the night winter time starts even when the phone's time reaches the watch a few seconds late (as it does at about one connection in six): stamped more than 5 seconds late, it put the clock back over 61 turns of a minute, which the watch took for a new time zone, and every alarm between 02:00 and 03:00 rang a second time (47f16a2)
-- Keep holding back a nap soon after a night that the watch has already sent to Gadgetbridge when the step counter fires as the wrist turns over in bed: such a minute counted as getting up, which the sleep detection takes it for only when it's not among other minutes of movement, so the minutes after it could go to the phone as awake before the watch knew whether they were the start of a nap, and stay awake there for good. None of 100,000 simulated days and nights ran into it (cf01a78)
+- Ring each alarm only once on the night winter time starts, even when the phone's time reaches the watch a few seconds late, as it does at about one connection in six (introduced in 0.10.0; not yet seen on a watch): a time stamped more than 5 seconds before it arrived put the clock back a little more than the hour, further than the watch allowed for winter time, so the watch took the change for a new time zone, and every alarm between 02:00 and 03:00 rang a second time (47f16a2)
+- Keep a nap that comes soon after a night already sent to Gadgetbridge held back until the watch knows it for sleep, even when the step counter fires as the wrist turns over in bed (introduced in 0.11.0): in deciding what to send, the watch took such a minute for getting up, though its sleep detection takes it for restless sleep when it follows a minute of movement, so the rest of the nap could reach the phone as awake, and stay marked awake there for good (found by a test, not seen on a watch: none of 100,000 simulated days and nights ran into it) (cf01a78)
 
 ### Security
 
@@ -494,7 +514,8 @@ built up to that point, below.
 - Install under the PineTime's stock MCUBoot bootloader, and receive firmware updates over Bluetooth (fdc5a70)
 - Keep a field log in flash in the logging build, and fetch it over Bluetooth (57f261f)
 
-[Unreleased]: https://github.com/jonhoo/ur/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/jonhoo/ur/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/jonhoo/ur/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/jonhoo/ur/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/jonhoo/ur/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/jonhoo/ur/compare/v0.11.0...v0.11.1
