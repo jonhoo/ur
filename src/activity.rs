@@ -1330,6 +1330,16 @@ pub fn workout() -> Option<workout::Kind> {
 /// state detection has: the minutes it judges by are the history's own.
 static WORKOUT: AtomicU8 = AtomicU8::new(0);
 
+/// When the effort under way began, or the last one did: the uptime, in
+/// seconds. For [`crate::heart`], which stops measuring through an effort
+/// that has read nothing for too long since (see
+/// [`workout::measured_through`]).
+pub fn effort_since() -> u32 {
+    EFFORT_SINCE.load(Ordering::Relaxed)
+}
+
+static EFFORT_SINCE: AtomicU32 = AtomicU32::new(0);
+
 /// Set once the accelerometer is configured; nothing else may talk to it
 /// before (setup soft-resets it and uploads its program).
 static READY: AtomicBool = AtomicBool::new(false);
@@ -1973,6 +1983,16 @@ pub async fn activity_task(i2c: Device) {
             let was = workout();
             let now = workout::detect(was, &recent, asleep);
             if now != was {
+                // Before the kind, so that `heart` never sees a new effort
+                // with the last one's start. An effort a walk hands over
+                // to is a new one in this: the sensor was off through the
+                // walk, so what it read before says nothing of now.
+                if now == Some(workout::Kind::Effort) {
+                    EFFORT_SINCE.store(
+                        embassy_time::Instant::now().as_secs() as u32,
+                        Ordering::Relaxed,
+                    );
+                }
                 WORKOUT.store(workout::Kind::bits(now), Ordering::Relaxed);
                 // What the rules went by, so a field log shows why: the
                 // last three minutes' steps (a walk's rule), and how many

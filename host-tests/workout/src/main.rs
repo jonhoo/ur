@@ -682,6 +682,44 @@ mod tests {
     }
 
     #[test]
+    fn an_effort_is_measured_through_while_it_reads() {
+        let effort = Some(Kind::Effort);
+        // From its start, read or not, until `EFFORT_DRY` after it.
+        assert!(measured_through(effort, 0, None));
+        assert!(measured_through(effort, EFFORT_DRY - 1, None));
+        assert!(!measured_through(effort, EFFORT_DRY, None));
+        // A reading from before it began (older than its start) is as
+        // good as none: the watch read at its desk an hour ago.
+        assert!(measured_through(effort, 60, Some(3600)));
+        assert!(measured_through(effort, EFFORT_DRY - 1, Some(3600)));
+        assert!(!measured_through(effort, EFFORT_DRY, Some(3600)));
+        // One since it began counts from when it came: the strength
+        // session's sixteen minutes without one aren't dry, and the
+        // errand's first twenty are.
+        assert!(measured_through(effort, 3600, Some(16 * 60)));
+        assert!(measured_through(effort, 3600, Some(EFFORT_DRY - 1)));
+        assert!(!measured_through(effort, 3600, Some(EFFORT_DRY)));
+        // And a reading puts the sensor back on for an effort that had
+        // gone dry, however long ago that was.
+        assert!(!measured_through(effort, 4 * 3600, Some(3600)));
+        assert!(measured_through(effort, 4 * 3600, Some(0)));
+        // The extremes of both counts.
+        assert!(!measured_through(effort, u32::MAX, None));
+        assert!(!measured_through(effort, u32::MAX, Some(u32::MAX)));
+        assert!(measured_through(effort, u32::MAX, Some(0)));
+    }
+
+    #[test]
+    fn only_an_effort_is_measured_through() {
+        // A walk never is, nor no workout, however fresh the reading.
+        for kind in [None, Some(Kind::Walk)] {
+            assert!(!measured_through(kind, 0, None));
+            assert!(!measured_through(kind, 0, Some(0)));
+            assert!(!measured_through(kind, 600, Some(5)));
+        }
+    }
+
+    #[test]
     fn kinds_survive_a_byte() {
         for kind in [None, Some(Kind::Walk), Some(Kind::Effort)] {
             assert_eq!(Kind::from_bits(Kind::bits(kind)), kind);
@@ -746,6 +784,32 @@ mod proofs {
             "an effort ends"
         );
         kani::cover!(current == Some(Kind::Walk) && now.is_none(), "a walk ends");
+    }
+
+    /// The sensor is kept on through nothing but an effort, and through
+    /// no effort for longer than [`EFFORT_DRY`] without a reading in it:
+    /// for any kind and any two counts of seconds, measuring through
+    /// means an effort that began or read less than that long ago. And
+    /// it's never lost for want of a reading that came in time. This is
+    /// what bounds the LED's time on an effort that reads nothing.
+    #[kani::proof]
+    fn an_unread_effort_is_not_measured_through() {
+        let kind = any_kind();
+        let since_start: u32 = kani::any();
+        let since_reading: Option<u32> = kani::any();
+        let through = measured_through(kind, since_start, since_reading);
+        let read_lately = since_reading.is_some_and(|reading| reading < EFFORT_DRY);
+        let young = since_start < EFFORT_DRY;
+        assert_eq!(
+            through,
+            kind == Some(Kind::Effort) && (young || read_lately)
+        );
+        kani::cover!(through && !young, "a reading keeps an old effort measured");
+        kani::cover!(through && !read_lately, "a young effort is measured unread");
+        kani::cover!(
+            kind == Some(Kind::Effort) && !through,
+            "an effort gone dry is left to the schedule"
+        );
     }
 
     /// An effort ends at most [`EFFORT_LAPSE_MINUTES`] minutes after its

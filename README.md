@@ -40,7 +40,9 @@ on top:
 - **Adaptive heart rate:** every 2 to 20 minutes, more often after you
   move, while you sleep, or while it's high, and continuously through
   hard work with your arms (weights, say: eight minutes of ten start
-  it), since a moving wrist only reads in its pauses. A walk or a run
+  it), since a moving wrist only reads in its pauses; if twenty minutes
+  of it bring no reading, the usual tries take over until one does. A
+  walk or a run
   (three minutes of it) is a workout too, but isn't measured through:
   a swinging arm has no pauses, and drowns the pulse. Each try starts once your
   wrist is still, or two minutes on if it never is, and keeps going for

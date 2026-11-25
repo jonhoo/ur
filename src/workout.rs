@@ -41,7 +41,9 @@
 //! going 40 minutes after it when the log was fetched: moving about at
 //! home kept the wrist at 1000-1800, never quiet for five minutes in a
 //! row, which was all that ended an effort then. So the start errs
-//! towards starting, and the end mustn't err towards going on.
+//! towards starting, and the end mustn't err towards going on. Nor need
+//! the sensor stay on through an effort that reads nothing: see
+//! [`EFFORT_DRY`].
 //!
 //! TODO: that point per ten minutes is about three times what
 //! `heart`'s "Through a workout" and docs/power-plan.md reckon from an
@@ -251,6 +253,74 @@ pub const EFFORT_END_MINUTES: usize = 5;
 /// the wearer sat down, which the quiet minutes say too.
 pub const EFFORT_LAPSE_MINUTES: usize = 10;
 
+/// How long (seconds) an effort's continuous session goes on without a
+/// reading, from the effort's start or its last reading, before the
+/// sensor is left to the heart rate's schedule again (see
+/// [`measured_through`]). The effort itself goes on: its minutes are
+/// exercise as before, and its end is [`detect`]'s.
+///
+/// Why: an effort that isn't one costs its whole length in LED, and the
+/// rules can't tell which those are (see [`EFFORT_MINUTES`]). On the
+/// sealed watch, 2026-11-24, forty minutes of shopping (about 1000 steps,
+/// stop and go, the arm busy with a basket and the shelves) made eight
+/// hard minutes of ten, and the sensor was on for all forty: its first
+/// reading came after 30.8 minutes, of 69 BPM, some four points of
+/// battery later. What an effort is measured through for is its pauses;
+/// one that has had none for this long is being paid for and not read.
+///
+/// Why twenty minutes: the efforts measured through so far are few (the
+/// logs of 2026-11-22 to 25 have three, and no earlier build kept the
+/// sensor on), and the two that read well set the floor:
+///
+/// | effort | length | first reading | readings | longest without one |
+/// |---|---:|---:|---:|---:|
+/// | 2026-11-22 13:14 | 36 min | 2.5 min | 60, in 10 minutes | 8.9 min |
+/// | 2026-11-22 20:27, the strength session | 77 min | 2.0 min | 314, in 39 minutes | 16.0 min |
+/// | 2026-11-24 18:50, the errand | 40 min | 30.8 min | 12, in 3 minutes | 30.8 min |
+///
+/// The strength session's sixteen minutes were its last sets and the
+/// packing up (20:47 to 21:03), and what followed them is what the
+/// session was measured for: the recovery, 96-98 BPM as the wearer left.
+/// Ten minutes would have had the sensor off for the last six of those,
+/// with the first pause after them left to a session that must start
+/// from calm and needs longer of it (~18 s against ~14; see `heart`'s
+/// "Through a workout"): that pause lasted 14 s. Twenty loses neither
+/// effort a second of sensor, and is where the schedule starts taking
+/// every calm moment by itself (`heart_schedule::SEEK_AFTER`, which
+/// `heart` asserts this isn't under), so that the hand-over has no gap:
+/// as the continuous session ends, twenty minutes after the last reading
+/// at the least, the wrist's next calm starts a session, and a reading
+/// from it (or from any session, or a look at the clock face) puts the
+/// sensor back on for as long as the effort lasts and reads.
+///
+/// What it saves is modest, then: the errand's sensor would have gone
+/// off after 20 of its 40 minutes. Its three later pauses (12 s of calm
+/// each, at 19:20, 19:24 and 19:25) are the schedule's to catch, and one
+/// caught turns the sensor on again for what's left, so between 12 and
+/// 18 of the 40. For the 14 efforts the rules find in the logs of
+/// 2026-11-13 to 22, which no build measured through, only the wrist's
+/// calm says when a reading could have come (seven polls in a row at
+/// `heart::CALM` or under, 14 s), and that undercounts: it gives the
+/// three above 20.6, 18.5 and 40 minutes without, where they went 8.9,
+/// 16.0 and 30.8. By it, four of the 14 would have had the sensor off
+/// for some of their length (1, 15, 27 and 35 minutes), and at most 98
+/// of the 17 efforts' 431 minutes are saved, most likely fewer.
+///
+/// The price: a pause that only a sensor already on can read (the
+/// errand's first, 12 s) is lost once an effort has been dry for twenty
+/// minutes, until a longer one is caught. The user would rather spend
+/// battery than lose readings (see `heart`'s "Through a workout"), which
+/// is why this isn't ten, though ten would have saved 30 of the errand's
+/// minutes.
+///
+/// TODO: three sessions. With more efforts measured through, look at the
+/// longest stretch each went without a reading before one that mattered
+/// (`heart: workout session` to the readings after it in a field log),
+/// and at whether the schedule caught the pauses after a hand-over
+/// (`heart: effort unread for` and the `heart: due (Calm)` lines that
+/// follow it).
+pub const EFFORT_DRY: u32 = 20 * 60;
+
 const _: () = assert!(WALK_MINUTES <= WINDOW && WALK_END_MINUTES <= WINDOW);
 const _: () = assert!(EFFORT_MINUTES <= WINDOW && EFFORT_END_MINUTES <= WINDOW);
 const _: () = assert!(EFFORT_LAPSE_MINUTES <= WINDOW);
@@ -362,6 +432,21 @@ pub fn hard_since_walking(recent: &[Minute; WINDOW]) -> usize {
         .iter()
         .filter(|m| m.movement >= EFFORT_MOVEMENT)
         .count()
+}
+
+/// Whether the heart rate is measured continuously now: through an
+/// effort (not a walk: see the module's docs) that began `since_start`
+/// seconds ago, for as long as it has read within [`EFFORT_DRY`], or is
+/// that young. `since_reading` is how long ago the latest reading came,
+/// from whatever session, if there has been one.
+///
+/// The lesser of the two is what counts: a reading from before the
+/// effort began is older than its start, and vouches for nothing, so an
+/// effort that never reads is given up on [`EFFORT_DRY`] after it began;
+/// and one that has read, that long after it last did.
+pub fn measured_through(kind: Option<Kind>, since_start: u32, since_reading: Option<u32>) -> bool {
+    let dry = since_reading.map_or(since_start, |reading| reading.min(since_start));
+    kind == Some(Kind::Effort) && dry < EFFORT_DRY
 }
 
 /// A heart rate below which a window measured while walking isn't

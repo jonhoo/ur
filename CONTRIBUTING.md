@@ -1023,11 +1023,22 @@ Some host-test crates replay decoded logs, to tune against real wrists:
     logged for its first two minutes: `heart: workout session; samples
     no longer logged` marks where they stop. If it finds no skin, it
     ends as any session does (`heart: not on a wrist`), and another
-    starts two minutes later.
+    starts two minutes later. After 0.12.1, it also ends once the
+    effort has gone 20 minutes without a reading (from its start or its
+    last one): `heart: effort unread for 20 min; left to the schedule`
+    after the `over` line (and `heart: last read N BPM S s before the
+    end`, if it had read). The effort goes on, and the schedule's
+    sessions through it have their usual lines (`heart: due (Calm)` for
+    the calm moments it takes, being twenty minutes from a reading)
+    between a `heart: workout session (Effort)` and an `over` of their
+    own; one that reads stays on, as the effort's session again, and
+    says `unread` once more if that too runs dry.
 
   So, from a log alone: how many workouts a day and how long; whether a
   known workout was found, and how late; readings an effort, and where
-  in it they fell (its pauses, its last minutes); and, from the windows'
+  in it they fell (its pauses, its last minutes); how long an effort
+  went unread, and whether the schedule caught the pauses after it was
+  handed one; and, from the windows'
   verdicts, what kept the rest from reading.
 
   So, from a log alone: readings an hour by `WHY` and by calm or busy

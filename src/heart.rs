@@ -76,9 +76,23 @@ fn watching() -> bool {
     crate::heart_reading::watching() || held()
 }
 
-/// Whether a workout, and nothing else, keeps the sensor on.
+/// Whether a workout, and nothing else, keeps the sensor on: an effort
+/// that still reads (see [`through`]).
 fn held() -> bool {
-    !crate::heart_reading::watching() && effort()
+    !crate::heart_reading::watching() && through()
+}
+
+/// Whether an effort is under way and measured through: one that has
+/// read within [`crate::workout::EFFORT_DRY`], or began that lately (see
+/// "An effort that reads nothing" below). Asked afresh wherever it
+/// matters, like [`effort`]: a session it kept on ends once this stops
+/// holding, and a reading from any session makes it hold again.
+fn through() -> bool {
+    let now = Instant::now();
+    let since_start = (now.as_secs() as u32).saturating_sub(activity::effort_since());
+    let since_reading = crate::heart_reading::latest()
+        .map(|(_, at)| now.saturating_duration_since(at).as_secs() as u32);
+    crate::workout::measured_through(activity::workout(), since_start, since_reading)
 }
 
 /// Whether the workout under way, if any, is one to measure through: an
@@ -150,10 +164,42 @@ fn effort() -> bool {
 // sessions and the clock face's now, and of an effort's only once a walk
 // has taken over and it is ending).
 //
+// # An effort that reads nothing
+//
+// The rules that find an effort can't tell exercise from an errand (see
+// `workout::EFFORT_MINUTES`), and through one that has no pauses the
+// sensor is on for nothing: forty minutes of shopping on the sealed
+// watch (2026-11-24) took 30.8 to its first reading. So the sensor stays
+// on through an effort only while it reads: `workout::EFFORT_DRY` after
+// the effort began or last read, whichever is later, the session ends as
+// any watched one does when the watching stops (`Ended::Faded` if it had
+// read, which tells the schedule of that reading as of when it came,
+// `Schedule::read_earlier`; out of time if it never did, which the
+// schedule takes for a watched session that came to nothing, neither a
+// reading nor a failure).
+//
+// From there the effort is the schedule's, like a walk. It is seeking
+// calm by then: `EFFORT_DRY` is no shorter than
+// `heart_schedule::SEEK_AFTER`, and the last reading is at least that
+// old, by `read_earlier`'s account or because there was none, so the
+// wrist's next calm moment starts a session whatever else is due. (But
+// for what stops seeking anywhere: a session that failed on a calm wrist
+// or found no skin, and an empty budget.) A reading, from that session or
+// a look at the clock face, makes the effort one that reads again, and
+// the session that took it stays on, as if the effort had just begun.
+//
+// What's given up is what only a sensor already on can catch: a pause
+// too short for a session that has to see calm before it starts (see
+// `workout::EFFORT_DRY` for the errand's, and why twenty minutes).
+//
 // In the logging build, such a session's samples are logged for its first
 // [`WORKOUT_TRACE_CHECKS`] seconds only: an hour of them would be ~330 KB
 // of a ~3 MB log that holds four or five days. Each window's verdict (at `debug`)
 // and every reading are logged throughout.
+
+// The hand-over has no gap only if the schedule is seeking calm by the
+// time an effort's session gives up (see "An effort that reads nothing").
+const _: () = assert!(crate::workout::EFFORT_DRY >= heart_schedule::SEEK_AFTER);
 
 /// How long after a workout's session found no skin (or lost the sensor)
 /// to look again, while the workout lasts. A watch really off the wrist
@@ -673,6 +719,10 @@ pub async fn heart_task(i2c: Device) {
     // until it works (see `retry_off`): a failed try is cheap, at most a
     // timed-out transfer and a controller reset.
     let mut maybe_lit = false;
+    // Whether the last session ended in an effort that had stopped
+    // reading: so that handing it to the schedule is logged once, not at
+    // each of the schedule's sessions through it.
+    let mut yielded = false;
 
     loop {
         // Wait until a background session is due and the wrist is still,
@@ -950,6 +1000,20 @@ pub async fn heart_task(i2c: Device) {
         if effort {
             info!("heart: workout session over after {} s", led_seconds);
         }
+        // An effort that has stopped reading is the schedule's from here
+        // (see "An effort that reads nothing"): said once, as the session
+        // it kept on ends, and again only if a reading has put the sensor
+        // back on for it since. The schedule's own sessions through such
+        // an effort end here too, unread, and say nothing.
+        let unread = self::effort() && !through();
+        let read = crate::heart_reading::latest().is_some_and(|(_, at)| at >= started);
+        if unread && (read || !yielded) {
+            info!(
+                "heart: effort unread for {} min; left to the schedule",
+                crate::workout::EFFORT_DRY / 60
+            );
+        }
+        yielded = unread;
         match outcome {
             Ok(Ended::Measured(_) | Ended::Faded) => {}
             // A clear line, for field-log analyses to leave it out (see

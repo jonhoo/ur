@@ -467,6 +467,26 @@ minutes.
 Heart rate through a walk needs a motion-aware estimator rather than
 LED time (TODO; see `workout`'s "Walks aren't measured through").
 
+#### Not through an effort that reads nothing
+
+On 2026-11-24 the sealed watch (0.12.0) took forty minutes of shopping
+for an effort, and the sensor was on for all of them: four points of
+battery, at the rate above, for a first reading after 30.8 minutes. The
+two efforts measured through before it that read well (2026-11-22)
+never went longer than 8.9 and 16.0 minutes without a reading.
+
+So an effort's session now ends once the effort has gone twenty minutes
+without one (`workout::EFFORT_DRY`), and the schedule takes over, which
+by then starts a session at each calm moment; a reading puts the sensor
+back on for the rest of the effort. The errand's sensor would have been
+on for 22 to 28 of its 40 minutes. Over the 17 efforts in the logs of
+2026-11-13 to 25 (431 minutes, most of them from before any build
+measured through, so judged by the wrist's calm alone, which
+undercounts readings), at most 98 minutes are saved, in five of them.
+Ten minutes would save about twice that and take the sensor off the strength
+session for the six minutes before its recovery was first read, which
+is the wrong trade for the user's "readings over battery".
+
 The logging build's longer sessions (0.11.0 to 0.11.3-rc.2, ~2 mAh a
 day) are gone; it still logs the accelerometer's samples through every
 awake session, ~0.05 mAh a day of writing to the SPI flash.

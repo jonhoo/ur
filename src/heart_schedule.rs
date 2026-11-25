@@ -64,7 +64,10 @@
 //! waits for (a calm wrist) and does about failure (back off) both lose
 //! its pauses. (A walk is this schedule's like any other minutes: a wrist
 //! that swings at pace has no pauses to catch, and a sensor left on
-//! through two walks of twenty minutes read nothing.) The schedule
+//! through two walks of twenty minutes read nothing. And an effort
+//! that has read nothing for twenty minutes is this schedule's again,
+//! until a session of its reads: see `heart`'s "An effort that reads
+//! nothing".) The schedule
 //! hears of it as a watched session that cost one session's LED
 //! ([`SESSION_RESERVE`]), whose last reading is never a resting one, and
 //! counts from when it came, should the session have gone on for long
