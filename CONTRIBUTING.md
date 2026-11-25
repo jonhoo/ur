@@ -537,8 +537,12 @@ at its cap stalls whatever runs in it while the kernel reclaims, and a
 fuzzer stalled for 10 seconds reports a timeout, which fails `bolero`
 with an input that runs in milliseconds. With less to spare, run the
 stages in two goes on the same commit (`--only kani,sim-fuzz`, then
-`--only bolero,mutants`): the stamp counts each stage's last verdict. Without systemd nothing is
-capped, and the gate says so and runs one thing at a time.
+`--only bolero,mutants`): the stamp counts each stage's last verdict.
+Without systemd nothing is capped, and the gate says so and runs one
+thing at a time. Only one gate runs in a target directory
+(`CARGO_TARGET_DIR`) at once, as two `cargo kani`s in one break each
+other's contract proofs: a second gate there refuses to start, as does
+one started while a killed gate's proofs are still finishing.
 `scripts/release-gate.sh --help` has the rest.
 
 The results go to `tmp/release-gate/<commit>/`: `summary.md` with each

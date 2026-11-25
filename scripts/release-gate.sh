@@ -207,6 +207,23 @@ target=${CARGO_TARGET_DIR:-$root/target/release-gate}
 mkdir -p "$target"
 target=$(cd "$target" && pwd)
 
+# One gate at a time per target directory. Two `cargo kani`s in one
+# crate's target directory break each other: Kani links each harness's
+# goto binary when it starts and instruments it in place later, so the
+# later run applies function contracts to a binary the earlier one
+# already instrumented, and goto-instrument aborts ("... and the
+# corresponding pure contract symbol ... have incompatible type
+# signatures"; model-checking/kani#2648). The bolero and mutants builds
+# would race the same way. Every process the gate starts inherits the
+# lock's descriptor, so a gate that was killed outright (its trap never
+# ran) keeps the lock until its last `cargo kani` is gone too.
+exec 9>"$target/.release-gate.lock"
+flock -n 9 || {
+  echo "$0: another release gate is using $target (or is still winding down);" >&2
+  echo "wait for it, or give this one its own CARGO_TARGET_DIR" >&2
+  exit 2
+}
+
 # ==============================================================================
 # What the stages need
 # ==============================================================================
@@ -329,50 +346,15 @@ export -f capped say minutes
 # Each harness gets GATE_KANI_TIMEOUT (`--harness-timeout`, unstable in
 # Kani 0.68), so that one that blew up fails alone, named, and the rest
 # of its crate still runs; `timeout 90m` is each `cargo kani`'s backstop.
-#
-# A crate with function contracts (alarm's `next_at` and `next_smart`)
-# runs its contracts' proofs apart from its other proofs, in a `cargo
-# kani` each, as kani.yml's shards do. In one, Kani 0.68 fails before
-# verifying anything: goto-instrument aborts on a closure in
-# `next_smart`, whose contract "and the corresponding pure contract
-# symbol ... have incompatible type signatures", while the same proof
-# run by itself verifies (in under two minutes).
-# TODO: one `cargo kani` again once Kani compiles them together.
+
 kani_crate() {
   local crate=$1 dir=$out/kani started=$SECONDS
   local log=$dir/$crate.txt
-  # Each group a `cargo kani`'s harness arguments; one empty group runs
-  # them all.
-  local groups=("")
-  : >"$log"
-  if grep -q '^function-contracts *= *true' "host-tests/$crate/Cargo.toml"; then
-    # `list` doesn't read the crate's `[package.metadata.kani.unstable]`,
-    # as `cargo kani` does, so it's told what such a crate needs.
-    local list=host-tests/$crate/kani-list.json standard contract
-    (
-      cd "host-tests/$crate" &&
-        CARGO_TARGET_DIR=$target/kani/$crate capped "$kani_memory" \
-          cargo kani list -Z function-contracts -Z stubbing --format json
-    ) >>"$log" 2>&1 || true
-    standard=$(jq -r '."standard-harnesses"[][] | "--harness \(.)"' "$list" 2>/dev/null | tr '\n' ' ') || true
-    contract=$(jq -r '."contract-harnesses"[][] | "--harness \(.)"' "$list" 2>/dev/null | tr '\n' ' ') || true
-    rm -f "$list"
-    groups=()
-    [[ -z $standard ]] || groups+=("--exact $standard")
-    [[ -z $contract ]] || groups+=("--exact $contract")
-    if ((${#groups[@]} == 0)); then
-      echo "its harnesses couldn't be listed: see kani/$crate.txt" >>"$dir/$crate.failed"
-    fi
-  fi
-  local group harnesses
-  for group in "${groups[@]}"; do
-    read -ra harnesses <<<"$group"
-    (
-      cd "host-tests/$crate" &&
-        CARGO_TARGET_DIR=$target/kani/$crate capped "$kani_memory" timeout 90m \
-          cargo kani --output-format terse -Z unstable-options --harness-timeout "$kani_timeout" "${harnesses[@]}"
-    ) >>"$log" 2>&1 || echo "\`cargo kani\` failed (exit $?): see kani/$crate.txt" >>"$dir/$crate.failed"
-  done
+  (
+    cd "host-tests/$crate" &&
+      CARGO_TARGET_DIR=$target/kani/$crate capped "$kani_memory" timeout 90m \
+        cargo kani --output-format terse -Z unstable-options --harness-timeout "$kani_timeout"
+  ) >"$log" 2>&1 || echo "\`cargo kani\` failed (exit $?): see kani/$crate.txt" >>"$dir/$crate.failed"
   # A row per harness: `Checking harness NAME...`, then its covers (`** 2
   # of 2 cover properties satisfied`), its result (`VERIFICATION:-
   # SUCCESSFUL`) and its time (`Verification Time: 1.5s`). A harness that
